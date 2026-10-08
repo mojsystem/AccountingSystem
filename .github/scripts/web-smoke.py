@@ -5,6 +5,7 @@ Checks that:
   * the login page is served and the app starts against the database,
   * anonymous requests to protected pages are redirected to the login page,
   * an account can sign in,
+  * static files (the stylesheet) are served,
   * the main pages render for the signed-in account, including the Admin-only page.
 
 Usage:
@@ -21,6 +22,7 @@ import urllib.parse
 import urllib.request
 
 PROTECTED_PAGES = ["/", "/Trade", "/Rates", "/Cash", "/Journal", "/Users"]
+STYLESHEET = "/css/site.css"
 STARTUP_TIMEOUT_SECONDS = 120
 TOKEN_INPUT = re.compile(r'<input[^>]*name="__RequestVerificationToken"[^>]*>')
 VALUE_ATTRIBUTE = re.compile(r'value="([^"]*)"')
@@ -105,6 +107,9 @@ def main() -> int:
             {"Input.Username": username, "Input.Password": password, "__RequestVerificationToken": token},
         )
         check(status == 200 and path in ("/", "/Index"), "sign-in with the test admin account succeeds")
+
+        status, path, _ = Client(base_url).request(STYLESHEET)
+        check(status == 200, f"static file {STYLESHEET} is served (HTTP {status})")
 
         for page_path in PROTECTED_PAGES:
             status, path, _ = client.request(page_path)

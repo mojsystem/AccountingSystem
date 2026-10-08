@@ -3,7 +3,13 @@ using AccountingSystem.Core.Services;
 using AccountingSystem.Data;
 using Microsoft.AspNetCore.Authentication.Cookies;
 
-var builder = WebApplication.CreateBuilder(args);
+// appsettings.json و wwwroot کنار فایل اجرایی هستند؛ مسیر را به پوشه‌ی جاری وابسته نمی‌کنیم
+// تا برنامه از هر مسیری اجرا شود (مثلاً `dotnet AccountingSystem.Web.dll` از ریشه‌ی مخزن).
+var builder = WebApplication.CreateBuilder(new WebApplicationOptions
+{
+    Args = args,
+    ContentRootPath = AppContext.BaseDirectory,
+});
 
 var connectionString = builder.Configuration.GetConnectionString("AccountingSystem")
     ?? throw new InvalidOperationException("رشته‌ی اتصال «AccountingSystem» در appsettings.json تعریف نشده است.");
