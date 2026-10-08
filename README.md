@@ -48,8 +48,18 @@ sqlcmd -S localhost -E -f 65001 -i database\AccountingSystem.sql
 
 ### ۳. اجرای نسخه‌ی وب
 
+برای توسعه و اجرای محلی:
+
 ```bash
 dotnet run --project src/AccountingSystem.Web
+```
+
+برای اجرای روی سرور (محیط Production، همان خروجی `publish`):
+
+```bash
+dotnet publish src/AccountingSystem.Web -c Release -o publish/web
+cd publish/web
+dotnet AccountingSystem.Web.dll
 ```
 
 آدرس پیش‌فرض: `http://localhost:5080` (در `appsettings.json` به `0.0.0.0` متصل است تا از شبکه‌ی داخلی هم در دسترس باشد).

@@ -45,8 +45,8 @@ jobs:
         with:
           dotnet-version: 8.0.x
 
-      - name: Build web project
-        run: dotnet build src/AccountingSystem.Web/AccountingSystem.Web.csproj -c Release
+      - name: Publish web app
+        run: dotnet publish src/AccountingSystem.Web/AccountingSystem.Web.csproj -c Release -o publish/web
 
       - name: Data integration tests
         run: dotnet test tests/AccountingSystem.Data.Tests/AccountingSystem.Data.Tests.csproj -c Release --logger "trx;LogFileName=data-tests.trx" --results-directory TestResults
@@ -61,7 +61,7 @@ jobs:
           SMOKE_USERNAME: admin
           SMOKE_PASSWORD: "Test#12345"
         run: |
-          dotnet src/AccountingSystem.Web/bin/Release/net8.0/AccountingSystem.Web.dll > web-app.log 2>&1 &
+          dotnet ./publish/web/AccountingSystem.Web.dll > web-app.log 2>&1 &
           web_pid=$!
           status=0
           python3 .github/scripts/web-smoke.py http://127.0.0.1:5080 web-app.log || status=$?
