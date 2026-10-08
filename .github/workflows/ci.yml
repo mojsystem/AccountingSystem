@@ -49,4 +49,8 @@ jobs:
         run: dotnet build src/AccountingSystem.Web/AccountingSystem.Web.csproj -c Release
 
       - name: Data integration tests
-        run: dotnet test tests/AccountingSystem.Data.Tests/AccountingSystem.Data.Tests.csproj -c Release
+        run: dotnet test tests/AccountingSystem.Data.Tests/AccountingSystem.Data.Tests.csproj -c Release --logger "trx;LogFileName=data-tests.trx" --results-directory TestResults
+
+      - name: Report test results
+        if: always()
+        run: python3 .github/scripts/report-trx.py TestResults

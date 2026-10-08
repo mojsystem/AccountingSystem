@@ -15,11 +15,11 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\..\src\AccountingSystem.Data\AccountingSystem.Data.csproj" />
+    <ProjectReference Include="../../src/AccountingSystem.Data/AccountingSystem.Data.csproj" />
   </ItemGroup>
 
   <ItemGroup>
-    <None Include="..\..\database\AccountingSystem.sql" Link="AccountingSystem.sql" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../database/AccountingSystem.sql" Link="AccountingSystem.sql" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
 </Project>

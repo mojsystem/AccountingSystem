@@ -33,8 +33,7 @@ public sealed class SqlServerFixture : IAsyncLifetime
             .Replace("[AccountingSystem]", "[" + TestDatabase + "]", StringComparison.Ordinal)
             .Replace("N'AccountingSystem'", "N'" + TestDatabase + "'", StringComparison.Ordinal);
 
-        await using var conn = new SqlConnection(masterConnection);
-        await conn.OpenAsync();
+        await using var conn = await OpenWithRetryAsync(masterConnection);
         await ExecuteAsync(conn, $"IF DB_ID(N'{TestDatabase}') IS NOT NULL BEGIN ALTER DATABASE [{TestDatabase}] SET SINGLE_USER WITH ROLLBACK IMMEDIATE; DROP DATABASE [{TestDatabase}]; END");
 
         foreach (var batch in SplitBatches(script))
@@ -44,6 +43,33 @@ public sealed class SqlServerFixture : IAsyncLifetime
     }
 
     public Task DisposeAsync() => Task.CompletedTask;
+
+    /// <summary>
+    /// SQL Server داخل سرویس CI ممکن است چند ثانیه بعد از شروع job آماده شود؛ تا آماده شدن دوباره تلاش می‌کند.
+    /// </summary>
+    private static async Task<SqlConnection> OpenWithRetryAsync(string connectionString)
+    {
+        const int maxAttempts = 60;
+        for (var attempt = 1; ; attempt++)
+        {
+            var conn = new SqlConnection(connectionString);
+            try
+            {
+                await conn.OpenAsync();
+                return conn;
+            }
+            catch (SqlException) when (attempt < maxAttempts)
+            {
+                await conn.DisposeAsync();
+                await Task.Delay(TimeSpan.FromSeconds(2));
+            }
+            catch
+            {
+                await conn.DisposeAsync();
+                throw;
+            }
+        }
+    }
 
     private static IEnumerable<string> SplitBatches(string script) =>
         Regex.Split(script, @"^\s*GO\s*$", RegexOptions.Multiline | RegexOptions.IgnoreCase)
