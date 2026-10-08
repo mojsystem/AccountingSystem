@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>@ViewData["Title"] - سیستم حسابداری صرافی</title>
+    <link rel="stylesheet" href="~/css/site.css" asp-append-version="true" />
+</head>
+<body>
+    @if (User.Identity?.IsAuthenticated == true)
+    {
+        <header class="topbar">
+            <nav>
+                <a asp-page="/Index">داشبورد</a>
+                <a asp-page="/Trade/Index">خرید و فروش ارز</a>
+                <a asp-page="/Rates/Index">نرخ و ارزها</a>
+                <a asp-page="/Cash/Index">صندوق‌ها</a>
+                <a asp-page="/Journal/Index">اسناد حسابداری</a>
+                @if (User.IsInRole("Admin"))
+                {
+                    <a asp-page="/Users/Index">کاربران</a>
+                }
+            </nav>
+            <form method="post" asp-page="/Account/Logout">
+                <span>@User.Identity.Name</span>
+                <button type="submit">خروج</button>
+            </form>
+        </header>
+    }
+    <main class="container">
+        @RenderBody()
+    </main>
+</body>
+</html>

@@ -1,0 +1,20 @@
+@page
+@model SetupModel
+@{
+    ViewData["Title"] = "راه‌اندازی اولیه";
+}
+
+<div class="auth-box">
+    <h1>راه‌اندازی اولیه</h1>
+    <p>هنوز کاربری ثبت نشده است. اولین کاربر، مدیر سیستم خواهد بود.</p>
+    <div asp-validation-summary="All" class="alert error"></div>
+    <form method="post">
+        <label>نام و نام خانوادگی<input asp-for="Input.FullName" /></label>
+        <span asp-validation-for="Input.FullName" class="error"></span>
+        <label>نام کاربری<input asp-for="Input.Username" dir="ltr" /></label>
+        <span asp-validation-for="Input.Username" class="error"></span>
+        <label>رمز عبور (حداقل ۶ کاراکتر)<input asp-for="Input.Password" type="password" dir="ltr" /></label>
+        <span asp-validation-for="Input.Password" class="error"></span>
+        <button type="submit">ایجاد مدیر و ورود</button>
+    </form>
+</div>

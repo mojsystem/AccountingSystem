@@ -1,0 +1,52 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  windows-build:
+    name: Build (Web + WinForms) and unit tests
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Restore
+        run: dotnet restore AccountingSystem.sln
+
+      - name: Build solution
+        run: dotnet build AccountingSystem.sln -c Release --no-restore
+
+      - name: Core unit tests
+        run: dotnet test tests/AccountingSystem.Core.Tests/AccountingSystem.Core.Tests.csproj -c Release --no-build
+
+  sql-integration:
+    name: SQL integration tests (SQL Server 2019 engine, compatibility level 130)
+    runs-on: ubuntu-latest
+    services:
+      sqlserver:
+        image: mcr.microsoft.com/mssql/server:2019-latest
+        env:
+          ACCEPT_EULA: "Y"
+          MSSQL_SA_PASSWORD: "Ci_Only_Passw0rd!"
+        ports:
+          - 1433:1433
+    env:
+      AS_TEST_SQL: "Server=127.0.0.1,1433;User Id=sa;Password=Ci_Only_Passw0rd!;Encrypt=False;TrustServerCertificate=True"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Build web project
+        run: dotnet build src/AccountingSystem.Web/AccountingSystem.Web.csproj -c Release
+
+      - name: Data integration tests
+        run: dotnet test tests/AccountingSystem.Data.Tests/AccountingSystem.Data.Tests.csproj -c Release

@@ -1,0 +1,90 @@
+@page
+@model IndexModel
+@{
+    ViewData["Title"] = "خرید و فروش ارز";
+}
+
+<h1>خرید و فروش ارز</h1>
+
+@if (TempData["Success"] is string successMessage)
+{
+    <div class="alert ok">@successMessage</div>
+}
+<div asp-validation-summary="All" class="alert error"></div>
+
+<form method="post" class="panel">
+    <div class="radio-row">
+        <label><input type="radio" name="Input.TradeType" value="BUY" checked="@(Model.Input.TradeType != "SELL")" /> خرید ارز از مشتری (پرداخت ریال)</label>
+        <label><input type="radio" name="Input.TradeType" value="SELL" checked="@(Model.Input.TradeType == "SELL")" /> فروش ارز به مشتری (دریافت ریال)</label>
+    </div>
+    <div class="form-grid">
+        <label>ارز
+            <select id="currency" name="Input.CurrencyCode">
+                @foreach (var c in Model.Currencies)
+                {
+                    <option value="@c.Code" selected="@(c.Code == Model.Input.CurrencyCode)">@c.Code - @c.Name</option>
+                }
+            </select>
+        </label>
+        <label>مقدار ارز<input name="Input.Amount" value="@Model.Input.Amount" dir="ltr" inputmode="decimal" /></label>
+        <label>نرخ (ریال به ازای یک واحد)<input id="rate" name="Input.Rate" value="@Model.Input.Rate" dir="ltr" inputmode="decimal" /></label>
+        <label>نام مشتری<input name="Input.CustomerName" value="@Model.Input.CustomerName" /></label>
+        <label>کد ملی / شناسه<input name="Input.NationalCode" value="@Model.Input.NationalCode" dir="ltr" /></label>
+        <label>توضیحات<input name="Input.Note" value="@Model.Input.Note" /></label>
+    </div>
+    <p><button type="submit">ثبت معامله</button></p>
+</form>
+
+<h2>معاملات امروز</h2>
+<table>
+    <thead>
+        <tr>
+            <th>شماره</th>
+            <th>زمان</th>
+            <th>نوع</th>
+            <th>ارز</th>
+            <th>مقدار</th>
+            <th>نرخ</th>
+            <th>مبلغ ریالی</th>
+            <th>سود (ریال)</th>
+            <th>مشتری</th>
+            <th>ثبت‌کننده</th>
+        </tr>
+    </thead>
+    <tbody>
+        @foreach (var t in Model.TodayTrades)
+        {
+            <tr>
+                <td>@t.Id</td>
+                <td>@ViewFormat.Date(t.OccurredAt)</td>
+                <td>@ViewFormat.TradeText(t.Type)</td>
+                <td>@t.CurrencyCode</td>
+                <td>@ViewFormat.Quantity(t.Amount)</td>
+                <td>@ViewFormat.Rate(t.Rate)</td>
+                <td>@ViewFormat.Money(t.IrrAmount)</td>
+                <td>@ViewFormat.Money(t.ProfitIrr)</td>
+                <td>@t.CustomerName</td>
+                <td>@t.CreatedBy</td>
+            </tr>
+        }
+    </tbody>
+</table>
+
+<script>
+(function () {
+    var rates = @Html.Raw(Model.RatesJson);
+    var currency = document.getElementById('currency');
+    var rate = document.getElementById('rate');
+    var radios = document.querySelectorAll('input[name="Input.TradeType"]');
+
+    function fillRate() {
+        var item = rates.find(function (r) { return r.code === currency.value; });
+        if (!item) { return; }
+        var isSell = document.querySelector('input[name="Input.TradeType"][value="SELL"]').checked;
+        rate.value = isSell ? item.sell : item.buy;
+    }
+
+    currency.addEventListener('change', fillRate);
+    radios.forEach(function (r) { r.addEventListener('change', fillRate); });
+})();
+</script>

@@ -1,0 +1,51 @@
+@page
+@model IndexModel
+@{
+    ViewData["Title"] = "کاربران";
+}
+
+<h1>کاربران</h1>
+
+@if (TempData["Success"] is string successMessage)
+{
+    <div class="alert ok">@successMessage</div>
+}
+<div asp-validation-summary="All" class="alert error"></div>
+
+<table>
+    <thead>
+        <tr>
+            <th>نام کاربری</th>
+            <th>نام و نام خانوادگی</th>
+            <th>نقش</th>
+            <th>وضعیت</th>
+            <th>تاریخ ثبت</th>
+        </tr>
+    </thead>
+    <tbody>
+        @foreach (var u in Model.UserList)
+        {
+            <tr>
+                <td>@u.Username</td>
+                <td>@u.FullName</td>
+                <td>@ViewFormat.RoleText(u.Role)</td>
+                <td>@(u.IsActive ? "فعال" : "غیرفعال")</td>
+                <td>@ViewFormat.Date(u.CreatedAt)</td>
+            </tr>
+        }
+    </tbody>
+</table>
+
+<h2>افزودن کاربر</h2>
+<form method="post" class="panel form-grid">
+    <label>نام کاربری<input name="Input.Username" dir="ltr" /></label>
+    <label>نام و نام خانوادگی<input name="Input.FullName" /></label>
+    <label>رمز عبور (حداقل ۶ کاراکتر)<input name="Input.Password" type="password" dir="ltr" /></label>
+    <label>نقش
+        <select name="Input.Role">
+            <option value="Cashier">کاربر صندوق</option>
+            <option value="Admin">مدیر</option>
+        </select>
+    </label>
+    <div><button type="submit">ثبت کاربر</button></div>
+</form>

@@ -1,0 +1,59 @@
+@page
+@model IndexModel
+@{
+    ViewData["Title"] = "صندوق‌ها";
+}
+
+<h1>صندوق‌ها</h1>
+
+@if (TempData["Success"] is string successMessage)
+{
+    <div class="alert ok">@successMessage</div>
+}
+<div asp-validation-summary="All" class="alert error"></div>
+
+<table>
+    <thead>
+        <tr>
+            <th>صندوق</th>
+            <th>ارز</th>
+            <th>موجودی</th>
+            <th>آخرین تغییر</th>
+        </tr>
+    </thead>
+    <tbody>
+        @foreach (var b in Model.Boxes)
+        {
+            <tr>
+                <td>@b.Name</td>
+                <td>@b.CurrencyCode</td>
+                <td>@(b.CurrencyCode == "IRR" ? ViewFormat.Money(b.Balance) : ViewFormat.Quantity(b.Balance))</td>
+                <td>@ViewFormat.Date(b.UpdatedAt)</td>
+            </tr>
+        }
+    </tbody>
+</table>
+
+@if (User.IsInRole("Admin"))
+{
+    <h2>موجودی افتتاحیه ریال</h2>
+    <form method="post" asp-page-handler="OpeningIrr" class="panel form-grid">
+        <label>مبلغ (ریال، عدد صحیح)<input name="IrrInput.Amount" dir="ltr" inputmode="numeric" /></label>
+        <div><button type="submit">ثبت موجودی افتتاحیه ریال</button></div>
+    </form>
+
+    <h2>موجودی افتتاحیه ارز</h2>
+    <form method="post" asp-page-handler="OpeningFx" class="panel form-grid">
+        <label>ارز
+            <select name="FxInput.CurrencyCode">
+                @foreach (var c in Model.Currencies)
+                {
+                    <option value="@c.Code">@c.Code - @c.Name</option>
+                }
+            </select>
+        </label>
+        <label>مقدار ارز<input name="FxInput.Quantity" dir="ltr" inputmode="decimal" /></label>
+        <label>نرخ خرید واحد (ریال)<input name="FxInput.UnitRate" dir="ltr" inputmode="decimal" /></label>
+        <div><button type="submit">ثبت موجودی افتتاحیه ارز</button></div>
+    </form>
+}

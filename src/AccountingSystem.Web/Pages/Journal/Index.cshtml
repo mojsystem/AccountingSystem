@@ -1,0 +1,48 @@
+@page
+@model IndexModel
+@{
+    ViewData["Title"] = "اسناد حسابداری";
+}
+
+<h1>اسناد حسابداری</h1>
+
+<form method="get" class="panel form-grid">
+    <label>از تاریخ (میلادی)<input type="date" name="From" value="@Model.From" /></label>
+    <label>تا تاریخ (میلادی)<input type="date" name="To" value="@Model.To" /></label>
+    <div><button type="submit">نمایش</button></div>
+</form>
+
+@if (Model.Entries.Count == 0)
+{
+    <p>سندی در این بازه ثبت نشده است.</p>
+}
+
+@foreach (var entry in Model.Entries)
+{
+    <div class="entry">
+        <h3>سند شماره @entry.Id - @ViewFormat.Date(entry.OccurredAt) - @entry.Description</h3>
+        <table>
+            <thead>
+                <tr>
+                    <th>ردیف</th>
+                    <th>کد حساب</th>
+                    <th>نام حساب</th>
+                    <th>بدهکار (ریال)</th>
+                    <th>بستانکار (ریال)</th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var line in entry.Lines)
+                {
+                    <tr>
+                        <td>@line.LineNo</td>
+                        <td>@line.AccountCode</td>
+                        <td>@line.AccountName</td>
+                        <td>@ViewFormat.Money(line.Debit)</td>
+                        <td>@ViewFormat.Money(line.Credit)</td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+}

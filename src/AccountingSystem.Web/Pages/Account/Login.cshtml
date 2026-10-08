@@ -1,0 +1,17 @@
+@page
+@model LoginModel
+@{
+    ViewData["Title"] = "ورود";
+}
+
+<div class="auth-box">
+    <h1>ورود به سیستم</h1>
+    <div asp-validation-summary="All" class="alert error"></div>
+    <form method="post" asp-route-returnUrl="@Model.ReturnUrl">
+        <label>نام کاربری<input asp-for="Input.Username" dir="ltr" autocomplete="username" /></label>
+        <span asp-validation-for="Input.Username" class="error"></span>
+        <label>رمز عبور<input asp-for="Input.Password" type="password" dir="ltr" autocomplete="current-password" /></label>
+        <span asp-validation-for="Input.Password" class="error"></span>
+        <button type="submit">ورود</button>
+    </form>
+</div>

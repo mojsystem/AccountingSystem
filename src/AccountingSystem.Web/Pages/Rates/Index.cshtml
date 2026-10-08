@@ -1,0 +1,62 @@
+@page
+@model IndexModel
+@{
+    ViewData["Title"] = "نرخ و ارزها";
+}
+
+<h1>نرخ و ارزها</h1>
+
+@if (TempData["Success"] is string successMessage)
+{
+    <div class="alert ok">@successMessage</div>
+}
+<div asp-validation-summary="All" class="alert error"></div>
+
+<h2>آخرین نرخ‌ها</h2>
+<table>
+    <thead>
+        <tr>
+            <th>ارز</th>
+            <th>نرخ خرید از مشتری (ریال)</th>
+            <th>نرخ فروش به مشتری (ریال)</th>
+            <th>زمان ثبت</th>
+        </tr>
+    </thead>
+    <tbody>
+        @foreach (var r in Model.RateList)
+        {
+            <tr>
+                <td>@r.CurrencyCode - @r.CurrencyName</td>
+                <td>@ViewFormat.Rate(r.BuyRateIrr)</td>
+                <td>@ViewFormat.Rate(r.SellRateIrr)</td>
+                <td>@ViewFormat.Date(r.CreatedAt)</td>
+            </tr>
+        }
+    </tbody>
+</table>
+
+<h2>ثبت نرخ جدید</h2>
+<form method="post" asp-page-handler="SetRate" class="panel form-grid">
+    <label>ارز
+        <select name="RateInput.CurrencyCode">
+            @foreach (var c in Model.Currencies)
+            {
+                <option value="@c.Code">@c.Code - @c.Name</option>
+            }
+        </select>
+    </label>
+    <label>نرخ خرید از مشتری (ریال)<input name="RateInput.BuyRate" dir="ltr" inputmode="decimal" /></label>
+    <label>نرخ فروش به مشتری (ریال)<input name="RateInput.SellRate" dir="ltr" inputmode="decimal" /></label>
+    <div><button type="submit">ثبت نرخ</button></div>
+</form>
+
+@if (User.IsInRole("Admin"))
+{
+    <h2>افزودن ارز جدید</h2>
+    <form method="post" asp-page-handler="AddCurrency" class="panel form-grid">
+        <label>کد ارز (سه حرف انگلیسی)<input name="CurrencyInput.Code" dir="ltr" maxlength="3" /></label>
+        <label>نام ارز<input name="CurrencyInput.Name" /></label>
+        <label>تعداد ارقام اعشار<input name="CurrencyInput.DecimalPlaces" value="2" dir="ltr" type="number" min="0" max="4" /></label>
+        <div><button type="submit">افزودن ارز</button></div>
+    </form>
+}
