@@ -54,3 +54,16 @@ jobs:
       - name: Report test results
         if: always()
         run: python3 .github/scripts/report-trx.py TestResults
+
+      - name: Web app smoke test (sign-in and main pages, against the test database)
+        env:
+          ConnectionStrings__AccountingSystem: "Server=127.0.0.1,1433;Database=AccountingSystem_IT;User Id=sa;Password=Ci_Only_Passw0rd!;Encrypt=False;TrustServerCertificate=True"
+          SMOKE_USERNAME: admin
+          SMOKE_PASSWORD: "Test#12345"
+        run: |
+          dotnet src/AccountingSystem.Web/bin/Release/net8.0/AccountingSystem.Web.dll > web-app.log 2>&1 &
+          web_pid=$!
+          status=0
+          python3 .github/scripts/web-smoke.py http://127.0.0.1:5080 web-app.log || status=$?
+          kill "$web_pid" 2>/dev/null || true
+          exit "$status"
