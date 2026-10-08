@@ -234,12 +234,12 @@ ORDER BY t.OccurredAt DESC, t.Id DESC;";
     public async Task<IReadOnlyList<JournalEntryInfo>> GetJournalAsync(DateTime fromInclusive, DateTime toExclusive, CancellationToken ct = default)
     {
         const string sql = @"
-SELECT e.Id, e.OccurredAt, e.Description, e.SourceType, l.LineNo, l.AccountCode, a.Name, l.Debit, l.Credit
+SELECT e.Id, e.OccurredAt, e.Description, e.SourceType, l.LineNumber, l.AccountCode, a.Name, l.Debit, l.Credit
 FROM dbo.JournalEntries e
 INNER JOIN dbo.JournalLines l ON l.JournalEntryId = e.Id
 INNER JOIN dbo.Accounts a ON a.Code = l.AccountCode
 WHERE e.OccurredAt >= @from AND e.OccurredAt < @to
-ORDER BY e.OccurredAt DESC, e.Id DESC, l.LineNo;";
+ORDER BY e.OccurredAt DESC, e.Id DESC, l.LineNumber;";
         var order = new List<long>();
         var entries = new Dictionary<long, JournalEntryBuilder>();
         await using var conn = await OpenAsync(ct);
@@ -439,7 +439,7 @@ VALUES (@occurredAt, @description, @sourceType, @sourceId, @userId, @occurredAt)
         {
             lineNo++;
             await ExecuteAsync(conn, tx, ct,
-                "INSERT INTO dbo.JournalLines (JournalEntryId, LineNo, AccountCode, Debit, Credit) VALUES (@entryId, @lineNo, @account, @debit, @credit);",
+                "INSERT INTO dbo.JournalLines (JournalEntryId, LineNumber, AccountCode, Debit, Credit) VALUES (@entryId, @lineNo, @account, @debit, @credit);",
                 new SqlParameter("@entryId", entryId),
                 new SqlParameter("@lineNo", lineNo),
                 new SqlParameter("@account", line.AccountCode),

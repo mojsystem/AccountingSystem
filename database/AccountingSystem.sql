@@ -165,12 +165,12 @@ CREATE TABLE dbo.JournalLines
 (
     Id             BIGINT IDENTITY(1,1) NOT NULL,
     JournalEntryId BIGINT               NOT NULL,
-    LineNo         INT                  NOT NULL,
+    LineNumber     INT                  NOT NULL,
     AccountCode    NVARCHAR(20)         NOT NULL,
     Debit          DECIMAL(19,4)        NOT NULL,
     Credit         DECIMAL(19,4)        NOT NULL,
     CONSTRAINT PK_JournalLines PRIMARY KEY (Id),
-    CONSTRAINT UQ_JournalLines_EntryLine UNIQUE (JournalEntryId, LineNo),
+    CONSTRAINT UQ_JournalLines_EntryLine UNIQUE (JournalEntryId, LineNumber),
     CONSTRAINT FK_JournalLines_JournalEntries FOREIGN KEY (JournalEntryId) REFERENCES dbo.JournalEntries (Id),
     CONSTRAINT FK_JournalLines_Accounts FOREIGN KEY (AccountCode) REFERENCES dbo.Accounts (Code),
     CONSTRAINT CK_JournalLines_OneSide CHECK ((Debit > 0 AND Credit = 0) OR (Debit = 0 AND Credit > 0))
