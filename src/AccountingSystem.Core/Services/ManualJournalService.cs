@@ -6,17 +6,20 @@ using AccountingSystem.Core.Domain;
 namespace AccountingSystem.Core.Services;
 
 /// <summary>
-/// اسناد حسابداری دستی (فقط مدیر): ثبت، ابطال و ویرایش. ویرایش با ابطال سند قبلی و ثبت نسخه‌ی جدید انجام می‌شود.
+/// اسناد حسابداری دستی. ثبت سند جدید فقط با مدیر است؛ ابطال و ویرایش با مدیر یا کاربری که دسترسی لازم را در شعبه‌ی خودش دارد.
+/// ویرایش با ابطال سند قبلی و ثبت نسخه‌ی جدید انجام می‌شود.
 /// </summary>
 public sealed class ManualJournalService
 {
     public const string ReplacementReason = "ویرایش سند دستی؛ نسخه‌ی اصلاحی جایگزین شد";
 
     private readonly IAccountingRepository _repository;
+    private readonly PermissionService _permissions;
 
     public ManualJournalService(IAccountingRepository repository)
     {
         _repository = repository;
+        _permissions = new PermissionService(repository);
     }
 
     public async Task<long?> CreateAsync(CurrentUser actor, int branchId, string description, DateTime? occurredOn, IReadOnlyList<JournalLineDraft> lines, DateTime now, CancellationToken ct = default)
@@ -35,8 +38,8 @@ public sealed class ManualJournalService
 
     public async Task VoidAsync(CurrentUser actor, long entryId, string reason, DateTime now, CancellationToken ct = default)
     {
-        RoleGuard.RequireAdmin(actor);
         var entry = await LoadManualAsync(entryId, ct);
+        await _permissions.RequireAsync(actor, Permission.ManualVoid, entry.BranchId, ct);
         var ledger = await _repository.GetBranchLedgerAsync(entry.BranchId, ct);
         var posting = LedgerPlanner.PlanVoid(ledger, new DocRef(LedgerDocKind.Manual, entryId), reason, actor.Id, now);
         await _repository.PostAsync(posting, ct);
@@ -44,8 +47,8 @@ public sealed class ManualJournalService
 
     public async Task<long?> EditAsync(CurrentUser actor, long entryId, string description, DateTime? occurredOn, IReadOnlyList<JournalLineDraft> lines, DateTime now, CancellationToken ct = default)
     {
-        RoleGuard.RequireAdmin(actor);
         var entry = await LoadManualAsync(entryId, ct);
+        await _permissions.RequireAsync(actor, Permission.ManualEdit, entry.BranchId, ct);
         var sameDay = occurredOn is null || occurredOn.Value.Date == entry.OccurredAt.Date;
         var occurredAt = sameDay ? entry.OccurredAt : OccurrenceRules.Resolve(occurredOn, now);
         var ledger = await _repository.GetBranchLedgerAsync(entry.BranchId, ct);

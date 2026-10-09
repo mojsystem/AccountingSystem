@@ -534,6 +534,133 @@ public class SqlAccountingRepositoryTests : IClassFixture<SqlServerFixture>
     /// کنترل سازگاری دفتر یک شعبه و ارز: هر سند متوازن است، مانده‌ی هر صندوق با حرکت‌هایش برابر است،
     /// آخرین موجودی تراکمی با مانده برابر است و بهای موجودی در دفتر کل با جدول موجودی برابر است.
     /// </summary>
+    [Fact]
+    public async Task Cashier_trades_need_a_grant_and_stay_inside_their_branch()
+    {
+        if (!_fixture.IsEnabled)
+        {
+            return;
+        }
+
+        var repo = new SqlAccountingRepository(_fixture.ConnectionString!);
+        var admin = new CurrencyAdminService(repo);
+        var tradeService = new CurrencyTradeService(repo);
+        var permissions = new PermissionService(repo);
+        var branches = new BranchService(repo);
+        var now = DateTime.Now;
+        var adminUser = await EnsureAdminAsync(repo, now);
+        var mainId = await MainBranchIdAsync(repo);
+        var otherId = await branches.CreateBranchAsync(adminUser, "P" + Random.Shared.Next(100_000, 999_999), "شعبه‌ی دسترسی", now);
+        var code = await NewCurrencyCodeAsync(repo);
+
+        await admin.AddCurrencyAsync(adminUser, code, "ارز دسترسی", 2, now);
+        await admin.OpeningIrrAsync(adminUser, mainId, 100_000_000m, now);
+        await admin.OpeningForeignAsync(adminUser, mainId, code, 50m, 1_000_000m, now);
+        await admin.OpeningIrrAsync(adminUser, otherId, 100_000_000m, now);
+        await admin.OpeningForeignAsync(adminUser, otherId, code, 50m, 1_000_000m, now);
+
+        var username = "perm" + Random.Shared.Next(100_000, 999_999);
+        await new UserService(repo).CreateUserAsync(adminUser, username, "کاربر دسترسی", "Test#12345", UserRole.Cashier, mainId, now);
+        var account = await repo.GetUserByUsernameAsync(username)
+            ?? throw new InvalidOperationException("کاربر آزمایشی ساخته نشد.");
+        var cashier = new CurrentUser(account.Id, account.Username, account.FullName, account.Role, account.BranchId, account.BranchName);
+
+        var ownTrade = await tradeService.BuyFromCustomerAsync(new TradeInput(mainId, code, 10m, 1_000_000m, null, null, null), cashier, now);
+        var otherTrade = await tradeService.BuyFromCustomerAsync(new TradeInput(otherId, code, 10m, 1_000_000m, null, null, null), adminUser, now);
+        var largerTrade = new TradeInput(mainId, code, 12m, 1_000_000m, null, null, null);
+
+        // بدون هیچ دسترسی، ویرایش و ابطال رد می‌شوند.
+        var denied = await Assert.ThrowsAsync<BusinessRuleException>(() => tradeService.VoidTradeAsync(cashier, ownTrade, "دلیل", now));
+        Assert.Contains("دسترسی", denied.Message);
+        await Assert.ThrowsAsync<BusinessRuleException>(() => tradeService.EditTradeAsync(cashier, ownTrade, largerTrade, TradeType.Buy, null, now));
+
+        // کاربر صندوق نمی‌تواند به خودش دسترسی دهد و مدیر به خودش دسترسی اضافه نمی‌کند.
+        await Assert.ThrowsAsync<BusinessRuleException>(() => permissions.SetPermissionsAsync(cashier, account.Id, new[] { Permission.TradeVoid }, now));
+        await Assert.ThrowsAsync<BusinessRuleException>(() => permissions.SetPermissionsAsync(adminUser, adminUser.Id, new[] { Permission.TradeVoid }, now));
+
+        // ویرایش فقط با TRADE_EDIT و فقط در شعبه‌ی خودش.
+        await permissions.SetPermissionsAsync(adminUser, account.Id, new[] { Permission.TradeEdit }, now);
+        var replacementId = await tradeService.EditTradeAsync(cashier, ownTrade, largerTrade, TradeType.Buy, null, now);
+        Assert.NotNull(replacementId);
+        await Assert.ThrowsAsync<BusinessRuleException>(() => tradeService.VoidTradeAsync(cashier, replacementId!.Value, "دلیل", now));
+        var otherEdit = await Assert.ThrowsAsync<BusinessRuleException>(() => tradeService.EditTradeAsync(cashier, otherTrade, largerTrade, TradeType.Buy, null, now));
+        Assert.Contains("شعبه", otherEdit.Message);
+
+        // ابطال با TRADE_VOID؛ معامله‌ی شعبه‌ی دیگر همچنان رد می‌شود.
+        await permissions.SetPermissionsAsync(adminUser, account.Id, new[] { Permission.TradeEdit, Permission.TradeVoid }, now);
+        var otherVoid = await Assert.ThrowsAsync<BusinessRuleException>(() => tradeService.VoidTradeAsync(cashier, otherTrade, "دلیل", now));
+        Assert.Contains("شعبه", otherVoid.Message);
+        await tradeService.VoidTradeAsync(cashier, replacementId!.Value, "ثبت اشتباه", now);
+        Assert.True((await repo.GetTradeAsync(replacementId.Value))!.IsVoided);
+
+        // لغو دسترسی بلافاصله اعمال می‌شود؛ کاربر جاری هم نمی‌تواند با همان حساب ابطال کند.
+        await permissions.SetPermissionsAsync(adminUser, account.Id, Array.Empty<Permission>(), now);
+        Assert.Empty(await permissions.GetPermissionsAsync(cashier));
+        var lateTrade = await tradeService.BuyFromCustomerAsync(new TradeInput(mainId, code, 5m, 1_000_000m, null, null, null), cashier, now);
+        await Assert.ThrowsAsync<BusinessRuleException>(() => tradeService.VoidTradeAsync(cashier, lateTrade, "دلیل", now));
+
+        // هر تغییر دسترسی (افزودن یا حذف) در سابقه ثبت می‌شود: یک بار TRADE_EDIT، یک بار TRADE_VOID، یک بار حذف همه.
+        await using var conn = new SqlConnection(_fixture.ConnectionString!);
+        await conn.OpenAsync();
+        var auditRows = Convert.ToInt32(await ScalarAsync(conn,
+            "SELECT COUNT(*) FROM dbo.AuditLog WHERE Action = N'USER_PERMISSIONS' AND EntityType = N'USER' AND EntityId = @userId;",
+            new SqlParameter("@userId", account.Id)), CultureInfo.InvariantCulture);
+        Assert.Equal(3, auditRows);
+    }
+
+    [Fact]
+    public async Task Cashier_openings_and_manual_documents_need_their_own_permissions()
+    {
+        if (!_fixture.IsEnabled)
+        {
+            return;
+        }
+
+        var repo = new SqlAccountingRepository(_fixture.ConnectionString!);
+        var admin = new CurrencyAdminService(repo);
+        var manual = new ManualJournalService(repo);
+        var permissions = new PermissionService(repo);
+        var now = DateTime.Now;
+        var adminUser = await EnsureAdminAsync(repo, now);
+        var mainId = await MainBranchIdAsync(repo);
+        var code = await NewCurrencyCodeAsync(repo);
+
+        await admin.AddCurrencyAsync(adminUser, code, "ارز افتتاحیه‌ی دسترسی", 2, now);
+        await admin.OpeningIrrAsync(adminUser, mainId, 100_000_000m, now);
+        var openingId = await admin.RecordOpeningAsync(adminUser, mainId, code, 10m, 1_000_000m, now);
+        Assert.NotNull(openingId);
+        var lines = new[] { new JournalLineDraft("6001", 10_000_000m, 0m), new JournalLineDraft(AccountCodes.IrrCash, 0m, 10_000_000m) };
+        var manualId = await manual.CreateAsync(adminUser, mainId, "هزینه‌ی آزمایشی دسترسی", null, lines, now);
+        Assert.NotNull(manualId);
+
+        var username = "perm" + Random.Shared.Next(100_000, 999_999);
+        await new UserService(repo).CreateUserAsync(adminUser, username, "کاربر سند", "Test#12345", UserRole.Cashier, mainId, now);
+        var account = await repo.GetUserByUsernameAsync(username)
+            ?? throw new InvalidOperationException("کاربر آزمایشی ساخته نشد.");
+        var cashier = new CurrentUser(account.Id, account.Username, account.FullName, account.Role, account.BranchId, account.BranchName);
+
+        // ثبت موجودی افتتاحیه و سند دستی جدید فقط با مدیر است؛ دسترسی ابطال و ویرایش آن را عوض نمی‌کند.
+        await Assert.ThrowsAsync<BusinessRuleException>(() => admin.RecordOpeningAsync(cashier, mainId, code, 1m, 1_000_000m, now));
+        await Assert.ThrowsAsync<BusinessRuleException>(() => manual.CreateAsync(cashier, mainId, "سند کاربر", null, lines, now));
+
+        // بدون دسترسی: ویرایش و ابطال هر دو رد می‌شوند.
+        await Assert.ThrowsAsync<BusinessRuleException>(() => admin.EditOpeningAsync(cashier, openingId!.Value, 20m, 1_000_000m, null, now));
+        await Assert.ThrowsAsync<BusinessRuleException>(() => admin.VoidOpeningAsync(cashier, openingId.Value, "دلیل", now));
+        await Assert.ThrowsAsync<BusinessRuleException>(() => manual.EditAsync(cashier, manualId!.Value, "ویرایش", null, lines, now));
+        await Assert.ThrowsAsync<BusinessRuleException>(() => manual.VoidAsync(cashier, manualId.Value, "دلیل", now));
+
+        // دسترسی‌ها مستقل‌اند: ابطال افتتاحیه و ویرایش سند دستی داده شده؛ ابطال سند دستی داده نشده.
+        await permissions.SetPermissionsAsync(adminUser, account.Id, new[] { Permission.OpeningVoid, Permission.ManualEdit }, now);
+        await admin.VoidOpeningAsync(cashier, openingId.Value, "ورود اشتباه", now);
+        Assert.True((await repo.GetOpeningAsync(openingId.Value))!.IsVoided);
+
+        var editedManualId = await manual.EditAsync(cashier, manualId.Value, "هزینه‌ی ویرایش‌شده", null, lines, now);
+        Assert.NotNull(editedManualId);
+        Assert.True((await repo.GetJournalEntryAsync(manualId.Value))!.IsVoided);
+        Assert.False((await repo.GetJournalEntryAsync(editedManualId!.Value))!.IsVoided);
+        await Assert.ThrowsAsync<BusinessRuleException>(() => manual.VoidAsync(cashier, editedManualId.Value, "دلیل", now));
+    }
+
     private static async Task AssertLedgerConsistentAsync(string connectionString, int branchId, string currencyCode)
     {
         await using var conn = new SqlConnection(connectionString);

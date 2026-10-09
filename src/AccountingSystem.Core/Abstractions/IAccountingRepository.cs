@@ -60,6 +60,17 @@ public interface IAccountingRepository
     /// <summary>یک سند حسابداری با سطرهایش؛ null اگر وجود نداشته باشد.</summary>
     Task<JournalEntryInfo?> GetJournalEntryAsync(long entryId, CancellationToken ct = default);
 
+    /// <summary>دسترسی‌های کاربر از دیتابیس (نقش، فعال بودن، شعبه و دسترسی‌های اضافی)؛ null اگر کاربر نباشد.</summary>
+    Task<UserAccess?> GetUserAccessAsync(int userId, CancellationToken ct = default);
+
+    /// <summary>دسترسی‌های اضافی همه‌ی کاربران با کلید شناسه‌ی کاربر (فقط کاربرانی که دسترسی دارند).</summary>
+    Task<IReadOnlyDictionary<int, IReadOnlySet<Permission>>> GetAllUserPermissionsAsync(CancellationToken ct = default);
+
+    /// <summary>
+    /// مجموعه‌ی دسترسی‌های اضافی کاربر را به مجموعه‌ی داده‌شده تغییر می‌دهد و تغییرات را در سابقه ثبت می‌کند.
+    /// </summary>
+    Task SetUserPermissionsAsync(int userId, IReadOnlyCollection<Permission> permissions, int actorId, DateTime now, CancellationToken ct = default);
+
     Task<int> CountUsersAsync(CancellationToken ct = default);
 
     Task<UserAccount?> GetUserByUsernameAsync(string username, CancellationToken ct = default);

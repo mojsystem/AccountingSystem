@@ -905,6 +905,128 @@ ORDER BY t.OccurredAt DESC, t.Id DESC;";
         return await QueryTradeAsync(conn, tradeId, ct);
     }
 
+    /// <summary>دسترسی‌های کاربر از جدول کاربران و جدول دسترسی‌ها؛ در هر بار فراخوانی تازه خوانده می‌شود.</summary>
+    public async Task<UserAccess?> GetUserAccessAsync(int userId, CancellationToken ct = default)
+    {
+        const string userSql = "SELECT Role, IsActive, BranchId FROM dbo.Users WHERE Id = @userId;";
+        const string permissionSql = "SELECT Permission FROM dbo.UserPermissions WHERE UserId = @userId;";
+        await using var conn = await OpenAsync(ct);
+
+        UserRole role;
+        bool isActive;
+        int? branchId;
+        await using (var cmd = new SqlCommand(userSql, conn))
+        {
+            cmd.Parameters.Add(new SqlParameter("@userId", userId));
+            await using var reader = await cmd.ExecuteReaderAsync(ct);
+            if (!await reader.ReadAsync(ct))
+            {
+                return null;
+            }
+            role = ParseRole(reader.GetString(0));
+            isActive = reader.GetBoolean(1);
+            branchId = reader.IsDBNull(2) ? (int?)null : reader.GetInt32(2);
+        }
+
+        var permissions = new HashSet<Permission>();
+        await using (var cmd = new SqlCommand(permissionSql, conn))
+        {
+            cmd.Parameters.Add(new SqlParameter("@userId", userId));
+            await using var reader = await cmd.ExecuteReaderAsync(ct);
+            while (await reader.ReadAsync(ct))
+            {
+                if (PermissionCodes.TryParse(reader.GetString(0), out var permission))
+                {
+                    permissions.Add(permission);
+                }
+            }
+        }
+        return new UserAccess(userId, role, isActive, branchId, permissions);
+    }
+
+    public async Task<IReadOnlyDictionary<int, IReadOnlySet<Permission>>> GetAllUserPermissionsAsync(CancellationToken ct = default)
+    {
+        const string sql = "SELECT UserId, Permission FROM dbo.UserPermissions;";
+        var result = new Dictionary<int, HashSet<Permission>>();
+        await using var conn = await OpenAsync(ct);
+        await using var cmd = new SqlCommand(sql, conn);
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+        {
+            if (!PermissionCodes.TryParse(reader.GetString(1), out var permission))
+            {
+                continue;
+            }
+            var userId = reader.GetInt32(0);
+            if (!result.TryGetValue(userId, out var set))
+            {
+                set = new HashSet<Permission>();
+                result[userId] = set;
+            }
+            set.Add(permission);
+        }
+        return result.ToDictionary(pair => pair.Key, pair => (IReadOnlySet<Permission>)pair.Value);
+    }
+
+    /// <summary>
+    /// فقط تفاوت‌ها اعمال می‌شوند: دسترسی‌های حذف‌شده پاک و دسترسی‌های تازه ثبت می‌شوند. تغییر در سابقه ثبت می‌شود.
+    /// </summary>
+    public Task SetUserPermissionsAsync(int userId, IReadOnlyCollection<Permission> permissions, int actorId, DateTime now, CancellationToken ct = default)
+    {
+        return WithTransactionAsync<bool>(async (conn, tx) =>
+        {
+            var current = new HashSet<Permission>();
+            await using (var cmd = new SqlCommand("SELECT Permission FROM dbo.UserPermissions WHERE UserId = @userId;", conn, tx))
+            {
+                cmd.Parameters.Add(new SqlParameter("@userId", userId));
+                await using var reader = await cmd.ExecuteReaderAsync(ct);
+                while (await reader.ReadAsync(ct))
+                {
+                    if (PermissionCodes.TryParse(reader.GetString(0), out var existing))
+                    {
+                        current.Add(existing);
+                    }
+                }
+            }
+
+            var wanted = new HashSet<Permission>(permissions);
+            var added = wanted.Except(current).ToList();
+            var removed = current.Except(wanted).ToList();
+            if (added.Count == 0 && removed.Count == 0)
+            {
+                return false;
+            }
+
+            foreach (var permission in removed)
+            {
+                await ExecuteAsync(conn, tx, ct,
+                    "DELETE FROM dbo.UserPermissions WHERE UserId = @userId AND Permission = @code;",
+                    new SqlParameter("@userId", userId),
+                    new SqlParameter("@code", PermissionCodes.ToCode(permission)));
+            }
+            foreach (var permission in added)
+            {
+                await ExecuteAsync(conn, tx, ct, @"
+INSERT INTO dbo.UserPermissions (UserId, Permission, GrantedBy, GrantedAt)
+VALUES (@userId, @code, @actorId, @now);",
+                    new SqlParameter("@userId", userId),
+                    new SqlParameter("@code", PermissionCodes.ToCode(permission)),
+                    new SqlParameter("@actorId", actorId),
+                    new SqlParameter("@now", now));
+            }
+
+            await InsertAuditAsync(conn, tx, actorId, now, "USER_PERMISSIONS", "USER", userId,
+                $"افزوده: {DescribePermissions(added)}؛ حذف: {DescribePermissions(removed)}", ct);
+            return true;
+        }, ct);
+    }
+
+    private static string DescribePermissions(IEnumerable<Permission> permissions)
+    {
+        var names = permissions.Select(PermissionCodes.DisplayName).ToList();
+        return names.Count == 0 ? "—" : string.Join("، ", names);
+    }
+
     public async Task<int> CountUsersAsync(CancellationToken ct = default)
     {
         await using var conn = await OpenAsync(ct);

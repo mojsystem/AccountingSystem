@@ -15,10 +15,12 @@ public sealed class CurrencyTradeService
     public const string ReplacementReason = "ویرایش معامله؛ نسخه‌ی اصلاحی جایگزین شد";
 
     private readonly IAccountingRepository _repository;
+    private readonly PermissionService _permissions;
 
     public CurrencyTradeService(IAccountingRepository repository)
     {
         _repository = repository;
+        _permissions = new PermissionService(repository);
     }
 
     public Task<long> BuyFromCustomerAsync(TradeInput input, CurrentUser user, DateTime now, CancellationToken ct = default) =>
@@ -59,9 +61,9 @@ public sealed class CurrencyTradeService
     /// </summary>
     public async Task VoidTradeAsync(CurrentUser user, long tradeId, string reason, DateTime now, CancellationToken ct = default)
     {
-        RoleGuard.RequireAdmin(user);
         var trade = await _repository.GetTradeAsync(tradeId, ct)
             ?? throw new BusinessRuleException("معامله‌ی انتخابی یافت نشد.");
+        await _permissions.RequireAsync(user, Permission.TradeVoid, trade.BranchId, ct);
         var ledger = await _repository.GetBranchLedgerAsync(trade.BranchId, ct);
         var posting = LedgerPlanner.PlanVoid(ledger, new DocRef(LedgerDocKind.Trade, tradeId), reason, user.Id, now);
         await _repository.PostAsync(posting, ct);
@@ -74,9 +76,9 @@ public sealed class CurrencyTradeService
     /// </summary>
     public async Task<long?> EditTradeAsync(CurrentUser user, long tradeId, TradeInput input, TradeType type, DateTime? occurredOn, DateTime now, CancellationToken ct = default)
     {
-        RoleGuard.RequireAdmin(user);
         var old = await _repository.GetTradeAsync(tradeId, ct)
             ?? throw new BusinessRuleException("معامله‌ی انتخابی یافت نشد.");
+        await _permissions.RequireAsync(user, Permission.TradeEdit, old.BranchId, ct);
         if (old.IsVoided)
         {
             throw new BusinessRuleException("معامله‌ی باطل‌شده قابل ویرایش نیست.");

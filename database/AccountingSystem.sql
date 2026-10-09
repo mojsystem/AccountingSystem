@@ -270,6 +270,21 @@ CREATE TABLE dbo.AuditLog
 CREATE INDEX IX_AuditLog_Entity ON dbo.AuditLog (EntityType, EntityId);
 GO
 
+-- دسترسی‌های ویرایش و ابطال که مدیر به کاربر صندوق می‌دهد. مدیر همه‌ی دسترسی‌ها را دارد و سطری لازم ندارد.
+CREATE TABLE dbo.UserPermissions
+(
+    UserId     INT           NOT NULL,
+    Permission NVARCHAR(40)  NOT NULL,
+    GrantedBy  INT           NOT NULL,
+    GrantedAt  DATETIME2(0)  NOT NULL CONSTRAINT DF_UserPermissions_GrantedAt DEFAULT (SYSDATETIME()),
+    CONSTRAINT PK_UserPermissions PRIMARY KEY (UserId, Permission),
+    CONSTRAINT FK_UserPermissions_Users FOREIGN KEY (UserId) REFERENCES dbo.Users (Id),
+    CONSTRAINT FK_UserPermissions_GrantedBy FOREIGN KEY (GrantedBy) REFERENCES dbo.Users (Id),
+    CONSTRAINT CK_UserPermissions_Permission CHECK (Permission IN (
+        N'TRADE_EDIT', N'TRADE_VOID', N'OPENING_EDIT', N'OPENING_VOID', N'MANUAL_EDIT', N'MANUAL_VOID'))
+);
+GO
+
 CREATE TABLE dbo.JournalLines
 (
     Id             BIGINT IDENTITY(1,1) NOT NULL,

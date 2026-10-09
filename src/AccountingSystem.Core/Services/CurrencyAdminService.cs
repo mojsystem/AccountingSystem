@@ -12,10 +12,12 @@ public sealed class CurrencyAdminService
     public const string OpeningReplacementReason = "ویرایش موجودی افتتاحیه؛ نسخه‌ی اصلاحی جایگزین شد";
 
     private readonly IAccountingRepository _repository;
+    private readonly PermissionService _permissions;
 
     public CurrencyAdminService(IAccountingRepository repository)
     {
         _repository = repository;
+        _permissions = new PermissionService(repository);
     }
 
     public Task<IReadOnlyList<CurrencyInfo>> GetCurrenciesAsync(CancellationToken ct = default) =>
@@ -120,26 +122,28 @@ public sealed class CurrencyAdminService
     }
 
     /// <summary>
-    /// ابطال موجودی افتتاحیه (فقط مدیر). اگر معاملات بعدی به آن وابسته باشند و موجودی منفی شود، ابطال رد می‌شود.
+    /// ابطال موجودی افتتاحیه (مدیر، یا کاربری که دسترسی «ابطال موجودی افتتاحیه» را در شعبه‌ی خودش دارد).
+    /// اگر معاملات بعدی به آن وابسته باشند و موجودی منفی شود، ابطال رد می‌شود.
     /// </summary>
     public async Task VoidOpeningAsync(CurrentUser actor, long openingId, string reason, DateTime now, CancellationToken ct = default)
     {
-        RoleGuard.RequireAdmin(actor);
         var opening = await _repository.GetOpeningAsync(openingId, ct)
             ?? throw new BusinessRuleException("سند افتتاحیه‌ی انتخابی یافت نشد.");
+        await _permissions.RequireAsync(actor, Permission.OpeningVoid, opening.BranchId, ct);
         var ledger = await _repository.GetBranchLedgerAsync(opening.BranchId, ct);
         var posting = LedgerPlanner.PlanVoid(ledger, new DocRef(LedgerDocKind.Opening, openingId), reason, actor.Id, now);
         await _repository.PostAsync(posting, ct);
     }
 
     /// <summary>
-    /// ویرایش موجودی افتتاحیه (فقط مدیر). ویرایش با ابطال نسخه‌ی قبلی و ثبت نسخه‌ی اصلاحی انجام می‌شود.
+    /// ویرایش موجودی افتتاحیه (مدیر، یا کاربری که دسترسی «ویرایش موجودی افتتاحیه» را در شعبه‌ی خودش دارد).
+    /// ویرایش با ابطال نسخه‌ی قبلی و ثبت نسخه‌ی اصلاحی انجام می‌شود.
     /// </summary>
     public async Task<long?> EditOpeningAsync(CurrentUser actor, long openingId, decimal quantity, decimal? unitRateIrr, DateTime? occurredOn, DateTime now, CancellationToken ct = default)
     {
-        RoleGuard.RequireAdmin(actor);
         var old = await _repository.GetOpeningAsync(openingId, ct)
             ?? throw new BusinessRuleException("سند افتتاحیه‌ی انتخابی یافت نشد.");
+        await _permissions.RequireAsync(actor, Permission.OpeningEdit, old.BranchId, ct);
         if (old.IsVoided)
         {
             throw new BusinessRuleException("این موجودی افتتاحیه قبلاً باطل شده است.");
