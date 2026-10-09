@@ -96,14 +96,18 @@ internal sealed class AccountsTab : UserControl, IRefreshable
         details.Controls.Add(buttons);
         details.Controls.Add(hint);
 
-        var split = new SplitContainer
+        // جدول دو ستونه به‌جای SplitContainer: اندازه‌ی ثابت جداکننده هنگام ساخت فرم خطا ایجاد نمی‌کند.
+        var split = new TableLayoutPanel
         {
             Dock = DockStyle.Fill,
-            SplitterDistance = 460,
-            FixedPanel = FixedPanel.Panel1,
+            ColumnCount = 2,
+            RowCount = 1,
         };
-        split.Panel1.Controls.Add(_tree);
-        split.Panel2.Controls.Add(details);
+        split.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 42));
+        split.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 58));
+        split.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        split.Controls.Add(_tree, 0, 0);
+        split.Controls.Add(details, 1, 0);
         Controls.Add(split);
 
         _tree.AfterSelect += (_, e) =>

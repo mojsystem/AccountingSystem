@@ -49,7 +49,7 @@ public class IndexModel : PageModel
     {
         var user = User.ToCurrentUser();
         var input = new CustomerInput(Form.FullName, Form.NationalCode, Form.Phone, Form.Address, Form.Note,
-            Form.Mobile, Form.City, Form.AccountNumber, Form.CardNumber);
+            Form.Mobile, Form.City, Form.Sheba1, Form.Sheba2, Form.CardNumber1, Form.CardNumber2);
         try
         {
             if (Form.Id is null)
@@ -110,9 +110,13 @@ public sealed class CustomerForm
 
     public string? Address { get; set; }
 
-    public string? AccountNumber { get; set; }
+    public string? Sheba1 { get; set; }
 
-    public string? CardNumber { get; set; }
+    public string? Sheba2 { get; set; }
+
+    public string? CardNumber1 { get; set; }
+
+    public string? CardNumber2 { get; set; }
 
     public string? Note { get; set; }
 
@@ -125,8 +129,10 @@ public sealed class CustomerForm
         Mobile = customer.Mobile,
         City = customer.City,
         Address = customer.Address,
-        AccountNumber = customer.AccountNumber,
-        CardNumber = customer.CardNumber,
+        Sheba1 = customer.Sheba1,
+        Sheba2 = customer.Sheba2,
+        CardNumber1 = customer.CardNumber1,
+        CardNumber2 = customer.CardNumber2,
         Note = customer.Note,
     };
 }

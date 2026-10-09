@@ -16,8 +16,10 @@ internal sealed class CustomerDialog : Form
     private readonly TextBox _phone = new() { Width = 340, MaxLength = 20 };
     private readonly TextBox _city = new() { Width = 340, MaxLength = 60 };
     private readonly TextBox _address = new() { Width = 340, MaxLength = 250 };
-    private readonly TextBox _account = new() { Width = 340, MaxLength = 40 };
-    private readonly TextBox _card = new() { Width = 340, MaxLength = 19 };
+    private readonly TextBox _sheba1 = new() { Width = 340, MaxLength = 40 };
+    private readonly TextBox _sheba2 = new() { Width = 340, MaxLength = 40 };
+    private readonly TextBox _card1 = new() { Width = 340, MaxLength = 19 };
+    private readonly TextBox _card2 = new() { Width = 340, MaxLength = 19 };
     private readonly TextBox _note = new() { Width = 340, MaxLength = 250 };
 
     public CustomerDialog(CustomerInfo? existing = null)
@@ -39,8 +41,10 @@ internal sealed class CustomerDialog : Form
             _phone.Text = existing.Phone ?? string.Empty;
             _city.Text = existing.City ?? string.Empty;
             _address.Text = existing.Address ?? string.Empty;
-            _account.Text = existing.AccountNumber ?? string.Empty;
-            _card.Text = existing.CardNumber ?? string.Empty;
+            _sheba1.Text = existing.Sheba1 ?? string.Empty;
+            _sheba2.Text = existing.Sheba2 ?? string.Empty;
+            _card1.Text = existing.CardNumber1 ?? string.Empty;
+            _card2.Text = existing.CardNumber2 ?? string.Empty;
             _note.Text = existing.Note ?? string.Empty;
         }
 
@@ -71,8 +75,10 @@ internal sealed class CustomerDialog : Form
             UiHelpers.MakeLabel("تلفن ثابت:"), _phone,
             UiHelpers.MakeLabel("شهر:"), _city,
             UiHelpers.MakeLabel("نشانی:"), _address,
-            UiHelpers.MakeLabel("شماره حساب یا شبا:"), _account,
-            UiHelpers.MakeLabel("شماره کارت (۱۶ رقم):"), _card,
+            UiHelpers.MakeLabel("شماره‌ی شبا ۱ (IR و ۲۴ رقم، اختیاری):"), _sheba1,
+            UiHelpers.MakeLabel("شماره‌ی شبا ۲ (اختیاری):"), _sheba2,
+            UiHelpers.MakeLabel("شماره‌ی کارت ۱ (۱۶ رقم، اختیاری):"), _card1,
+            UiHelpers.MakeLabel("شماره‌ی کارت ۲ (۱۶ رقم، اختیاری):"), _card2,
             UiHelpers.MakeLabel("یادداشت:"), _note,
         });
 
@@ -109,8 +115,10 @@ internal sealed class CustomerDialog : Form
                 _note.Text,
                 _mobile.Text,
                 _city.Text,
-                _account.Text,
-                _card.Text));
+                _sheba1.Text,
+                _sheba2.Text,
+                _card1.Text,
+                _card2.Text));
             DialogResult = DialogResult.OK;
         }
         catch (BusinessRuleException ex)

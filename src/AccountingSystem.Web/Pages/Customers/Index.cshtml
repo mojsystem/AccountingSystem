@@ -25,7 +25,7 @@
 <div class="split">
     <section class="panel">
         <form method="get" class="search-bar">
-            <input type="search" name="Search" value="@Model.Search" placeholder="نام، کد مشتری، کد ملی، موبایل، کارت یا حساب" aria-label="جستجوی مشتری" />
+            <input type="search" name="Search" value="@Model.Search" placeholder="نام، کد مشتری، کد ملی، موبایل، کارت یا شبا" aria-label="جستجوی مشتری" />
             <button type="submit" class="btn">جستجو</button>
             @if (!string.IsNullOrEmpty(Model.Search))
             {
@@ -43,7 +43,7 @@
                         <th>کد ملی / شناسه</th>
                         <th>موبایل / تلفن</th>
                         <th>شهر</th>
-                        <th>شماره کارت</th>
+                        <th>کارت‌ها</th>
                         <th>آخرین به‌روزرسانی</th>
                         <th></th>
                     </tr>
@@ -57,7 +57,7 @@
                             <td class="code">@c.NationalCode</td>
                             <td class="code">@(string.Join(" / ", new[] { c.Mobile, c.Phone }.Where(v => !string.IsNullOrEmpty(v))))</td>
                             <td>@c.City</td>
-                            <td class="code">@CustomerRules.MaskCardNumber(c.CardNumber)</td>
+                            <td class="code">@CustomerRules.MaskCardNumbers(c.CardNumber1, c.CardNumber2)</td>
                             <td>@PersianDate.FormatDateTime(c.UpdatedAt)</td>
                             <td class="row-actions">
                                 @if (Model.CanEdit)
@@ -127,13 +127,23 @@
                     <input name="Form.Address" value="@Model.Form.Address" maxlength="250" />
                 </label>
                 <label>
-                    <span>شماره حساب یا شبا</span>
-                    <input name="Form.AccountNumber" value="@Model.Form.AccountNumber" maxlength="40" dir="ltr" autocomplete="off" />
-                    <small class="hint">برای شبا با IR شروع کنید؛ فاصله مجاز است.</small>
+                    <span>شماره‌ی شبا ۱</span>
+                    <input name="Form.Sheba1" value="@Model.Form.Sheba1" maxlength="40" dir="ltr" autocomplete="off" placeholder="IR" />
+                    <small class="hint">IR و ۲۴ رقم؛ فاصله و خط تیره مجازند.</small>
                 </label>
                 <label>
-                    <span>شماره کارت</span>
-                    <input name="Form.CardNumber" value="@Model.Form.CardNumber" maxlength="19" dir="ltr" autocomplete="off" inputmode="numeric" />
+                    <span>شماره‌ی شبا ۲ (اختیاری)</span>
+                    <input name="Form.Sheba2" value="@Model.Form.Sheba2" maxlength="40" dir="ltr" autocomplete="off" placeholder="IR" />
+                    <small class="hint">IR و ۲۴ رقم؛ فاصله و خط تیره مجازند.</small>
+                </label>
+                <label>
+                    <span>شماره‌ی کارت ۱</span>
+                    <input name="Form.CardNumber1" value="@Model.Form.CardNumber1" maxlength="19" dir="ltr" autocomplete="off" inputmode="numeric" />
+                    <small class="hint">۱۶ رقم؛ فاصله و خط تیره مجازند.</small>
+                </label>
+                <label>
+                    <span>شماره‌ی کارت ۲ (اختیاری)</span>
+                    <input name="Form.CardNumber2" value="@Model.Form.CardNumber2" maxlength="19" dir="ltr" autocomplete="off" inputmode="numeric" />
                     <small class="hint">۱۶ رقم؛ فاصله و خط تیره مجازند.</small>
                 </label>
                 <label>

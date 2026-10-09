@@ -13,7 +13,7 @@ internal sealed class CustomersTab : UserControl, IRefreshable
     private static readonly string[] Headers =
     {
         "کد مشتری", "نام و نام خانوادگی", "کد ملی / شناسه", "موبایل", "تلفن ثابت", "شهر",
-        "شماره کارت", "آخرین به‌روزرسانی (شمسی)",
+        "کارت‌ها", "آخرین به‌روزرسانی (شمسی)",
     };
 
     private readonly AppServices _services;
@@ -83,7 +83,7 @@ internal sealed class CustomersTab : UserControl, IRefreshable
                 c.Mobile ?? string.Empty,
                 c.Phone ?? string.Empty,
                 c.City ?? string.Empty,
-                CustomerRules.MaskCardNumber(c.CardNumber) ?? string.Empty,
+                CustomerRules.MaskCardNumbers(c.CardNumber1, c.CardNumber2) ?? string.Empty,
                 PersianDate.FormatDateTime(c.UpdatedAt),
             });
             UiHelpers.Fill(_grid, Headers, rows);

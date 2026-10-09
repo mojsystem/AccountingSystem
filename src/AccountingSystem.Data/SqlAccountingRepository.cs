@@ -1576,7 +1576,7 @@ WHERE BranchId = @branchId AND CurrencyCode = @code AND TotalCostIrr = @expected
 
     /// <summary>ستون‌های مشتری به همان ترتیبی که ReadCustomer می‌خواند. CustomerCode محاسباتی است و هرگز نوشته نمی‌شود.</summary>
     private const string CustomerColumns =
-        "Id, CustomerCode, FullName, NationalCode, Phone, Mobile, Address, City, AccountNumber, CardNumber, Note, UpdatedAt";
+        "Id, CustomerCode, FullName, NationalCode, Phone, Mobile, Address, City, Sheba1, Sheba2, CardNumber1, CardNumber2, Note, UpdatedAt";
 
     public async Task<IReadOnlyList<CustomerInfo>> GetCustomersAsync(string search, int take, CancellationToken ct = default)
     {
@@ -1584,7 +1584,8 @@ WHERE BranchId = @branchId AND CurrencyCode = @code AND TotalCostIrr = @expected
 SELECT TOP (@take) {CustomerColumns}
 FROM dbo.Customers
 WHERE FullName LIKE @pattern OR CustomerCode LIKE @pattern OR NationalCode LIKE @pattern
-   OR Phone LIKE @pattern OR Mobile LIKE @pattern OR CardNumber LIKE @pattern OR AccountNumber LIKE @pattern
+   OR Phone LIKE @pattern OR Mobile LIKE @pattern OR Sheba1 LIKE @pattern OR Sheba2 LIKE @pattern
+   OR CardNumber1 LIKE @pattern OR CardNumber2 LIKE @pattern
 ORDER BY FullName, Id;";
         var result = new List<CustomerInfo>();
         await using var conn = await OpenAsync(ct);
@@ -1616,10 +1617,10 @@ ORDER BY FullName, Id;";
             return await WithTransactionAsync(async (conn, tx) =>
             {
                 const string sql = @"
-INSERT INTO dbo.Customers (FullName, NationalCode, Phone, Mobile, Address, City, AccountNumber, CardNumber, Note,
+INSERT INTO dbo.Customers (FullName, NationalCode, Phone, Mobile, Address, City, Sheba1, Sheba2, CardNumber1, CardNumber2, Note,
                            CreatedBy, CreatedAt, UpdatedBy, UpdatedAt)
 OUTPUT INSERTED.Id
-VALUES (@name, @nationalCode, @phone, @mobile, @address, @city, @account, @card, @note,
+VALUES (@name, @nationalCode, @phone, @mobile, @address, @city, @sheba1, @sheba2, @card1, @card2, @note,
         @userId, @now, @userId, @now);";
                 await using var cmd = new SqlCommand(sql, conn, tx);
                 AddCustomerParameters(cmd, input);
@@ -1646,7 +1647,7 @@ VALUES (@name, @nationalCode, @phone, @mobile, @address, @city, @account, @card,
                 const string sql = @"
 UPDATE dbo.Customers
 SET FullName = @name, NationalCode = @nationalCode, Phone = @phone, Mobile = @mobile, Address = @address,
-    City = @city, AccountNumber = @account, CardNumber = @card, Note = @note,
+    City = @city, Sheba1 = @sheba1, Sheba2 = @sheba2, CardNumber1 = @card1, CardNumber2 = @card2, Note = @note,
     UpdatedBy = @userId, UpdatedAt = @now
 WHERE Id = @id;";
                 await using var cmd = new SqlCommand(sql, conn, tx);
@@ -1677,8 +1678,10 @@ WHERE Id = @id;";
         cmd.Parameters.Add(new SqlParameter("@mobile", (object?)input.Mobile ?? DBNull.Value));
         cmd.Parameters.Add(new SqlParameter("@address", (object?)input.Address ?? DBNull.Value));
         cmd.Parameters.Add(new SqlParameter("@city", (object?)input.City ?? DBNull.Value));
-        cmd.Parameters.Add(new SqlParameter("@account", (object?)input.AccountNumber ?? DBNull.Value));
-        cmd.Parameters.Add(new SqlParameter("@card", (object?)input.CardNumber ?? DBNull.Value));
+        cmd.Parameters.Add(new SqlParameter("@sheba1", (object?)input.Sheba1 ?? DBNull.Value));
+        cmd.Parameters.Add(new SqlParameter("@sheba2", (object?)input.Sheba2 ?? DBNull.Value));
+        cmd.Parameters.Add(new SqlParameter("@card1", (object?)input.CardNumber1 ?? DBNull.Value));
+        cmd.Parameters.Add(new SqlParameter("@card2", (object?)input.CardNumber2 ?? DBNull.Value));
         cmd.Parameters.Add(new SqlParameter("@note", (object?)input.Note ?? DBNull.Value));
     }
 
@@ -1694,7 +1697,9 @@ WHERE Id = @id;";
         ReadNullableString(reader, 8),
         ReadNullableString(reader, 9),
         ReadNullableString(reader, 10),
-        reader.GetDateTime(11));
+        ReadNullableString(reader, 11),
+        ReadNullableString(reader, 12),
+        reader.GetDateTime(13));
 
     private async Task<T> WithTransactionAsync<T>(Func<SqlConnection, SqlTransaction, Task<T>> work, CancellationToken ct)
     {

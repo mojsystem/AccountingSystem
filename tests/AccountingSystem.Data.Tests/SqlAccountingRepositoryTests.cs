@@ -942,22 +942,30 @@ public class SqlAccountingRepositoryTests : IClassFixture<SqlServerFixture>, IAs
         var now = DateTime.Now;
         var id = await customers.CreateAsync(user, new CustomerInput(
             "رضا نوری", null, "۰۲۱ ۱۲۳۴۵۶۷۸", "تهران، خیابان ولیعصر", "یادداشت",
-            "۰۹۱۲-۳۴۵-۶۷۸۹", "تهران", "ir12 3456 7890 1234 5678 9012 34", "6037-9975-1234-5678"), now);
+            "۰۹۱۲-۳۴۵-۶۷۸۹", "تهران",
+            "ir12 3456 7890 1234 5678 9012 34", "IR 1111 2222 3333 4444 5555 6666",
+            "6037-9975-1234-5678", "5892 1012 3456 7890"), now);
 
         var stored = await repo.GetCustomerAsync(id);
         Assert.Equal("02112345678", stored!.Phone);
         Assert.Equal("09123456789", stored.Mobile);
         Assert.Equal("تهران", stored.City);
-        Assert.Equal("IR123456789012345678901234", stored.AccountNumber);
-        Assert.Equal("6037997512345678", stored.CardNumber);
+        Assert.Equal("IR123456789012345678901234", stored.Sheba1);
+        Assert.Equal("IR111122223333444455556666", stored.Sheba2);
+        Assert.Equal("6037997512345678", stored.CardNumber1);
+        Assert.Equal("5892101234567890", stored.CardNumber2);
 
         var byMobile = await customers.SearchAsync(user, "۰۹۱۲۳۴۵۶۷۸۹");
         Assert.Contains(byMobile, c => c.Id == id);
         var byCode = await customers.SearchAsync(user, stored.CustomerCode);
         Assert.Contains(byCode, c => c.Id == id);
+        var byCard = await customers.SearchAsync(user, "5892101234567890");
+        Assert.Contains(byCard, c => c.Id == id);
+        var bySheba = await customers.SearchAsync(user, "1111222233334444");
+        Assert.Contains(bySheba, c => c.Id == id);
 
         await Assert.ThrowsAsync<BusinessRuleException>(() =>
-            customers.CreateAsync(user, new CustomerInput("رضا نوری", null, null, null, null, null, null, null, "1234"), now));
+            customers.CreateAsync(user, new CustomerInput("رضا نوری", CardNumber1: "1234"), now));
     }
 
     private static async Task AssertLedgerConsistentAsync(string connectionString, int branchId, string currencyCode)

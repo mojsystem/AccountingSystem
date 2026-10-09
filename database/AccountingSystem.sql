@@ -84,8 +84,10 @@ CREATE TABLE dbo.Customers
     Mobile        NVARCHAR(20)  NULL,
     Address       NVARCHAR(250) NULL,
     City          NVARCHAR(60)  NULL,
-    AccountNumber NVARCHAR(34)  NULL,
-    CardNumber    NVARCHAR(16)  NULL,
+    Sheba1        NVARCHAR(26)  NULL,
+    Sheba2        NVARCHAR(26)  NULL,
+    CardNumber1   NVARCHAR(16)  NULL,
+    CardNumber2   NVARCHAR(16)  NULL,
     Note          NVARCHAR(250) NULL,
     CreatedBy     INT           NOT NULL,
     CreatedAt     DATETIME2(0)  NOT NULL,
@@ -96,7 +98,10 @@ CREATE TABLE dbo.Customers
     CONSTRAINT FK_Customers_CreatedBy FOREIGN KEY (CreatedBy) REFERENCES dbo.Users (Id),
     CONSTRAINT FK_Customers_UpdatedBy FOREIGN KEY (UpdatedBy) REFERENCES dbo.Users (Id),
     CONSTRAINT CK_Customers_FullName CHECK (LEN(LTRIM(RTRIM(FullName))) >= 2),
-    CONSTRAINT CK_Customers_CardNumber CHECK (CardNumber IS NULL OR (LEN(CardNumber) = 16 AND CardNumber NOT LIKE '%[^0-9]%'))
+    CONSTRAINT CK_Customers_Sheba1 CHECK (Sheba1 IS NULL OR (LEN(Sheba1) = 26 AND LEFT(Sheba1, 2) = 'IR' AND SUBSTRING(Sheba1, 3, 24) NOT LIKE '%[^0-9]%')),
+    CONSTRAINT CK_Customers_Sheba2 CHECK (Sheba2 IS NULL OR (LEN(Sheba2) = 26 AND LEFT(Sheba2, 2) = 'IR' AND SUBSTRING(Sheba2, 3, 24) NOT LIKE '%[^0-9]%')),
+    CONSTRAINT CK_Customers_CardNumber1 CHECK (CardNumber1 IS NULL OR (LEN(CardNumber1) = 16 AND CardNumber1 NOT LIKE '%[^0-9]%')),
+    CONSTRAINT CK_Customers_CardNumber2 CHECK (CardNumber2 IS NULL OR (LEN(CardNumber2) = 16 AND CardNumber2 NOT LIKE '%[^0-9]%'))
 );
 CREATE UNIQUE INDEX UX_Customers_NationalCode ON dbo.Customers (NationalCode) WHERE NationalCode IS NOT NULL;
 GO

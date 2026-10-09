@@ -20,9 +20,8 @@ public static class CustomerRules
 
     public const int MaxTextLength = 250;
 
-    public const int MinAccountNumberLength = 5;
-
-    public const int MaxAccountNumberLength = 34;
+    /// <summary>شبا: «IR» و ۲۴ رقم، یعنی ۲۶ نویسه.</summary>
+    public const int ShebaLength = 26;
 
     public const int CardNumberLength = 16;
 
@@ -54,6 +53,13 @@ public static class CustomerRules
             }
         }
 
+        var sheba1 = Sheba(input.Sheba1, "شبا ۱");
+        var sheba2 = Sheba(input.Sheba2, "شبا ۲");
+        RejectSameValue(sheba1, sheba2, "شماره‌ی شبا ۱ و ۲ نمی‌تواند یکسان باشد.");
+        var card1 = CardNumber(input.CardNumber1, "شماره‌ی کارت ۱");
+        var card2 = CardNumber(input.CardNumber2, "شماره‌ی کارت ۲");
+        RejectSameValue(card1, card2, "شماره‌ی کارت ۱ و ۲ نمی‌تواند یکسان باشد.");
+
         return new CustomerInput(
             name,
             nationalCode,
@@ -62,8 +68,10 @@ public static class CustomerRules
             Optional(input.Note, "یادداشت", MaxTextLength),
             PhoneNumber(input.Mobile, "شماره‌ی موبایل", minDigits: 10),
             Optional(input.City, "شهر", MaxCityLength),
-            AccountNumber(input.AccountNumber),
-            CardNumber(input.CardNumber));
+            sheba1,
+            sheba2,
+            card1,
+            card2);
     }
 
     /// <summary>متن جست‌وجو را مثل ذخیره‌ها تمیز می‌کند (ارقام فارسی لاتین می‌شوند).</summary>
@@ -76,6 +84,17 @@ public static class CustomerRules
         string.IsNullOrEmpty(cardNumber) || cardNumber.Length < 4
             ? null
             : "•••• •••• •••• " + cardNumber[^4..];
+
+    /// <summary>
+    /// دو کارت یک مشتری برای فهرست: هر کدام با چهار رقم آخر و جدا با «/». اگر کارتی ثبت نشده باشد null است.
+    /// </summary>
+    public static string? MaskCardNumbers(string? first, string? second)
+    {
+        var parts = new[] { MaskCardNumber(first), MaskCardNumber(second) }
+            .Where(part => !string.IsNullOrEmpty(part))
+            .ToArray();
+        return parts.Length == 0 ? null : string.Join(" / ", parts);
+    }
 
     /// <summary>
     /// تلفن یا موبایل: عدد، فاصله، خط تیره و پرانتز پذیرفته می‌شود و در ذخیره فقط رقم‌ها (و + اول، برای کد کشور) می‌ماند.
@@ -116,8 +135,11 @@ public static class CustomerRules
         return builder.ToString();
     }
 
-    /// <summary>شماره حساب یا شبا: حروف لاتین و عدد، بدون فاصله، با حروف بزرگ.</summary>
-    private static string? AccountNumber(string? value)
+    /// <summary>
+    /// شبا: «IR» و ۲۴ رقم. فاصله، خط تیره و حروف کوچک پذیرفته می‌شوند و در ذخیره یکدست می‌شوند.
+    /// اگر فقط ۲۴ رقم وارد شود، IR به ابتدای آن اضافه می‌شود.
+    /// </summary>
+    private static string? Sheba(string? value, string label)
     {
         var normalized = NormalizeDigits(value);
         if (string.IsNullOrEmpty(normalized))
@@ -126,20 +148,21 @@ public static class CustomerRules
         }
 
         var compact = RemoveSeparators(normalized).ToUpperInvariant();
-        if (compact.Length < MinAccountNumberLength || compact.Length > MaxAccountNumberLength)
+        if (compact.Length == ShebaLength - 2 && compact.All(char.IsAsciiDigit))
         {
-            throw new BusinessRuleException(
-                $"شماره حساب باید بین {MinAccountNumberLength} تا {MaxAccountNumberLength} نویسه باشد (شماره‌ی شبا با IR شروع می‌شود).");
+            compact = "IR" + compact;
         }
-        if (!compact.All(char.IsAsciiLetterOrDigit))
+        if (compact.Length != ShebaLength
+            || !compact.StartsWith("IR", StringComparison.Ordinal)
+            || !compact[2..].All(char.IsAsciiDigit))
         {
-            throw new BusinessRuleException("شماره حساب فقط می‌تواند شامل حروف لاتین و عدد باشد.");
+            throw new BusinessRuleException($"{label} باید با IR شروع شود و ۲۴ رقم بعد از آن داشته باشد (فاصله مجاز است).");
         }
         return compact;
     }
 
-    /// <summary>شماره کارت: دقیقاً ۱۶ رقم؛ فاصله و خط تیره پذیرفته می‌شوند و در ذخیره حذف می‌شوند.</summary>
-    private static string? CardNumber(string? value)
+    /// <summary>شماره‌ی کارت: دقیقاً ۱۶ رقم؛ فاصله و خط تیره پذیرفته می‌شوند و در ذخیره حذف می‌شوند.</summary>
+    private static string? CardNumber(string? value, string label)
     {
         var normalized = NormalizeDigits(value);
         if (string.IsNullOrEmpty(normalized))
@@ -150,9 +173,17 @@ public static class CustomerRules
         var compact = RemoveSeparators(normalized);
         if (compact.Length != CardNumberLength || !compact.All(char.IsAsciiDigit))
         {
-            throw new BusinessRuleException($"شماره کارت باید {CardNumberLength} رقم باشد (فاصله و خط تیره مجازند).");
+            throw new BusinessRuleException($"{label} باید {CardNumberLength} رقم باشد (فاصله و خط تیره مجازند).");
         }
         return compact;
+    }
+
+    private static void RejectSameValue(string? first, string? second, string message)
+    {
+        if (first is not null && first == second)
+        {
+            throw new BusinessRuleException(message);
+        }
     }
 
     private static string RemoveSeparators(string value) =>
