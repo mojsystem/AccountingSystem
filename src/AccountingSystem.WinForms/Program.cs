@@ -48,7 +48,7 @@ internal static class Program
                 return;
             }
 
-            Application.Run(new MainForm(services, login.SignedInUser));
+            Application.Run(new MainForm(services, login.SignedInUser, upgrade.Version));
         }
         catch (Exception ex)
         {

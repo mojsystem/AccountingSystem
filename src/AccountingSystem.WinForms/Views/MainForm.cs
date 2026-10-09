@@ -6,16 +6,33 @@ namespace AccountingSystem.WinForms.Views;
 internal sealed class MainForm : Form
 {
     private readonly TabControl _tabs = new() { Dock = DockStyle.Fill };
+    private readonly StatusStrip _statusBar = new() { SizingGrip = false };
+    private readonly ToolStripStatusLabel _userStatus = new();
+    private readonly ToolStripStatusLabel _branchStatus = new();
+    private readonly ToolStripStatusLabel _schemaStatus = new();
     private readonly List<IRefreshable> _refreshers = new();
 
-    public MainForm(AppServices services, CurrentUser user)
+    public MainForm(AppServices services, CurrentUser user, int schemaVersion)
     {
-        var branchText = string.IsNullOrEmpty(user.BranchName) ? string.Empty : " - شعبه: " + user.BranchName;
-        Text = $"سیستم حسابداری صرافی - {user.FullName} ({RoleText(user.Role)}){branchText}";
+        Text = $"سیستم حسابداری صرافی - {user.FullName} ({RoleText(user.Role)})";
         ClientSize = new Size(1200, 760);
         MinimumSize = new Size(960, 600);
         StartPosition = FormStartPosition.CenterScreen;
-        Font = new Font("Tahoma", 9f);
+        Font = Theme.BodyFont;
+
+        // نوار وضعیت: کاربر، شعبه و نسخه‌ی پایگاه داده همیشه دیده شوند.
+        _userStatus.Text = $"کاربر: {user.FullName} · {RoleText(user.Role)}";
+        _branchStatus.Text = string.IsNullOrEmpty(user.BranchName) ? "دسترسی: همه‌ی شعبه‌ها" : "شعبه‌ی اصلی: " + user.BranchName;
+        _schemaStatus.Text = $"نسخه‌ی پایگاه داده: {schemaVersion}";
+        _schemaStatus.Alignment = ToolStripItemAlignment.Right;
+        _statusBar.Items.AddRange(new ToolStripItem[]
+        {
+            _userStatus,
+            new ToolStripSeparator(),
+            _branchStatus,
+            _schemaStatus,
+        });
+        Controls.Add(_statusBar);
 
         AddTab("داشبورد", new DashboardTab(services, user));
         AddTab("خرید و فروش ارز", new TradeTab(services, user));
@@ -32,6 +49,7 @@ internal sealed class MainForm : Form
             AddTab("پشتیبان و بازیابی", new BackupTab(services, user));
         }
 
+        // کنترل پرشونده باید آخر اضافه شود تا نوار وضعیت پایین پنجره جا باشد.
         Controls.Add(_tabs);
         _tabs.SelectedIndexChanged += async (_, _) => await RefreshSelectedAsync();
         Shown += async (_, _) => await RefreshSelectedAsync();
@@ -40,7 +58,7 @@ internal sealed class MainForm : Form
 
     private void AddTab(string title, UserControl tab)
     {
-        var page = new TabPage(title);
+        var page = new TabPage(title) { Padding = new Padding(8) };
         tab.Dock = DockStyle.Fill;
         page.Controls.Add(tab);
         _tabs.TabPages.Add(page);

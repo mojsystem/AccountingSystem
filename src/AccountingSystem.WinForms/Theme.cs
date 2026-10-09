@@ -54,7 +54,8 @@ internal static class Theme
         grid.DefaultCellStyle.SelectionForeColor = Text;
         grid.DefaultCellStyle.Padding = new Padding(6, 2, 6, 2);
         grid.AlternatingRowsDefaultCellStyle.BackColor = Color.FromArgb(249, 250, 251);
-        grid.RowTemplate.Height = 28;
+        grid.RowTemplate.Height = 30;
+        grid.RowHeadersVisible = false;
     }
 
     private static void ApplyToChildren(Control parent)
@@ -88,7 +89,8 @@ internal static class Theme
 
         button.FlatStyle = FlatStyle.Flat;
         button.Cursor = Cursors.Hand;
-        button.Padding = new Padding(10, 2, 10, 2);
+        button.Padding = new Padding(12, 3, 12, 3);
+        button.MinimumSize = new Size(0, 30);
         button.BackColor = primary ? Primary : Surface;
         button.ForeColor = primary ? Color.White : danger ? Danger : Text;
         button.FlatAppearance.BorderColor = primary ? Primary : Border;
