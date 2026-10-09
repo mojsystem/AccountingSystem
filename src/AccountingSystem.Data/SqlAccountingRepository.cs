@@ -1232,7 +1232,7 @@ WHERE e.BranchId = @branchId AND e.OccurredAt <= @asOf
       FROM TradeLineage lineage
       WHERE e.SourceId = lineage.Id AND e.SourceType IN (N'TRADE', N'ADJUST', N'VOID')
   )
-OPTION (MAXRECURSION 32767);
+OPTION (MAXRECURSION 32767);";
         await using var conn = await OpenAsync(ct);
         await using var cmd = new SqlCommand(sql, conn);
         cmd.Parameters.Add(new SqlParameter("@branchId", branchId));
