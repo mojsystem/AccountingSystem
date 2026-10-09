@@ -100,6 +100,8 @@ ELSE
 GO
 
 ALTER TABLE dbo.JournalLines ADD CustomerId INT NULL;
+GO
+
 ALTER TABLE dbo.JournalLines ADD CONSTRAINT FK_JournalLines_Customers FOREIGN KEY (CustomerId) REFERENCES dbo.Customers (Id);
 ALTER TABLE dbo.JournalLines ADD CONSTRAINT CK_JournalLines_CustomerAccount
     CHECK (CustomerId IS NULL OR AccountCode IN (N'1201', N'2101'));

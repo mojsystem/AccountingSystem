@@ -168,8 +168,9 @@ public class SqlAccountingRepositoryTests : IClassFixture<SqlServerFixture>, IAs
         Assert.NotNull(derived);
         Assert.Equal(TradeRateMode.Derived, derived!.RateMode);
         Assert.Equal(1.81818182m, derived.CrossRate);
-        Assert.Equal(10m, Assert.Single(derived.Settlements!).Amount);
-        Assert.Equal(5_500_000m, derived.Settlements[0].IrrAmount);
+        var derivedLine = Assert.Single(derived.Settlements!);
+        Assert.Equal(10m, derivedLine.Amount);
+        Assert.Equal(5_500_000m, derivedLine.IrrAmount);
 
         var splitId = await trades.SellToCustomerAsync(new TradeInput(
             branchId, tradedCode, 5m, 1_200_000m, null, null, null,
@@ -181,11 +182,13 @@ public class SqlAccountingRepositoryTests : IClassFixture<SqlServerFixture>, IAs
                 new TradeSettlementInput(CurrencyCodes.Irr, 3_500_000m),
             }), user, now);
         var split = await repo.GetTradeAsync(splitId);
-        Assert.Equal(2, split!.Settlements!.Count);
-        Assert.Equal(TradeSettlementDirection.Receipt, split.Settlements[0].Direction);
-        Assert.Equal(2_500_000m, split.Settlements[0].IrrAmount);
-        Assert.Equal(TradeSettlementDirection.Receipt, split.Settlements[1].Direction);
-        Assert.Equal(3_500_000m, split.Settlements[1].IrrAmount);
+        Assert.NotNull(split);
+        var splitLines = split!.Settlements!;
+        Assert.Equal(2, splitLines.Count);
+        Assert.Equal(TradeSettlementDirection.Receipt, splitLines[0].Direction);
+        Assert.Equal(2_500_000m, splitLines[0].IrrAmount);
+        Assert.Equal(TradeSettlementDirection.Receipt, splitLines[1].Direction);
+        Assert.Equal(3_500_000m, splitLines[1].IrrAmount);
 
         var accountSaleId = await trades.SellToCustomerAsync(new TradeInput(
             branchId, tradedCode, 1m, 1_200_000m, null, null, null,
@@ -228,7 +231,7 @@ WHERE e.SourceType = N'TRADE' AND e.SourceId = @tradeId AND l.CustomerId = @cust
         Assert.Equal(0m, afterVoid.PayableIrr);
 
         var balanceRows = await reports.GetCustomerBalancesAsync(user, branchId, now.AddDays(1));
-        var customerBalance = Assert.Single(balanceRows.Where(row => row.CustomerId == _customerId));
+        var customerBalance = Assert.Single(balanceRows, row => row.CustomerId == _customerId);
         Assert.Equal(1_200_000m, customerBalance.BalanceIrr);
         Assert.Equal(1_200_000m, customerBalance.DebitBalanceIrr);
         Assert.Equal(0m, customerBalance.CreditBalanceIrr);

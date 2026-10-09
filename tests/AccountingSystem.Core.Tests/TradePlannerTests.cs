@@ -52,8 +52,9 @@ public class TradePlannerTests
         Assert.Equal(8_000_000m, posting.Trade.ProfitIrr);
         Assert.Equal(60_000_000m, posting.Inventory.Single().NewCostIrr);
         Assert.Equal(8_000_000m, posting.Journals[0].Lines.Single(l => l.AccountCode == AccountCodes.FxProfit).Credit);
-        Assert.Equal(48_000_000m, posting.Journals[0].Lines.Sum(l => l.Debit));
-        Assert.Equal(48_000_000m, posting.Journals[0].Lines.Sum(l => l.Credit));
+        // معین مشتری در همان سند به‌صورت بدهکار و بستانکار تسویه می‌شود؛ گردش ناخالص سند دوبرابر ارزش معامله است.
+        Assert.Equal(96_000_000m, posting.Journals[0].Lines.Sum(l => l.Debit));
+        Assert.Equal(96_000_000m, posting.Journals[0].Lines.Sum(l => l.Credit));
     }
 
     [Fact]
@@ -119,8 +120,8 @@ public class TradePlannerTests
         Assert.Equal(50_000m, posting.Trade.FeeIrr);
         Assert.Equal(48_050_000m, posting.CashMovements.Single(m => m.CurrencyCode == "IRR").Delta);
         Assert.Equal(50_000m, posting.Journals[0].Lines.Single(l => l.AccountCode == AccountCodes.FeeIncome).Credit);
-        Assert.Equal(48_050_000m, posting.Journals[0].Lines.Sum(l => l.Debit));
-        Assert.Equal(48_050_000m, posting.Journals[0].Lines.Sum(l => l.Credit));
+        Assert.Equal(96_100_000m, posting.Journals[0].Lines.Sum(l => l.Debit));
+        Assert.Equal(96_100_000m, posting.Journals[0].Lines.Sum(l => l.Credit));
     }
 
     [Fact]
