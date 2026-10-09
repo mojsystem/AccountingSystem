@@ -47,7 +47,7 @@ jobs:
         run: python .github/scripts/report-trx.py TestResults-core
 
   sql-integration:
-    name: SQL integration tests (SQL Server 2019 engine, compatibility level 130)
+    name: SQL integration tests (SQL Server 2019 engine, compatibility level 150)
     runs-on: ubuntu-latest
     services:
       sqlserver:

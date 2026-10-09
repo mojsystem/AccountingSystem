@@ -1,6 +1,6 @@
 /*
     AccountingSystem - اسکریپت ایجاد پایگاه داده (نسخه‌ی چند شعبه، کارمزد و ابطال معامله)
-    برای SQL Server 2019 (سطح سازگاری 130، همان تنظیم تست‌شده در CI)
+    برای SQL Server 2019 (سطح سازگاری 150)
 
     اجرا (فقط روی یک پایگاه داده‌ی جدید؛ پایگاه داده‌ی نسخه‌ی قبلی با این اسکریپت ارتقا نمی‌یابد):
       - در SSMS با کاربری که دسترسی sysadmin دارد باز و Execute کنید، یا
@@ -13,7 +13,7 @@ IF DB_ID(N'AccountingSystem') IS NULL
     CREATE DATABASE [AccountingSystem];
 GO
 
-ALTER DATABASE [AccountingSystem] SET COMPATIBILITY_LEVEL = 130;
+ALTER DATABASE [AccountingSystem] SET COMPATIBILITY_LEVEL = 150;
 GO
 
 USE [AccountingSystem];

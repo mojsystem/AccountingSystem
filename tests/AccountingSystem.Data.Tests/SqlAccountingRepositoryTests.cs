@@ -4,6 +4,7 @@ using AccountingSystem.Core.Common;
 using AccountingSystem.Core.Domain;
 using AccountingSystem.Core.Export;
 using AccountingSystem.Core.Services;
+using Microsoft.Data.SqlClient;
 using Xunit;
 
 namespace AccountingSystem.Data.Tests;
@@ -358,6 +359,21 @@ public class SqlAccountingRepositoryTests : IClassFixture<SqlServerFixture>
         Assert.True(bytes.Length > 100);
         Assert.Equal((byte)'P', bytes[0]);
         Assert.Equal((byte)'K', bytes[1]);
+    }
+
+    [Fact]
+    public async Task Database_uses_compatibility_level_150()
+    {
+        if (!_fixture.IsEnabled)
+        {
+            return;
+        }
+
+        await using var conn = new SqlConnection(_fixture.ConnectionString!);
+        await conn.OpenAsync();
+        await using var cmd = new SqlCommand("SELECT compatibility_level FROM sys.databases WHERE database_id = DB_ID();", conn);
+        var level = Convert.ToInt32(await cmd.ExecuteScalarAsync());
+        Assert.Equal(150, level);
     }
 
     private static async Task<CurrentUser> EnsureAdminAsync(IAccountingRepository repo, DateTime now)
