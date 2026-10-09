@@ -5,14 +5,19 @@ using AccountingSystem.Core.Domain;
 namespace AccountingSystem.WinForms.Tabs;
 
 /// <summary>
-/// فرم ثبت یا ویرایش مشتری. اطلاعات پیش از بسته شدن فرم اعتبارسنجی می‌شود تا ورودی کاربر از بین نرود.
+/// فرم ثبت یا ویرایش مشتری. کد مشتری را سیستم می‌سازد و فقط نمایش داده می‌شود.
+/// اطلاعات پیش از بسته شدن فرم اعتبارسنجی می‌شود تا ورودی کاربر از بین نرود.
 /// </summary>
 internal sealed class CustomerDialog : Form
 {
     private readonly TextBox _name = new() { Width = 340, MaxLength = 100 };
     private readonly TextBox _nationalCode = new() { Width = 340, MaxLength = 20 };
+    private readonly TextBox _mobile = new() { Width = 340, MaxLength = 20 };
     private readonly TextBox _phone = new() { Width = 340, MaxLength = 20 };
+    private readonly TextBox _city = new() { Width = 340, MaxLength = 60 };
     private readonly TextBox _address = new() { Width = 340, MaxLength = 250 };
+    private readonly TextBox _account = new() { Width = 340, MaxLength = 40 };
+    private readonly TextBox _card = new() { Width = 340, MaxLength = 19 };
     private readonly TextBox _note = new() { Width = 340, MaxLength = 250 };
 
     public CustomerDialog(CustomerInfo? existing = null)
@@ -30,10 +35,24 @@ internal sealed class CustomerDialog : Form
         {
             _name.Text = existing.FullName;
             _nationalCode.Text = existing.NationalCode ?? string.Empty;
+            _mobile.Text = existing.Mobile ?? string.Empty;
             _phone.Text = existing.Phone ?? string.Empty;
+            _city.Text = existing.City ?? string.Empty;
             _address.Text = existing.Address ?? string.Empty;
+            _account.Text = existing.AccountNumber ?? string.Empty;
+            _card.Text = existing.CardNumber ?? string.Empty;
             _note.Text = existing.Note ?? string.Empty;
         }
+
+        var code = new Label
+        {
+            AutoSize = true,
+            Font = Theme.BoldFont,
+            Text = existing is null
+                ? "کد مشتری: پس از ثبت، به‌صورت خودکار ساخته می‌شود"
+                : $"کد مشتری: {existing.CustomerCode}  (غیرقابل تغییر)",
+            ForeColor = existing is null ? Theme.MutedText : Theme.Text,
+        };
 
         var fields = new FlowLayoutPanel
         {
@@ -43,12 +62,17 @@ internal sealed class CustomerDialog : Form
             WrapContents = false,
             Padding = new Padding(16, 12, 16, 4),
         };
+        fields.Controls.Add(code);
         fields.Controls.AddRange(new Control[]
         {
             UiHelpers.MakeLabel("نام و نام خانوادگی:"), _name,
-            UiHelpers.MakeLabel("کد ملی یا شناسه (اختیاری):"), _nationalCode,
-            UiHelpers.MakeLabel("تلفن:"), _phone,
+            UiHelpers.MakeLabel("کد ملی یا شناسه (اختیاری، یکتا):"), _nationalCode,
+            UiHelpers.MakeLabel("شماره‌ی موبایل:"), _mobile,
+            UiHelpers.MakeLabel("تلفن ثابت:"), _phone,
+            UiHelpers.MakeLabel("شهر:"), _city,
             UiHelpers.MakeLabel("نشانی:"), _address,
+            UiHelpers.MakeLabel("شماره حساب یا شبا:"), _account,
+            UiHelpers.MakeLabel("شماره کارت (۱۶ رقم):"), _card,
             UiHelpers.MakeLabel("یادداشت:"), _note,
         });
 
@@ -77,7 +101,16 @@ internal sealed class CustomerDialog : Form
     {
         try
         {
-            Result = CustomerRules.Clean(new CustomerInput(_name.Text, _nationalCode.Text, _phone.Text, _address.Text, _note.Text));
+            Result = CustomerRules.Clean(new CustomerInput(
+                _name.Text,
+                _nationalCode.Text,
+                _phone.Text,
+                _address.Text,
+                _note.Text,
+                _mobile.Text,
+                _city.Text,
+                _account.Text,
+                _card.Text));
             DialogResult = DialogResult.OK;
         }
         catch (BusinessRuleException ex)

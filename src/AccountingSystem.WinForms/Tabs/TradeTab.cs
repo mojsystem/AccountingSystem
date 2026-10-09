@@ -458,7 +458,7 @@ internal sealed class TradeTab : UserControl, IRefreshable
     }
 
     private static string CustomerLabel(CustomerInfo customer) =>
-        string.IsNullOrEmpty(customer.NationalCode) ? customer.FullName : $"{customer.FullName} · {customer.NationalCode}";
+        $"{customer.FullName} · {customer.CustomerCode}";
 
     private async Task SafeRefreshAsync()
     {

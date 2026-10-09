@@ -54,7 +54,7 @@
                 <option value="">— انتخاب مشتری —</option>
                 @foreach (var c in Model.Customers)
                 {
-                    <option value="@c.Id" selected="@(c.Id == Model.Input.CustomerId)">@c.FullName@(string.IsNullOrEmpty(c.NationalCode) ? "" : " · " + c.NationalCode)</option>
+                    <option value="@c.Id" selected="@(c.Id == Model.Input.CustomerId)">@c.FullName · @c.CustomerCode</option>
                 }
             </select>
             <a class="link small" asp-page="/Customers/Index">مشتری تازه</a>

@@ -1574,12 +1574,17 @@ WHERE BranchId = @branchId AND CurrencyCode = @code AND TotalCostIrr = @expected
         }
     }
 
+    /// <summary>ستون‌های مشتری به همان ترتیبی که ReadCustomer می‌خواند. CustomerCode محاسباتی است و هرگز نوشته نمی‌شود.</summary>
+    private const string CustomerColumns =
+        "Id, CustomerCode, FullName, NationalCode, Phone, Mobile, Address, City, AccountNumber, CardNumber, Note, UpdatedAt";
+
     public async Task<IReadOnlyList<CustomerInfo>> GetCustomersAsync(string search, int take, CancellationToken ct = default)
     {
-        const string sql = @"
-SELECT TOP (@take) Id, FullName, NationalCode, Phone, Address, Note, UpdatedAt
+        var sql = $@"
+SELECT TOP (@take) {CustomerColumns}
 FROM dbo.Customers
-WHERE FullName LIKE @pattern OR NationalCode LIKE @pattern OR Phone LIKE @pattern
+WHERE FullName LIKE @pattern OR CustomerCode LIKE @pattern OR NationalCode LIKE @pattern
+   OR Phone LIKE @pattern OR Mobile LIKE @pattern OR CardNumber LIKE @pattern OR AccountNumber LIKE @pattern
 ORDER BY FullName, Id;";
         var result = new List<CustomerInfo>();
         await using var conn = await OpenAsync(ct);
@@ -1596,10 +1601,7 @@ ORDER BY FullName, Id;";
 
     public async Task<CustomerInfo?> GetCustomerAsync(int id, CancellationToken ct = default)
     {
-        const string sql = @"
-SELECT Id, FullName, NationalCode, Phone, Address, Note, UpdatedAt
-FROM dbo.Customers
-WHERE Id = @id;";
+        var sql = $"SELECT {CustomerColumns} FROM dbo.Customers WHERE Id = @id;";
         await using var conn = await OpenAsync(ct);
         await using var cmd = new SqlCommand(sql, conn);
         cmd.Parameters.Add(new SqlParameter("@id", id));
@@ -1614,9 +1616,11 @@ WHERE Id = @id;";
             return await WithTransactionAsync(async (conn, tx) =>
             {
                 const string sql = @"
-INSERT INTO dbo.Customers (FullName, NationalCode, Phone, Address, Note, CreatedBy, CreatedAt, UpdatedBy, UpdatedAt)
+INSERT INTO dbo.Customers (FullName, NationalCode, Phone, Mobile, Address, City, AccountNumber, CardNumber, Note,
+                           CreatedBy, CreatedAt, UpdatedBy, UpdatedAt)
 OUTPUT INSERTED.Id
-VALUES (@name, @nationalCode, @phone, @address, @note, @userId, @now, @userId, @now);";
+VALUES (@name, @nationalCode, @phone, @mobile, @address, @city, @account, @card, @note,
+        @userId, @now, @userId, @now);";
                 await using var cmd = new SqlCommand(sql, conn, tx);
                 AddCustomerParameters(cmd, input);
                 cmd.Parameters.Add(new SqlParameter("@userId", actorId));
@@ -1641,7 +1645,8 @@ VALUES (@name, @nationalCode, @phone, @address, @note, @userId, @now, @userId, @
             {
                 const string sql = @"
 UPDATE dbo.Customers
-SET FullName = @name, NationalCode = @nationalCode, Phone = @phone, Address = @address, Note = @note,
+SET FullName = @name, NationalCode = @nationalCode, Phone = @phone, Mobile = @mobile, Address = @address,
+    City = @city, AccountNumber = @account, CardNumber = @card, Note = @note,
     UpdatedBy = @userId, UpdatedAt = @now
 WHERE Id = @id;";
                 await using var cmd = new SqlCommand(sql, conn, tx);
@@ -1669,18 +1674,27 @@ WHERE Id = @id;";
         cmd.Parameters.Add(new SqlParameter("@name", input.FullName ?? string.Empty));
         cmd.Parameters.Add(new SqlParameter("@nationalCode", (object?)input.NationalCode ?? DBNull.Value));
         cmd.Parameters.Add(new SqlParameter("@phone", (object?)input.Phone ?? DBNull.Value));
+        cmd.Parameters.Add(new SqlParameter("@mobile", (object?)input.Mobile ?? DBNull.Value));
         cmd.Parameters.Add(new SqlParameter("@address", (object?)input.Address ?? DBNull.Value));
+        cmd.Parameters.Add(new SqlParameter("@city", (object?)input.City ?? DBNull.Value));
+        cmd.Parameters.Add(new SqlParameter("@account", (object?)input.AccountNumber ?? DBNull.Value));
+        cmd.Parameters.Add(new SqlParameter("@card", (object?)input.CardNumber ?? DBNull.Value));
         cmd.Parameters.Add(new SqlParameter("@note", (object?)input.Note ?? DBNull.Value));
     }
 
     private static CustomerInfo ReadCustomer(SqlDataReader reader) => new(
         reader.GetInt32(0),
         reader.GetString(1),
-        ReadNullableString(reader, 2),
+        reader.GetString(2),
         ReadNullableString(reader, 3),
         ReadNullableString(reader, 4),
         ReadNullableString(reader, 5),
-        reader.GetDateTime(6));
+        ReadNullableString(reader, 6),
+        ReadNullableString(reader, 7),
+        ReadNullableString(reader, 8),
+        ReadNullableString(reader, 9),
+        ReadNullableString(reader, 10),
+        reader.GetDateTime(11));
 
     private async Task<T> WithTransactionAsync<T>(Func<SqlConnection, SqlTransaction, Task<T>> work, CancellationToken ct)
     {

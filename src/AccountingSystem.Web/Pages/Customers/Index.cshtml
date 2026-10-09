@@ -11,7 +11,7 @@
         <h1>مشتریان</h1>
         <p class="hint">
             فهرست مشترک همه‌ی شعبه‌ها. هر معامله باید به یک مشتری ثبت‌شده وصل باشد.
-            ثبت و ویرایش مشتری برای کسانی است که وظیفه‌ی «ثبت معامله» را دارند.
+            کد مشتری را سیستم می‌سازد و قابل تغییر نیست. ثبت و ویرایش برای کسانی است که وظیفه‌ی «ثبت معامله» را دارند.
         </p>
     </div>
 </div>
@@ -25,7 +25,7 @@
 <div class="split">
     <section class="panel">
         <form method="get" class="search-bar">
-            <input type="search" name="Search" value="@Model.Search" placeholder="جستجوی نام، کد ملی یا تلفن" aria-label="جستجوی مشتری" />
+            <input type="search" name="Search" value="@Model.Search" placeholder="نام، کد مشتری، کد ملی، موبایل، کارت یا حساب" aria-label="جستجوی مشتری" />
             <button type="submit" class="btn">جستجو</button>
             @if (!string.IsNullOrEmpty(Model.Search))
             {
@@ -38,9 +38,12 @@
             <table class="table">
                 <thead>
                     <tr>
+                        <th>کد مشتری</th>
                         <th>نام و نام خانوادگی</th>
                         <th>کد ملی / شناسه</th>
-                        <th>تلفن</th>
+                        <th>موبایل / تلفن</th>
+                        <th>شهر</th>
+                        <th>شماره کارت</th>
                         <th>آخرین به‌روزرسانی</th>
                         <th></th>
                     </tr>
@@ -49,9 +52,12 @@
                     @foreach (var c in Model.Customers)
                     {
                         <tr class="@(c.Id == current?.Id ? "selected" : null)">
+                            <td class="code">@c.CustomerCode</td>
                             <td>@c.FullName</td>
                             <td class="code">@c.NationalCode</td>
-                            <td class="code">@c.Phone</td>
+                            <td class="code">@(string.Join(" / ", new[] { c.Mobile, c.Phone }.Where(v => !string.IsNullOrEmpty(v))))</td>
+                            <td>@c.City</td>
+                            <td class="code">@CustomerRules.MaskCardNumber(c.CardNumber)</td>
                             <td>@PersianDate.FormatDateTime(c.UpdatedAt)</td>
                             <td class="row-actions">
                                 @if (Model.CanEdit)
@@ -63,7 +69,7 @@
                     }
                     @if (Model.Customers.Count == 0)
                     {
-                        <tr><td colspan="5" class="empty">مشتری‌ای پیدا نشد.</td></tr>
+                        <tr><td colspan="8" class="empty">مشتری‌ای پیدا نشد.</td></tr>
                     }
                 </tbody>
             </table>
@@ -79,6 +85,15 @@
         else
         {
             <h2>@(isNew ? "مشتری تازه" : "ویرایش «" + current!.FullName + "»")</h2>
+            @if (isNew)
+            {
+                <p class="hint">کد مشتری بعد از ثبت، به‌صورت خودکار ساخته می‌شود.</p>
+            }
+            else
+            {
+                <p class="hint">کد مشتری: <span class="code strong">@(current!.CustomerCode)</span> <span class="badge muted">غیرقابل تغییر</span></p>
+            }
+
             <form method="post" class="stack" asp-page-handler="Save">
                 <input type="hidden" name="Search" value="@Model.Search" />
                 @if (!isNew)
@@ -93,15 +108,33 @@
                 <label>
                     <span>کد ملی یا شناسه</span>
                     <input name="Form.NationalCode" value="@Model.Form.NationalCode" maxlength="20" dir="ltr" autocomplete="off" />
-                    <small class="hint">اختیاری؛ اگر وارد شود نباید برای مشتری دیگری ثبت شده باشد. ارقام فارسی خودکار لاتین می‌شوند.</small>
+                    <small class="hint">اختیاری؛ اگر وارد شود برای یک مشتری بیشتر ثبت نمی‌شود.</small>
                 </label>
                 <label>
-                    <span>تلفن</span>
+                    <span>شماره‌ی موبایل</span>
+                    <input name="Form.Mobile" value="@Model.Form.Mobile" maxlength="20" dir="ltr" autocomplete="off" placeholder="۰۹۱۲۳۴۵۶۷۸۹" />
+                </label>
+                <label>
+                    <span>تلفن ثابت</span>
                     <input name="Form.Phone" value="@Model.Form.Phone" maxlength="20" dir="ltr" autocomplete="off" />
+                </label>
+                <label>
+                    <span>شهر</span>
+                    <input name="Form.City" value="@Model.Form.City" maxlength="60" />
                 </label>
                 <label>
                     <span>نشانی</span>
                     <input name="Form.Address" value="@Model.Form.Address" maxlength="250" />
+                </label>
+                <label>
+                    <span>شماره حساب یا شبا</span>
+                    <input name="Form.AccountNumber" value="@Model.Form.AccountNumber" maxlength="40" dir="ltr" autocomplete="off" />
+                    <small class="hint">برای شبا با IR شروع کنید؛ فاصله مجاز است.</small>
+                </label>
+                <label>
+                    <span>شماره کارت</span>
+                    <input name="Form.CardNumber" value="@Model.Form.CardNumber" maxlength="19" dir="ltr" autocomplete="off" inputmode="numeric" />
+                    <small class="hint">۱۶ رقم؛ فاصله و خط تیره مجازند.</small>
                 </label>
                 <label>
                     <span>یادداشت</span>

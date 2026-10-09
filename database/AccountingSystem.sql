@@ -73,22 +73,30 @@ CREATE TABLE dbo.Users
 GO
 
 -- مشتریان صرافی: فهرست مشترک همه‌ی شعبه‌ها. هر معامله به یک مشتری وصل است و نام/کد ملی آن را نیز نگه می‌دارد.
+-- CustomerCode ستون محاسباتی پایدار است: سیستم آن را از شناسه‌ی داخلی می‌سازد و هیچ نوشتنی (حتی SQL مستقیم) آن را تغییر نمی‌دهد.
 CREATE TABLE dbo.Customers
 (
-    Id           INT           IDENTITY(1,1) NOT NULL,
-    FullName     NVARCHAR(100) NOT NULL,
-    NationalCode NVARCHAR(20)  NULL,
-    Phone        NVARCHAR(20)  NULL,
-    Address      NVARCHAR(250) NULL,
-    Note         NVARCHAR(250) NULL,
-    CreatedBy    INT           NOT NULL,
-    CreatedAt    DATETIME2(0)  NOT NULL,
-    UpdatedBy    INT           NOT NULL,
-    UpdatedAt    DATETIME2(0)  NOT NULL,
+    Id            INT           IDENTITY(1,1) NOT NULL,
+    CustomerCode  AS ('C' + RIGHT('0000000000' + CONVERT(VARCHAR(11), [Id]), 10)) PERSISTED NOT NULL,
+    FullName      NVARCHAR(100) NOT NULL,
+    NationalCode  NVARCHAR(20)  NULL,
+    Phone         NVARCHAR(20)  NULL,
+    Mobile        NVARCHAR(20)  NULL,
+    Address       NVARCHAR(250) NULL,
+    City          NVARCHAR(60)  NULL,
+    AccountNumber NVARCHAR(34)  NULL,
+    CardNumber    NVARCHAR(16)  NULL,
+    Note          NVARCHAR(250) NULL,
+    CreatedBy     INT           NOT NULL,
+    CreatedAt     DATETIME2(0)  NOT NULL,
+    UpdatedBy     INT           NOT NULL,
+    UpdatedAt     DATETIME2(0)  NOT NULL,
     CONSTRAINT PK_Customers PRIMARY KEY (Id),
+    CONSTRAINT UX_Customers_CustomerCode UNIQUE (CustomerCode),
     CONSTRAINT FK_Customers_CreatedBy FOREIGN KEY (CreatedBy) REFERENCES dbo.Users (Id),
     CONSTRAINT FK_Customers_UpdatedBy FOREIGN KEY (UpdatedBy) REFERENCES dbo.Users (Id),
-    CONSTRAINT CK_Customers_FullName CHECK (LEN(LTRIM(RTRIM(FullName))) >= 2)
+    CONSTRAINT CK_Customers_FullName CHECK (LEN(LTRIM(RTRIM(FullName))) >= 2),
+    CONSTRAINT CK_Customers_CardNumber CHECK (CardNumber IS NULL OR (LEN(CardNumber) = 16 AND CardNumber NOT LIKE '%[^0-9]%'))
 );
 CREATE UNIQUE INDEX UX_Customers_NationalCode ON dbo.Customers (NationalCode) WHERE NationalCode IS NOT NULL;
 GO

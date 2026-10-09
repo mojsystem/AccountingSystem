@@ -900,6 +900,66 @@ public class SqlAccountingRepositoryTests : IClassFixture<SqlServerFixture>, IAs
             customers.CreateAsync(user, new CustomerInput("کس دیگر", nationalCode, null, null, null), now));
     }
 
+    [Fact]
+    public async Task Customer_code_is_generated_by_the_system_and_cannot_be_changed_in_the_database()
+    {
+        if (!_fixture.IsEnabled)
+        {
+            return;
+        }
+
+        var repo = new SqlAccountingRepository(_fixture.ConnectionString!);
+        var user = await EnsureAdminAsync(repo, DateTime.Now);
+        var customers = new CustomerService(repo, new PermissionService(repo));
+        var now = DateTime.Now;
+        var id = await customers.CreateAsync(user, new CustomerInput("مریم کاظمی", null, null, null, null), now);
+
+        var created = await repo.GetCustomerAsync(id);
+        Assert.NotNull(created);
+        Assert.Equal("C" + id.ToString("D10", CultureInfo.InvariantCulture), created!.CustomerCode);
+
+        await customers.UpdateAsync(user, id, new CustomerInput("مریم کاظمی‌پور", null, null, null, null), now);
+        Assert.Equal(created.CustomerCode, (await repo.GetCustomerAsync(id))!.CustomerCode);
+
+        await using var conn = new SqlConnection(_fixture.ConnectionString);
+        await conn.OpenAsync();
+        await using var cmd = new SqlCommand("UPDATE dbo.Customers SET CustomerCode = N'C0000000000' WHERE Id = @id;", conn);
+        cmd.Parameters.AddWithValue("@id", id);
+        await Assert.ThrowsAsync<SqlException>(() => cmd.ExecuteNonQueryAsync());
+    }
+
+    [Fact]
+    public async Task Customer_extra_fields_are_stored_normalised_and_searchable()
+    {
+        if (!_fixture.IsEnabled)
+        {
+            return;
+        }
+
+        var repo = new SqlAccountingRepository(_fixture.ConnectionString!);
+        var user = await EnsureAdminAsync(repo, DateTime.Now);
+        var customers = new CustomerService(repo, new PermissionService(repo));
+        var now = DateTime.Now;
+        var id = await customers.CreateAsync(user, new CustomerInput(
+            "رضا نوری", null, "۰۲۱ ۱۲۳۴۵۶۷۸", "تهران، خیابان ولیعصر", "یادداشت",
+            "۰۹۱۲-۳۴۵-۶۷۸۹", "تهران", "ir12 3456 7890 1234 5678 9012 34", "6037-9975-1234-5678"), now);
+
+        var stored = await repo.GetCustomerAsync(id);
+        Assert.Equal("02112345678", stored!.Phone);
+        Assert.Equal("09123456789", stored.Mobile);
+        Assert.Equal("تهران", stored.City);
+        Assert.Equal("IR123456789012345678901234", stored.AccountNumber);
+        Assert.Equal("6037997512345678", stored.CardNumber);
+
+        var byMobile = await customers.SearchAsync(user, "۰۹۱۲۳۴۵۶۷۸۹");
+        Assert.Contains(byMobile, c => c.Id == id);
+        var byCode = await customers.SearchAsync(user, stored.CustomerCode);
+        Assert.Contains(byCode, c => c.Id == id);
+
+        await Assert.ThrowsAsync<BusinessRuleException>(() =>
+            customers.CreateAsync(user, new CustomerInput("رضا نوری", null, null, null, null, null, null, null, "1234"), now));
+    }
+
     private static async Task AssertLedgerConsistentAsync(string connectionString, int branchId, string currencyCode)
     {
         await using var conn = new SqlConnection(connectionString);

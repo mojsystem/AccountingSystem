@@ -24,7 +24,7 @@ public sealed class CustomerService
     public async Task<IReadOnlyList<CustomerInfo>> SearchAsync(CurrentUser user, string? search, CancellationToken ct = default, int take = 500)
     {
         await RequireMemberAsync(user, ct);
-        return await _repository.GetCustomersAsync((search ?? string.Empty).Trim(), Math.Clamp(take, 1, 5000), ct);
+        return await _repository.GetCustomersAsync(CustomerRules.NormalizeSearch(search), Math.Clamp(take, 1, 5000), ct);
     }
 
     public async Task<CustomerInfo> GetAsync(CurrentUser user, int id, CancellationToken ct = default)

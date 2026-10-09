@@ -48,13 +48,15 @@ public class IndexModel : PageModel
     public async Task<IActionResult> OnPostSaveAsync(CancellationToken ct)
     {
         var user = User.ToCurrentUser();
-        var input = new CustomerInput(Form.FullName, Form.NationalCode, Form.Phone, Form.Address, Form.Note);
+        var input = new CustomerInput(Form.FullName, Form.NationalCode, Form.Phone, Form.Address, Form.Note,
+            Form.Mobile, Form.City, Form.AccountNumber, Form.CardNumber);
         try
         {
             if (Form.Id is null)
             {
                 var id = await _customers.CreateAsync(user, input, DateTime.Now, ct);
-                TempData["Success"] = $"مشتری شماره {id} ثبت شد.";
+                var created = await _customers.GetAsync(user, id, ct);
+                TempData["Success"] = $"مشتری «{created.FullName}» با کد {created.CustomerCode} ثبت شد.";
             }
             else
             {
@@ -102,7 +104,15 @@ public sealed class CustomerForm
 
     public string? Phone { get; set; }
 
+    public string? Mobile { get; set; }
+
+    public string? City { get; set; }
+
     public string? Address { get; set; }
+
+    public string? AccountNumber { get; set; }
+
+    public string? CardNumber { get; set; }
 
     public string? Note { get; set; }
 
@@ -112,7 +122,11 @@ public sealed class CustomerForm
         FullName = customer.FullName,
         NationalCode = customer.NationalCode,
         Phone = customer.Phone,
+        Mobile = customer.Mobile,
+        City = customer.City,
         Address = customer.Address,
+        AccountNumber = customer.AccountNumber,
+        CardNumber = customer.CardNumber,
         Note = customer.Note,
     };
 }
