@@ -10,11 +10,13 @@ public class IndexModel : PageModel
 {
     private readonly CurrencyAdminService _admin;
     private readonly BranchService _branches;
+    private readonly PermissionService _permissions;
 
-    public IndexModel(CurrencyAdminService admin, BranchService branches)
+    public IndexModel(CurrencyAdminService admin, BranchService branches, PermissionService permissions)
     {
         _admin = admin;
         _branches = branches;
+        _permissions = permissions;
     }
 
     [BindProperty]
