@@ -80,11 +80,21 @@ public class IndexModel : PageModel
 
         var branchId = user.Role == UserRole.Admin ? Input.BranchId : user.BranchId ?? 0;
         var input = new TradeInput(branchId, Input.CurrencyCode, amount, rate, Input.CustomerName, Input.NationalCode, Input.Note, fee);
+        DateTime? occurredOn = null;
+        if (!string.IsNullOrWhiteSpace(Input.OccurredOn))
+        {
+            if (!PersianDate.TryParseDate(Input.OccurredOn, out var parsedDate))
+            {
+                ModelState.AddModelError(string.Empty, "تاریخ معامله را به‌درستی وارد کنید (مثلاً ۱۴۰۵/۰۷/۱۵).");
+                await LoadAsync(ct);
+                return Page();
+            }
+            occurredOn = parsedDate;
+        }
         try
         {
-            var id = Input.TradeType == "SELL"
-                ? await _trades.SellToCustomerAsync(input, user, DateTime.Now, ct)
-                : await _trades.BuyFromCustomerAsync(input, user, DateTime.Now, ct);
+            var type = Input.TradeType == "SELL" ? TradeType.Sell : TradeType.Buy;
+            var id = await _trades.RecordTradeAsync(input, type, user, DateTime.Now, occurredOn, ct);
             TempData["Success"] = $"معامله شماره {id} با موفقیت ثبت شد.";
             return RedirectToPage(new { from = From, to = To, branchFilter = BranchFilter });
         }
@@ -177,4 +187,7 @@ public sealed class TradeForm
     public string? NationalCode { get; set; }
 
     public string? Note { get; set; }
+
+    /// <summary>تاریخ شمسی معامله. خالی یعنی امروز؛ تاریخ گذشته تا ۳۰ روز قبل مجاز است.</summary>
+    public string? OccurredOn { get; set; }
 }

@@ -55,6 +55,20 @@ public sealed class ManualJournalService
         return await _repository.PostAsync(posting, ct);
     }
 
+    public Task<IReadOnlyList<AccountInfo>> GetAccountsAsync(CancellationToken ct = default) =>
+        _repository.GetAccountsAsync(ct);
+
+    /// <summary>یک سند حسابداری با سطرهایش؛ کاربر صندوق فقط سندهای شعبه‌ی خودش را می‌بیند.</summary>
+    public async Task<JournalEntryInfo?> GetAsync(CurrentUser actor, long entryId, CancellationToken ct = default)
+    {
+        var entry = await _repository.GetJournalEntryAsync(entryId, ct);
+        if (entry is not null)
+        {
+            BranchScope.ResolveForReport(actor, entry.BranchId);
+        }
+        return entry;
+    }
+
     private async Task<JournalEntryInfo> LoadManualAsync(long entryId, CancellationToken ct)
     {
         var entry = await _repository.GetJournalEntryAsync(entryId, ct)

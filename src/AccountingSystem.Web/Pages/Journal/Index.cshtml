@@ -29,6 +29,61 @@
 {
     <div class="alert error">@rangeError</div>
 }
+@if (TempData["Success"] is string successMessage)
+{
+    <div class="alert ok">@successMessage</div>
+}
+@if (TempData["Error"] is string errorMessage)
+{
+    <div class="alert error">@errorMessage</div>
+}
+
+@if (Model.IsAdmin)
+{
+    <h2>ثبت سند حسابداری دستی</h2>
+    <p class="hint">
+        سند دستی فقط روی حساب‌های غیر از موجودی ارز ثبت می‌شود. اگر حساب صندوق ریال (1001) در سند باشد،
+        موجودی صندوق هم تغییر می‌کند و اگر موجودی منفی شود، ثبت رد می‌شود. تاریخ خالی یعنی امروز؛ تا ۳۰ روز قبل مجاز است.
+    </p>
+    <form method="post" asp-page-handler="Manual" class="panel">
+        <div class="form-grid">
+            <label>شعبه
+                <select name="Manual.BranchId">
+                    @foreach (var b in Model.Branches)
+                    {
+                        <option value="@b.Id">@b.Code - @b.Name</option>
+                    }
+                </select>
+            </label>
+            <label>شرح سند<input name="Manual.Description" maxlength="250" /></label>
+            <label>تاریخ (شمسی، اختیاری)<input name="Manual.OccurredOn" dir="ltr" placeholder="۱۴۰۵/۰۷/۱۵" /></label>
+        </div>
+        <table>
+            <thead>
+                <tr><th>حساب</th><th>بدهکار (ریال)</th><th>بستانکار (ریال)</th></tr>
+            </thead>
+            <tbody>
+                @for (var i = 0; i < 4; i++)
+                {
+                    <tr>
+                        <td>
+                            <select name="Manual.Lines[@i].AccountCode">
+                                <option value="">-- حساب --</option>
+                                @foreach (var a in Model.Accounts.Where(a => a.IsActive && !a.Code.StartsWith("1101-", StringComparison.Ordinal)))
+                                {
+                                    <option value="@a.Code">@a.Code - @a.Name</option>
+                                }
+                            </select>
+                        </td>
+                        <td><input name="Manual.Lines[@i].Debit" dir="ltr" inputmode="numeric" /></td>
+                        <td><input name="Manual.Lines[@i].Credit" dir="ltr" inputmode="numeric" /></td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+        <p><button type="submit">ثبت سند دستی</button></p>
+    </form>
+}
 
 @if (Model.Entries.Count == 0)
 {
@@ -37,8 +92,25 @@
 
 @foreach (var entry in Model.Entries)
 {
-    <div class="entry">
-        <h3>سند شماره @entry.Id - @ViewFormat.Date(entry.OccurredAt) - @entry.BranchName - @entry.Description</h3>
+    <div class="entry@(entry.IsVoided ? " row-void" : string.Empty)">
+        <h3>
+            سند شماره @entry.Id - @ViewFormat.Date(entry.OccurredAt) - @entry.BranchName - @entry.Description
+            @if (entry.IsVoided)
+            {
+                <span class="badge void">باطل شد</span>
+            }
+        </h3>
+        @if (Model.IsAdmin && entry.SourceType == "MANUAL" && !entry.IsVoided)
+        {
+            <div class="inline-form">
+                <a class="link-button" asp-page="EditManual" asp-route-id="@entry.Id">ویرایش سند دستی</a>
+                <form method="post" asp-page-handler="VoidManual" onsubmit="return confirm('این سند دستی باطل شود؟');">
+                    <input type="hidden" name="entryId" value="@entry.Id" />
+                    <input name="voidReason" placeholder="دلیل ابطال" maxlength="200" required />
+                    <button type="submit" class="danger">ابطال</button>
+                </form>
+            </div>
+        }
         <table>
             <thead>
                 <tr>

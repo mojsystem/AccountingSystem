@@ -27,6 +27,17 @@ public sealed class CurrencyTradeService
     public Task<long> SellToCustomerAsync(TradeInput input, CurrentUser user, DateTime now, CancellationToken ct = default) =>
         RecordTradeAsync(input, TradeType.Sell, user, now, null, ct);
 
+    /// <summary>خواندن یک معامله برای نمایش و ویرایش؛ کاربر صندوق فقط معامله‌ی شعبه‌ی خودش را می‌بیند.</summary>
+    public async Task<TradeInfo?> GetTradeAsync(CurrentUser user, long tradeId, CancellationToken ct = default)
+    {
+        var trade = await _repository.GetTradeAsync(tradeId, ct);
+        if (trade is not null)
+        {
+            BranchScope.ResolveForReport(user, trade.BranchId);
+        }
+        return trade;
+    }
+
     /// <summary>
     /// ثبت معامله. occurredOn خالی یعنی همین لحظه؛ وگرنه معامله با آن تاریخ (تا 30 روز قبل) ثبت می‌شود.
     /// </summary>

@@ -27,6 +27,16 @@ public sealed class CurrencyAdminService
     public Task<IReadOnlyList<CashBoxInfo>> GetCashBoxesAsync(CurrentUser actor, int? branchId, CancellationToken ct = default) =>
         _repository.GetCashBoxesAsync(BranchScope.ResolveForReport(actor, branchId), ct);
 
+    public async Task<OpeningInfo?> GetOpeningAsync(CurrentUser actor, long openingId, CancellationToken ct = default)
+    {
+        var opening = await _repository.GetOpeningAsync(openingId, ct);
+        if (opening is not null)
+        {
+            BranchScope.ResolveForReport(actor, opening.BranchId);
+        }
+        return opening;
+    }
+
     public Task<IReadOnlyList<OpeningInfo>> GetOpeningsAsync(CurrentUser actor, int? branchId, DateTime fromInclusive, DateTime toExclusive, CancellationToken ct = default) =>
         _repository.GetOpeningsAsync(BranchScope.ResolveForReport(actor, branchId), fromInclusive, toExclusive, ct);
 

@@ -1,0 +1,51 @@
+@page "{id:long}"
+@model EditModel
+@{
+    ViewData["Title"] = "ویرایش معامله";
+}
+
+<h1>ویرایش معامله‌ی شماره @Model.Id</h1>
+
+<div asp-validation-summary="All" class="alert error"></div>
+
+@if (Model.IsVoided)
+{
+    <div class="alert error">این معامله باطل شده است و قابل ویرایش نیست.</div>
+}
+else if (!Model.IsAdmin)
+{
+    <div class="alert error">ویرایش معامله فقط برای مدیر سیستم مجاز است.</div>
+}
+else
+{
+    <form method="post" class="panel" asp-route-id="@Model.Id">
+        <p class="hint">
+            اگر فقط نام مشتری، کد ملی یا توضیحات را تغییر دهید، همین سند به‌روز می‌شود.
+            اگر مبلغ، نرخ، کارمزد، ارز، نوع یا تاریخ را تغییر دهید، معامله‌ی فعلی با سند ابطال باطل و نسخه‌ی اصلاحی ثبت می‌شود؛
+            بهای تمام‌شده‌ی معاملات بعدی همان ارز بازمحاسبه شده و تفاوت آن با سند تعدیل ثبت می‌شود.
+        </p>
+        <div class="radio-row">
+            <label><input type="radio" name="Input.TradeType" value="BUY" checked="@(Model.Input.TradeType != "SELL")" /> خرید ارز از مشتری</label>
+            <label><input type="radio" name="Input.TradeType" value="SELL" checked="@(Model.Input.TradeType == "SELL")" /> فروش ارز به مشتری</label>
+        </div>
+        <input type="hidden" name="Input.BranchId" value="@Model.Input.BranchId" />
+        <div class="form-grid">
+            <label>ارز
+                <select name="Input.CurrencyCode">
+                    @foreach (var c in Model.Currencies)
+                    {
+                        <option value="@c.Code" selected="@(c.Code == Model.Input.CurrencyCode)">@c.Code - @c.Name</option>
+                    }
+                </select>
+            </label>
+            <label>مقدار ارز<input name="Input.Amount" value="@Model.Input.Amount" dir="ltr" inputmode="decimal" /></label>
+            <label>نرخ (ریال به ازای یک واحد)<input name="Input.Rate" value="@Model.Input.Rate" dir="ltr" inputmode="decimal" /></label>
+            <label>کارمزد (ریال)<input name="Input.Fee" value="@Model.Input.Fee" dir="ltr" inputmode="numeric" /></label>
+            <label>تاریخ معامله (شمسی)<input name="Input.OccurredOn" value="@Model.Input.OccurredOn" dir="ltr" /></label>
+            <label>نام مشتری<input name="Input.CustomerName" value="@Model.Input.CustomerName" /></label>
+            <label>کد ملی / شناسه<input name="Input.NationalCode" value="@Model.Input.NationalCode" dir="ltr" /></label>
+            <label>توضیحات<input name="Input.Note" value="@Model.Input.Note" /></label>
+        </div>
+        <p><button type="submit">ذخیره‌ی ویرایش</button> <a href="/Trade">بازگشت</a></p>
+    </form>
+}

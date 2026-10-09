@@ -52,8 +52,9 @@
         <label>نام مشتری<input name="Input.CustomerName" value="@Model.Input.CustomerName" /></label>
         <label>کد ملی / شناسه<input name="Input.NationalCode" value="@Model.Input.NationalCode" dir="ltr" /></label>
         <label>توضیحات<input name="Input.Note" value="@Model.Input.Note" /></label>
+        <label>تاریخ معامله (شمسی، اختیاری)<input name="Input.OccurredOn" value="@Model.Input.OccurredOn" dir="ltr" placeholder="۱۴۰۵/۰۷/۱۵" /></label>
     </div>
-    <p class="hint">ساعت معامله، ساعت ثبت در سیستم است و قابل تغییر نیست.</p>
+    <p class="hint">تاریخ خالی یعنی امروز. برای ثبت معامله‌ی گذشته، تاریخ آن را تا ۳۰ روز قبل وارد کنید؛ ساعت، ساعت ثبت است.</p>
     <p><button type="submit">ثبت معامله</button></p>
 </form>
 
@@ -132,6 +133,7 @@
                         <a class="link-button" href="/Trade/Receipt/@t.Id" target="_blank" rel="noopener">رسید</a>
                         @if (Model.IsAdmin && !t.IsVoided)
                         {
+                            <a class="link-button" asp-page="Edit" asp-route-id="@t.Id">ویرایش</a>
                             <form method="post" asp-page-handler="Void" asp-route-from="@Model.From" asp-route-to="@Model.To" asp-route-branchFilter="@Model.BranchFilter"
                                   onsubmit="return confirm('این معامله باطل شود؟ سند معکوس ثبت خواهد شد.');">
                                 <input type="hidden" name="voidTradeId" value="@t.Id" />

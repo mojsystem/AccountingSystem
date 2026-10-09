@@ -37,6 +37,36 @@ public class IndexModel : PageModel
 
     public bool IsAdmin { get; private set; }
 
+    public IReadOnlyList<OpeningInfo> Openings { get; private set; } = Array.Empty<OpeningInfo>();
+
+    /// <summary>ابطال موجودی افتتاحیه (فقط مدیر). اگر معاملات بعدی به آن وابسته باشند، ابطال رد می‌شود.</summary>
+    public async Task<IActionResult> OnPostVoidOpeningAsync(long openingId, string? voidReason, CancellationToken ct)
+    {
+        try
+        {
+            await _admin.VoidOpeningAsync(User.ToCurrentUser(), openingId, voidReason ?? string.Empty, DateTime.Now, ct);
+            TempData["Success"] = $"موجودی افتتاحیه‌ی شماره {openingId} باطل شد و سند ابطال ثبت گردید.";
+        }
+        catch (Exception ex) when (ex is BusinessRuleException or ConcurrencyConflictException)
+        {
+            TempData["Error"] = ex.Message;
+        }
+        return RedirectToPage(new { branchFilter = BranchFilter });
+    }
+
+    private static DateTime? ParseOccurredOn(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return null;
+        }
+        if (!PersianDate.TryParseDate(text, out var date))
+        {
+            throw new BusinessRuleException("تاریخ افتتاحیه را به‌درستی وارد کنید (مثلاً ۱۴۰۵/۰۷/۱۵).");
+        }
+        return date;
+    }
+
     public async Task OnGetAsync(CancellationToken ct)
     {
         await LoadAsync(ct);
@@ -53,7 +83,8 @@ public class IndexModel : PageModel
 
         try
         {
-            await _admin.OpeningIrrAsync(User.ToCurrentUser(), IrrInput.BranchId, amount, DateTime.Now, ct);
+            var occurredOn = ParseOccurredOn(IrrInput.OccurredOn);
+            await _admin.RecordOpeningAsync(User.ToCurrentUser(), IrrInput.BranchId, CurrencyCodes.Irr, amount, null, DateTime.Now, occurredOn, ct);
             TempData["Success"] = "موجودی افتتاحیه ریال ثبت شد.";
             return RedirectToPage(new { branchFilter = BranchFilter });
         }
@@ -75,7 +106,8 @@ public class IndexModel : PageModel
 
         try
         {
-            await _admin.OpeningForeignAsync(User.ToCurrentUser(), FxInput.BranchId, FxInput.CurrencyCode, quantity, rate, DateTime.Now, ct);
+            var occurredOn = ParseOccurredOn(FxInput.OccurredOn);
+            await _admin.RecordOpeningAsync(User.ToCurrentUser(), FxInput.BranchId, FxInput.CurrencyCode, quantity, rate, DateTime.Now, occurredOn, ct);
             TempData["Success"] = "موجودی افتتاحیه ارز ثبت شد.";
             return RedirectToPage(new { branchFilter = BranchFilter });
         }
@@ -93,8 +125,15 @@ public class IndexModel : PageModel
         return File(WorkbookBuilder.CashBoxes(boxes), ExcelContentType, $"cash-boxes-{DateTime.Now:yyyyMMdd}.xlsx");
     }
 
+    private async Task<IReadOnlyList<OpeningInfo>> LoadOpeningsAsync(CancellationToken ct)
+    {
+        var today = DateTime.Today;
+        return await _admin.GetOpeningsAsync(User.ToCurrentUser(), BranchFilter, today.AddDays(-90), today.AddDays(1), ct);
+    }
+
     private async Task LoadAsync(CancellationToken ct)
     {
+        Openings = await LoadOpeningsAsync(ct);
         var user = User.ToCurrentUser();
         IsAdmin = user.Role == UserRole.Admin;
         Boxes = await _admin.GetCashBoxesAsync(user, user.ScopeFor(BranchFilter), ct);
@@ -109,6 +148,9 @@ public sealed class IrrOpeningForm
     public int BranchId { get; set; }
 
     public string? Amount { get; set; }
+
+    /// <summary>تاریخ شمسی موجودی افتتاحیه. خالی یعنی امروز؛ تاریخ گذشته تا ۳۰ روز قبل مجاز است.</summary>
+    public string? OccurredOn { get; set; }
 }
 
 public sealed class FxOpeningForm
@@ -120,4 +162,7 @@ public sealed class FxOpeningForm
     public string? Quantity { get; set; }
 
     public string? UnitRate { get; set; }
+
+    /// <summary>تاریخ شمسی موجودی افتتاحیه. خالی یعنی امروز؛ تاریخ گذشته تا ۳۰ روز قبل مجاز است.</summary>
+    public string? OccurredOn { get; set; }
 }
