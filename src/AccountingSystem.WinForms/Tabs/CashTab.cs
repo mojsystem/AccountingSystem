@@ -26,6 +26,7 @@ internal sealed class CashTab : UserControl, IRefreshable
     private readonly DataGridView _grid = UiHelpers.CreateGrid();
     private IReadOnlyList<CashBoxInfo> _boxes = Array.Empty<CashBoxInfo>();
     private IReadOnlyList<BranchInfo> _branches = Array.Empty<BranchInfo>();
+    private IReadOnlyList<BranchInfo> _readableBranches = Array.Empty<BranchInfo>();
     private IReadOnlyDictionary<string, int> _decimals = new Dictionary<string, int>();
 
     public CashTab(AppServices services, CurrentUser user)
@@ -46,7 +47,7 @@ internal sealed class CashTab : UserControl, IRefreshable
             UiHelpers.MakeLabel("نرخ هر واحد (ریال):"), _openUnitRate,
             _saveOpeningForeign,
         });
-        _openingPanel.Visible = user.Role == UserRole.Admin;
+        _openingPanel.Visible = false; // بر اساس وظیفه‌ی «ثبت موجودی افتتاحیه» در RefreshAsync تنظیم می‌شود.
 
         _openingPanel.Controls.Add(UiHelpers.MakeLabel("تاریخ (شمسی، اختیاری):"));
         _openingPanel.Controls.Add(_openDate);
@@ -64,13 +65,15 @@ internal sealed class CashTab : UserControl, IRefreshable
     {
         var currencies = await _services.Admin.GetCurrenciesAsync();
         _decimals = currencies.ToDictionary(c => c.Code, c => c.DecimalPlaces);
-        _branches = await _services.Branches.GetBranchesAsync();
+        _branches = await _services.Permissions.GetBranchesAsync(_user, Permission.OpeningCreate);
+        _readableBranches = await _services.Permissions.GetBranchesAsync(_user);
+        _openingPanel.Visible = _branches.Count > 0;
         _boxes = await _services.Admin.GetCashBoxesAsync(_user, UiHelpers.SelectedBranchId(_filterBranch));
 
         var previousFilter = (_filterBranch.SelectedItem as ComboItem)?.Value;
-        UiHelpers.FillBranches(_filterBranch, _branches, _user, includeAll: true, selectedValue: previousFilter);
+        UiHelpers.FillBranches(_filterBranch, _readableBranches, _user, includeAll: true, selectedValue: previousFilter);
 
-        if (_user.Role == UserRole.Admin)
+        if (_branches.Count > 0)
         {
             var previousOpen = (_openBranch.SelectedItem as ComboItem)?.Value;
             UiHelpers.FillBranches(_openBranch, _branches, _user, includeAll: false, selectedValue: previousOpen);

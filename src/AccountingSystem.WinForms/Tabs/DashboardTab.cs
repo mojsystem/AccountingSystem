@@ -36,7 +36,7 @@ internal sealed class DashboardTab : UserControl, IRefreshable
 
     public async Task RefreshAsync()
     {
-        _branches = await _services.Branches.GetBranchesAsync();
+        _branches = await _services.Permissions.GetBranchesAsync(_user);
         var previous = (_branch.SelectedItem as ComboItem)?.Value;
         UiHelpers.FillBranches(_branch, _branches, _user, includeAll: true, selectedValue: previous);
 

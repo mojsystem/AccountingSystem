@@ -6,12 +6,19 @@
 
 <h1>داشبورد</h1>
 
-@if (Model.IsAdmin)
+@if (Model.Notice is { } notice)
+{
+    <p class="alert error">@notice</p>
+}
+@if (Model.IsAdmin || Model.Branches.Count > 1)
 {
     <form method="get" class="panel filters">
         <label>شعبه
             <select name="BranchFilter">
-                <option value="">همه‌ی شعبه‌ها</option>
+                @if (Model.IsAdmin)
+                {
+                    <option value="">همه‌ی شعبه‌ها</option>
+                }
                 @foreach (var b in Model.Branches)
                 {
                     <option value="@b.Id" selected="@(Model.BranchFilter == b.Id)">@b.Code - @b.Name</option>

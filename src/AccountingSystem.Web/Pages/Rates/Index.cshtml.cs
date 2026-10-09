@@ -34,6 +34,11 @@ public class IndexModel : PageModel
 
     public bool IsAdmin { get; private set; }
 
+    /// <summary>شعبه‌هایی که کاربر می‌بیند (فیلتر نرخ‌ها).</summary>
+    public IReadOnlyList<BranchInfo> ReadableBranches { get; private set; } = Array.Empty<BranchInfo>();
+
+    public string? Notice { get; private set; }
+
     public async Task OnGetAsync(CancellationToken ct)
     {
         await LoadAsync(ct);
@@ -89,16 +94,16 @@ public class IndexModel : PageModel
         IsAdmin = user.Role == UserRole.Admin;
         var all = await _admin.GetCurrenciesAsync(ct);
         Currencies = all.Where(c => c.IsActive && c.Code != CurrencyCodes.Irr).ToList();
-        Branches = await _branches.GetBranchesAsync(ct);
-        RateList = await _admin.GetLatestRatesAsync(user, user.ScopeFor(BranchFilter), ct);
-        // کاربر صندوق فقط برای شعبه‌ی خودش نرخ ثبت می‌کند؛ مدیر شعبه‌ی فیلتر یا اولین شعبه را پیش‌فرض دارد.
-        if (!IsAdmin)
+        Branches = await _permissions.GetBranchesAsync(user, Permission.RateSet, ct);
+        ReadableBranches = await _permissions.GetBranchesAsync(user, null, ct);
+        var access = await _permissions.GetAccessAsync(user, ct);
+        var (readBranch, notice) = WebExtensions.ReadableBranchFilter(access, BranchFilter);
+        Notice = notice;
+        RateList = await _admin.GetLatestRatesAsync(user, readBranch, ct);
+        // شعبه‌ی پیش‌فرض فرم نرخ: شعبه‌ی فیلتر (اگر قابل ثبت است) یا اولین شعبه‌ی قابل ثبت.
+        if (RateInput.BranchId == 0)
         {
-            RateInput.BranchId = user.BranchId ?? 0;
-        }
-        else if (RateInput.BranchId == 0)
-        {
-            RateInput.BranchId = BranchFilter ?? Branches.FirstOrDefault()?.Id ?? 0;
+            RateInput.BranchId = Branches.FirstOrDefault(b => b.Id == BranchFilter)?.Id ?? Branches.FirstOrDefault()?.Id ?? 0;
         }
     }
 }

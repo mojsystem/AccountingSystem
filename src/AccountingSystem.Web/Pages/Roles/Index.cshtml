@@ -1,0 +1,71 @@
+@page
+@model IndexModel
+@{
+    ViewData["Title"] = "نقش‌ها";
+}
+
+<h1>نقش‌های شعبه</h1>
+
+@if (TempData["Success"] is string successMessage)
+{
+    <div class="alert ok">@successMessage</div>
+}
+@if (TempData["Error"] is string errorMessage)
+{
+    <div class="alert error">@errorMessage</div>
+}
+<div asp-validation-summary="All" class="alert error"></div>
+
+<p class="hint">
+    هر شعبه نقش‌های مخصوص خودش را دارد. نقش مجموعه‌ای از وظیفه‌هاست و هر کاربر در هر شعبه فقط یک نقش دارد.
+    تغییر وظیفه‌های یک نقش برای همه‌ی کاربرانی که آن نقش را دارند همان لحظه اعمال می‌شود.
+    نقش فقط وقتی حذف می‌شود که به هیچ کاربری داده نشده باشد.
+</p>
+
+<form method="get" class="panel filters">
+    <label>شعبه
+        <select name="BranchId">
+            @foreach (var b in Model.Branches)
+            {
+                <option value="@b.Id" selected="@(Model.BranchId == b.Id)">@b.Code - @b.Name</option>
+            }
+        </select>
+    </label>
+    <div><button type="submit">نمایش نقش‌ها</button></div>
+</form>
+
+@foreach (var role in Model.Roles)
+{
+    <section class="panel">
+        <h2>@role.Name <small>(@role.AssignedUsers کاربر)</small></h2>
+        <form method="post" asp-page-handler="Update">
+            <input type="hidden" name="roleId" value="@role.Id" />
+            <input type="hidden" name="branchId" value="@role.BranchId" />
+            <div class="checks">
+                @foreach (var p in Model.AllPermissions)
+                {
+                    <label><input type="checkbox" name="permissions" value="@PermissionCodes.ToCode(p)" checked="@role.Permissions.Contains(p)" /> @PermissionCodes.DisplayName(p)</label>
+                }
+            </div>
+            <div><button type="submit">ذخیره‌ی وظیفه‌ها</button></div>
+        </form>
+        <form method="post" asp-page-handler="Delete" onsubmit="return confirm('این نقش حذف شود؟');">
+            <input type="hidden" name="roleId" value="@role.Id" />
+            <input type="hidden" name="branchId" value="@role.BranchId" />
+            <button type="submit" class="danger" disabled="@(role.AssignedUsers > 0)">حذف نقش</button>
+        </form>
+    </section>
+}
+
+<h2>نقش جدید برای این شعبه</h2>
+<form method="post" asp-page-handler="Create" class="panel">
+    <input type="hidden" name="NewRole.BranchId" value="@Model.BranchId" />
+    <label>نام نقش (۲ تا ۶۰ کاراکتر)<input name="NewRole.Name" /></label>
+    <div class="checks">
+        @foreach (var p in Model.AllPermissions)
+        {
+            <label><input type="checkbox" name="NewRole.Permissions" value="@PermissionCodes.ToCode(p)" /> @PermissionCodes.DisplayName(p)</label>
+        }
+    </div>
+    <div><button type="submit">ثبت نقش</button></div>
+</form>

@@ -270,19 +270,54 @@ CREATE TABLE dbo.AuditLog
 CREATE INDEX IX_AuditLog_Entity ON dbo.AuditLog (EntityType, EntityId);
 GO
 
--- دسترسی‌های ویرایش و ابطال که مدیر به کاربر صندوق می‌دهد. مدیر همه‌ی دسترسی‌ها را دارد و سطری لازم ندارد.
-CREATE TABLE dbo.UserPermissions
+-- نقش‌های دسترسی. هر شعبه نقش‌های خودش را دارد؛ سه نقش پیش‌فرض برای هر شعبه ساخته می‌شود.
+CREATE TABLE dbo.AccessRoles
 (
-    UserId     INT           NOT NULL,
-    Permission NVARCHAR(40)  NOT NULL,
-    GrantedBy  INT           NOT NULL,
-    GrantedAt  DATETIME2(0)  NOT NULL CONSTRAINT DF_UserPermissions_GrantedAt DEFAULT (SYSDATETIME()),
-    CONSTRAINT PK_UserPermissions PRIMARY KEY (UserId, Permission),
-    CONSTRAINT FK_UserPermissions_Users FOREIGN KEY (UserId) REFERENCES dbo.Users (Id),
-    CONSTRAINT FK_UserPermissions_GrantedBy FOREIGN KEY (GrantedBy) REFERENCES dbo.Users (Id),
-    CONSTRAINT CK_UserPermissions_Permission CHECK (Permission IN (
-        N'TRADE_EDIT', N'TRADE_VOID', N'OPENING_EDIT', N'OPENING_VOID', N'MANUAL_EDIT', N'MANUAL_VOID'))
+    Id        INT IDENTITY(1,1) NOT NULL,
+    BranchId  INT               NOT NULL,
+    Name      NVARCHAR(60)      NOT NULL,
+    CreatedBy INT               NULL,
+    CreatedAt DATETIME2(0)      NOT NULL CONSTRAINT DF_AccessRoles_CreatedAt DEFAULT (SYSDATETIME()),
+    CONSTRAINT PK_AccessRoles PRIMARY KEY (Id),
+    CONSTRAINT UQ_AccessRoles_Branch_Name UNIQUE (BranchId, Name),
+    CONSTRAINT UQ_AccessRoles_Id_Branch UNIQUE (Id, BranchId),
+    CONSTRAINT FK_AccessRoles_Branches FOREIGN KEY (BranchId) REFERENCES dbo.Branches (Id),
+    CONSTRAINT FK_AccessRoles_CreatedBy FOREIGN KEY (CreatedBy) REFERENCES dbo.Users (Id),
+    CONSTRAINT CK_AccessRoles_Name CHECK (LEN(LTRIM(RTRIM(Name))) >= 2)
 );
+GO
+
+-- کارهایی که یک نقش مجاز است انجام دهد (مجموعه‌ی کارهای نقش؛ هیچ استثنای جدا برای کاربر وجود ندارد).
+CREATE TABLE dbo.AccessRolePermissions
+(
+    RoleId     INT          NOT NULL,
+    Permission NVARCHAR(40) NOT NULL,
+    CONSTRAINT PK_AccessRolePermissions PRIMARY KEY (RoleId, Permission),
+    CONSTRAINT FK_AccessRolePermissions_Roles FOREIGN KEY (RoleId) REFERENCES dbo.AccessRoles (Id),
+    CONSTRAINT CK_AccessRolePermissions_Permission CHECK (Permission IN (
+        N'TRADE_RECORD', N'TRADE_EDIT', N'TRADE_VOID',
+        N'OPENING_CREATE', N'OPENING_EDIT', N'OPENING_VOID',
+        N'MANUAL_CREATE', N'MANUAL_EDIT', N'MANUAL_VOID',
+        N'RATE_SET'))
+);
+GO
+
+-- عضویت کاربر در هر شعبه با یک نقش. کاربر می‌تواند در چند شعبه عضو باشد و در هر شعبه نقش متفاوتی داشته باشد.
+-- شعبه‌ی اصلی کاربر (Users.BranchId) باید یکی از همین عضویت‌ها باشد؛ این را برنامه کنترل می‌کند.
+CREATE TABLE dbo.UserBranchRoles
+(
+    UserId    INT          NOT NULL,
+    BranchId  INT          NOT NULL,
+    RoleId    INT          NOT NULL,
+    GrantedBy INT          NOT NULL,
+    GrantedAt DATETIME2(0) NOT NULL CONSTRAINT DF_UserBranchRoles_GrantedAt DEFAULT (SYSDATETIME()),
+    CONSTRAINT PK_UserBranchRoles PRIMARY KEY (UserId, BranchId),
+    CONSTRAINT FK_UserBranchRoles_Users FOREIGN KEY (UserId) REFERENCES dbo.Users (Id),
+    CONSTRAINT FK_UserBranchRoles_Branches FOREIGN KEY (BranchId) REFERENCES dbo.Branches (Id),
+    CONSTRAINT FK_UserBranchRoles_GrantedBy FOREIGN KEY (GrantedBy) REFERENCES dbo.Users (Id),
+    CONSTRAINT FK_UserBranchRoles_Role_Branch FOREIGN KEY (RoleId, BranchId) REFERENCES dbo.AccessRoles (Id, BranchId)
+);
+CREATE INDEX IX_UserBranchRoles_Role ON dbo.UserBranchRoles (RoleId);
 GO
 
 CREATE TABLE dbo.JournalLines
@@ -303,6 +338,28 @@ GO
 
 -- داده‌های اولیه
 INSERT INTO dbo.Branches (Code, Name) VALUES (N'MAIN', N'شعبه‌ی مرکزی');
+GO
+
+-- نقش‌های پیش‌فرض شعبه‌ی MAIN (همان فهرست RolePresets در برنامه).
+DECLARE @MainBranchId INT = (SELECT Id FROM dbo.Branches WHERE Code = N'MAIN');
+INSERT INTO dbo.AccessRoles (BranchId, Name) VALUES
+    (@MainBranchId, N'حسابدار'),
+    (@MainBranchId, N'مدیر شعبه'),
+    (@MainBranchId, N'کاربر صندوق');
+INSERT INTO dbo.AccessRolePermissions (RoleId, Permission)
+SELECT r.Id, p.Permission
+FROM dbo.AccessRoles r
+JOIN (VALUES
+    (N'حسابدار', N'TRADE_EDIT'), (N'حسابدار', N'TRADE_VOID'),
+    (N'حسابدار', N'OPENING_EDIT'), (N'حسابدار', N'OPENING_VOID'),
+    (N'حسابدار', N'MANUAL_CREATE'), (N'حسابدار', N'MANUAL_EDIT'), (N'حسابدار', N'MANUAL_VOID'),
+    (N'مدیر شعبه', N'TRADE_RECORD'), (N'مدیر شعبه', N'TRADE_EDIT'), (N'مدیر شعبه', N'TRADE_VOID'),
+    (N'مدیر شعبه', N'OPENING_CREATE'), (N'مدیر شعبه', N'OPENING_EDIT'), (N'مدیر شعبه', N'OPENING_VOID'),
+    (N'مدیر شعبه', N'MANUAL_CREATE'), (N'مدیر شعبه', N'MANUAL_EDIT'), (N'مدیر شعبه', N'MANUAL_VOID'),
+    (N'مدیر شعبه', N'RATE_SET'),
+    (N'کاربر صندوق', N'TRADE_RECORD')
+) AS p (RoleName, Permission) ON p.RoleName = r.Name
+WHERE r.BranchId = @MainBranchId;
 GO
 
 INSERT INTO dbo.Currencies (Code, Name, DecimalPlaces) VALUES

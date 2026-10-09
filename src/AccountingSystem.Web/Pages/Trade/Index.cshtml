@@ -22,7 +22,7 @@
         <label><input type="radio" name="Input.TradeType" value="SELL" checked="@(Model.Input.TradeType == "SELL")" /> فروش ارز به مشتری (دریافت ریال)</label>
     </div>
     <div class="form-grid">
-        @if (Model.IsAdmin)
+        @if (Model.Branches.Count != 1)
         {
             <label>شعبه
                 <select id="branch" name="Input.BranchId">
@@ -36,7 +36,7 @@
         }
         else
         {
-            <input type="hidden" id="branch" name="Input.BranchId" value="@(User.FindFirst("BranchId")?.Value)" />
+            <input type="hidden" id="branch" name="Input.BranchId" value="@(Model.Branches.FirstOrDefault()?.Id)" />
         }
         <label>ارز
             <select id="currency" name="Input.CurrencyCode">
@@ -59,15 +59,22 @@
 </form>
 
 <h2>معاملات</h2>
+@if (Model.Notice is { } notice)
+{
+    <p class="alert error">@notice</p>
+}
 <form method="get" class="panel filters">
     <label>از تاریخ (شمسی)<input name="From" value="@Model.From" dir="ltr" placeholder="۱۴۰۵/۰۷/۰۱" /></label>
     <label>تا تاریخ (شمسی)<input name="To" value="@Model.To" dir="ltr" placeholder="۱۴۰۵/۰۷/۳۰" /></label>
-    @if (Model.IsAdmin)
+    @if (Model.IsAdmin || Model.ReadableBranches.Count > 1)
     {
         <label>شعبه
             <select name="BranchFilter">
-                <option value="">همه‌ی شعبه‌ها</option>
-                @foreach (var b in Model.Branches)
+                @if (Model.IsAdmin)
+                {
+                    <option value="">همه‌ی شعبه‌ها</option>
+                }
+                @foreach (var b in Model.ReadableBranches)
                 {
                     <option value="@b.Id" selected="@(Model.BranchFilter == b.Id)">@b.Code - @b.Name</option>
                 }
@@ -131,11 +138,11 @@
                 <td>
                     <div class="inline-form">
                         <a class="link-button" href="/Trade/Receipt/@t.Id" target="_blank" rel="noopener">رسید</a>
-                        @if (Model.CanEditTrades && !t.IsVoided)
+                        @if (Model.CanEditAt(t.BranchId) && !t.IsVoided)
                         {
                             <a class="link-button" asp-page="Edit" asp-route-id="@t.Id">ویرایش</a>
                         }
-                        @if (Model.CanVoidTrades && !t.IsVoided)
+                        @if (Model.CanVoidAt(t.BranchId) && !t.IsVoided)
                         {
                             <form method="post" asp-page-handler="Void" asp-route-from="@Model.From" asp-route-to="@Model.To" asp-route-branchFilter="@Model.BranchFilter"
                                   onsubmit="return confirm('این معامله باطل شود؟ سند معکوس ثبت خواهد شد.');">

@@ -23,24 +23,33 @@ public sealed class CurrencyAdminService
     public Task<IReadOnlyList<CurrencyInfo>> GetCurrenciesAsync(CancellationToken ct = default) =>
         _repository.GetCurrenciesAsync(ct);
 
-    public Task<IReadOnlyList<RateInfo>> GetLatestRatesAsync(CurrentUser actor, int? branchId, CancellationToken ct = default) =>
-        _repository.GetLatestRatesAsync(BranchScope.ResolveForReport(actor, branchId), ct);
+    public async Task<IReadOnlyList<RateInfo>> GetLatestRatesAsync(CurrentUser actor, int? branchId, CancellationToken ct = default)
+    {
+        var scope = await _permissions.ResolveReadBranchAsync(actor, branchId, ct);
+        return await _repository.GetLatestRatesAsync(scope, ct);
+    }
 
-    public Task<IReadOnlyList<CashBoxInfo>> GetCashBoxesAsync(CurrentUser actor, int? branchId, CancellationToken ct = default) =>
-        _repository.GetCashBoxesAsync(BranchScope.ResolveForReport(actor, branchId), ct);
+    public async Task<IReadOnlyList<CashBoxInfo>> GetCashBoxesAsync(CurrentUser actor, int? branchId, CancellationToken ct = default)
+    {
+        var scope = await _permissions.ResolveReadBranchAsync(actor, branchId, ct);
+        return await _repository.GetCashBoxesAsync(scope, ct);
+    }
 
     public async Task<OpeningInfo?> GetOpeningAsync(CurrentUser actor, long openingId, CancellationToken ct = default)
     {
         var opening = await _repository.GetOpeningAsync(openingId, ct);
         if (opening is not null)
         {
-            BranchScope.ResolveForReport(actor, opening.BranchId);
+            await _permissions.RequireReadAsync(actor, opening.BranchId, ct);
         }
         return opening;
     }
 
-    public Task<IReadOnlyList<OpeningInfo>> GetOpeningsAsync(CurrentUser actor, int? branchId, DateTime fromInclusive, DateTime toExclusive, CancellationToken ct = default) =>
-        _repository.GetOpeningsAsync(BranchScope.ResolveForReport(actor, branchId), fromInclusive, toExclusive, ct);
+    public async Task<IReadOnlyList<OpeningInfo>> GetOpeningsAsync(CurrentUser actor, int? branchId, DateTime fromInclusive, DateTime toExclusive, CancellationToken ct = default)
+    {
+        var scope = await _permissions.ResolveReadBranchAsync(actor, branchId, ct);
+        return await _repository.GetOpeningsAsync(scope, fromInclusive, toExclusive, ct);
+    }
 
     public async Task AddCurrencyAsync(CurrentUser actor, string code, string name, int decimalPlaces, DateTime now, CancellationToken ct = default)
     {
@@ -69,7 +78,12 @@ public sealed class CurrencyAdminService
 
     public async Task SetRateAsync(CurrentUser actor, int branchId, string currencyCode, decimal buyRateIrr, decimal sellRateIrr, DateTime now, CancellationToken ct = default)
     {
-        var scopedBranch = BranchScope.RequireBranch(actor, branchId);
+        if (branchId <= 0)
+        {
+            throw new BusinessRuleException("شعبه را انتخاب کنید.");
+        }
+        await _permissions.RequireAsync(actor, Permission.RateSet, branchId, ct);
+        var scopedBranch = branchId;
         var code = (currencyCode ?? string.Empty).Trim().ToUpperInvariant();
         if (code == CurrencyCodes.Irr)
         {
@@ -103,7 +117,11 @@ public sealed class CurrencyAdminService
     /// </summary>
     public async Task<long?> RecordOpeningAsync(CurrentUser actor, int branchId, string currencyCode, decimal quantity, decimal? unitRateIrr, DateTime now, DateTime? occurredOn = null, CancellationToken ct = default)
     {
-        RoleGuard.RequireAdmin(actor);
+        if (branchId <= 0)
+        {
+            throw new BusinessRuleException("شعبه را انتخاب کنید.");
+        }
+        await _permissions.RequireAsync(actor, Permission.OpeningCreate, branchId, ct);
         var currency = await LoadCurrencyAsync(currencyCode, ct);
         var ledger = await _repository.GetBranchLedgerAsync(branchId, ct);
         var occurredAt = OccurrenceRules.Resolve(occurredOn, now);

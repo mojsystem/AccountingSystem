@@ -1,29 +1,36 @@
 namespace AccountingSystem.Core.Domain;
 
 /// <summary>
-/// دسترسی‌های ویرایش و ابطال. مدیر همه‌ی آن‌ها را دارد. مدیر به کاربران صندوق دسترسی می‌دهد.
-/// کاربر صندوق فقط دسترسی‌های داده‌شده را دارد و فقط روی اسناد شعبه‌ی خودش.
+/// کارهایی که مدیر جدا به هر نقش در هر شعبه می‌دهد. مدیر سیستم همه‌ی آن‌ها را در همه‌ی شعبه‌ها دارد.
 /// </summary>
 public enum Permission
 {
+    TradeRecord,
     TradeEdit,
     TradeVoid,
+    OpeningCreate,
     OpeningEdit,
     OpeningVoid,
+    ManualCreate,
     ManualEdit,
     ManualVoid,
+    RateSet,
 }
 
 public static class PermissionCodes
 {
     public static string ToCode(Permission permission) => permission switch
     {
+        Permission.TradeRecord => "TRADE_RECORD",
         Permission.TradeEdit => "TRADE_EDIT",
         Permission.TradeVoid => "TRADE_VOID",
+        Permission.OpeningCreate => "OPENING_CREATE",
         Permission.OpeningEdit => "OPENING_EDIT",
         Permission.OpeningVoid => "OPENING_VOID",
+        Permission.ManualCreate => "MANUAL_CREATE",
         Permission.ManualEdit => "MANUAL_EDIT",
         Permission.ManualVoid => "MANUAL_VOID",
+        Permission.RateSet => "RATE_SET",
         _ => throw new ArgumentOutOfRangeException(nameof(permission), permission, null),
     };
 
@@ -44,18 +51,42 @@ public static class PermissionCodes
 
     public static string DisplayName(Permission permission) => permission switch
     {
+        Permission.TradeRecord => "ثبت معامله",
         Permission.TradeEdit => "ویرایش معامله",
         Permission.TradeVoid => "ابطال معامله",
+        Permission.OpeningCreate => "ثبت موجودی افتتاحیه",
         Permission.OpeningEdit => "ویرایش موجودی افتتاحیه",
         Permission.OpeningVoid => "ابطال موجودی افتتاحیه",
+        Permission.ManualCreate => "ثبت سند دستی",
         Permission.ManualEdit => "ویرایش سند دستی",
         Permission.ManualVoid => "ابطال سند دستی",
+        Permission.RateSet => "تنظیم نرخ خرید و فروش",
         _ => permission.ToString(),
+    };
+
+    /// <summary>گروه نمایش هر کار در فرم‌های دسترسی.</summary>
+    public static string Group(Permission permission) => permission switch
+    {
+        Permission.TradeRecord or Permission.TradeEdit or Permission.TradeVoid => "معاملات",
+        Permission.OpeningCreate or Permission.OpeningEdit or Permission.OpeningVoid => "موجودی افتتاحیه",
+        Permission.ManualCreate or Permission.ManualEdit or Permission.ManualVoid => "اسناد حسابداری دستی",
+        _ => "نرخ‌ها",
     };
 }
 
+/// <summary>نقش کاربر در یک شعبه، همراه با دسترسی‌های همان نقش.</summary>
+public sealed record BranchAccess(int BranchId, string BranchName, int RoleId, string RoleName, IReadOnlySet<Permission> Permissions);
+
 /// <summary>
-/// وضعیت دسترسی کاربر از دیتابیس. نقش، فعال بودن و شعبه همان لحظه خوانده می‌شوند،
-/// پس تغییر دسترسی یا غیرفعال شدن کاربر بلافاصله اعمال می‌شود (نه فقط در ورود بعدی).
+/// دسترسی کاربر که از دیتابیس خوانده می‌شود. مدیر سیستم همه‌ی شعبه‌ها و کارها را دارد.
+/// کاربر دیگر فقط شعبه‌هایی را می‌بیند که عضوش است و فقط کارهایی را انجام می‌دهد که نقشش در آن شعبه می‌دهد.
 /// </summary>
-public sealed record UserAccess(int UserId, UserRole Role, bool IsActive, int? BranchId, IReadOnlySet<Permission> Permissions);
+public sealed record UserAccess(
+    int UserId,
+    UserRole Role,
+    bool IsActive,
+    int? DefaultBranchId,
+    IReadOnlyDictionary<int, BranchAccess> Branches);
+
+/// <summary>نقش تعریف‌شده‌ی یک شعبه، با دسترسی‌هایش و تعداد کاربرانی که آن نقش را دارند.</summary>
+public sealed record AccessRoleInfo(int Id, int BranchId, string Name, IReadOnlySet<Permission> Permissions, int AssignedUsers);

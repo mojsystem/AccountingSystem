@@ -4,7 +4,7 @@
     ViewData["Title"] = "کاربران";
 }
 
-<h1>کاربران</h1>
+<h1>کاربران و شعبه‌ها</h1>
 
 @if (TempData["Success"] is string successMessage)
 {
@@ -16,56 +16,69 @@
 }
 <div asp-validation-summary="All" class="alert error"></div>
 
-<table>
-    <thead>
-        <tr>
-            <th>نام کاربری</th>
-            <th>نام و نام خانوادگی</th>
-            <th>نقش</th>
-            <th>شعبه</th>
-            <th>وضعیت</th>
-            <th>تاریخ ثبت</th>
-        </tr>
-    </thead>
-    <tbody>
-        @foreach (var u in Model.UserList)
-        {
-            <tr>
-                <td>@u.Username</td>
-                <td>@u.FullName</td>
-                <td>@ViewFormat.RoleText(u.Role)</td>
-                <td>@(u.BranchName ?? "همه‌ی شعبه‌ها")</td>
-                <td>@(u.IsActive ? "فعال" : "غیرفعال")</td>
-                <td>@ViewFormat.Date(u.CreatedAt)</td>
-            </tr>
-        }
-    </tbody>
-</table>
-
-<h2>دسترسی‌های ویرایش و ابطال</h2>
 <p class="hint">
-    مدیر به همه‌ی دسترسی‌ها دسترسی دارد. دسترسی‌های زیر فقط به کاربر صندوق داده می‌شود و فقط برای اسناد شعبه‌ی خودش معتبر است.
-    تغییر دسترسی همان لحظه اعمال می‌شود. ثبت موجودی افتتاحیه و سند دستی جدید فقط با مدیر است.
+    هر کاربر غیرمدیر می‌تواند در چند شعبه عضو باشد و در هر شعبه فقط یک نقش داشته باشد. نقش‌ها در صفحه‌ی «نقش‌ها» تعریف می‌شوند.
+    مدیر سیستم به همه‌ی شعبه‌ها دسترسی کامل دارد و برای او نقش شعبه‌ای تعریف نمی‌شود.
 </p>
+
 @foreach (var u in Model.UserList)
 {
-    @if (u.Role == UserRole.Cashier)
-    {
-        <form method="post" asp-page-handler="Permissions" class="panel">
-            <h3>@(u.FullName) (@(u.Username)) - @(u.BranchName ?? "بدون شعبه")@(u.IsActive ? "" : " - غیرفعال")</h3>
-            <input type="hidden" name="userId" value="@u.Id" />
-            <div class="form-grid">
-                @foreach (var permission in Model.AllPermissions)
-                {
-                    <label>
-                        <input type="checkbox" name="permissions" value="@PermissionCodes.ToCode(permission)" checked="@Model.HasPermission(u.Id, permission)" />
-                        @PermissionCodes.DisplayName(permission)
-                    </label>
-                }
-            </div>
-            <div><button type="submit">ذخیره‌ی دسترسی‌ها</button></div>
-        </form>
-    }
+    <section class="panel">
+        <h2>@u.FullName <small>(@u.Username)</small></h2>
+        <p>
+            نقش سیستم: <strong>@ViewFormat.RoleText(u.Role)</strong>
+            @if (!u.IsActive)
+            {
+                <span class="badge">غیرفعال</span>
+            }
+            @if (u.Role != UserRole.Admin && u.BranchName is not null)
+            {
+                <span>— شعبه‌ی اصلی: @u.BranchName</span>
+            }
+        </p>
+        @if (u.Role == UserRole.Admin)
+        {
+            <p class="hint">مدیر سیستم به همه‌ی شعبه‌ها دسترسی کامل دارد.</p>
+        }
+        else
+        {
+            <form method="post" asp-page-handler="Memberships">
+                <input type="hidden" name="userId" value="@u.Id" />
+                <table>
+                    <thead>
+                        <tr>
+                            <th>شعبه</th>
+                            <th>نقش در این شعبه</th>
+                            <th>شعبه‌ی اصلی</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var b in Model.Branches)
+                        {
+                            var userAccess = Model.Access.TryGetValue(u.Id, out var found) ? found : null;
+                            var branchAccess = userAccess is not null && userAccess.Branches.TryGetValue(b.Id, out var inBranch) ? inBranch : null;
+                            <tr>
+                                <td>@b.Code - @b.Name</td>
+                                <td>
+                                    <select name="role_@b.Id">
+                                        <option value="">— بدون دسترسی —</option>
+                                        @foreach (var r in Model.RolesByBranch[b.Id])
+                                        {
+                                            <option value="@r.Id" selected="@(branchAccess?.RoleId == r.Id)">@r.Name</option>
+                                        }
+                                    </select>
+                                </td>
+                                <td>
+                                    <input type="radio" name="defaultBranchId" value="@b.Id" checked="@(userAccess?.DefaultBranchId == b.Id)" />
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+                <div><button type="submit">ذخیره‌ی شعبه‌ها و نقش‌ها</button></div>
+            </form>
+        }
+    </section>
 }
 
 <h2>افزودن کاربر</h2>
@@ -73,13 +86,13 @@
     <label>نام کاربری<input name="Input.Username" dir="ltr" /></label>
     <label>نام و نام خانوادگی<input name="Input.FullName" /></label>
     <label>رمز عبور (حداقل ۶ کاراکتر)<input name="Input.Password" type="password" dir="ltr" /></label>
-    <label>نقش
+    <label>نوع کاربر
         <select name="Input.Role">
-            <option value="Cashier">کاربر صندوق</option>
-            <option value="Admin">مدیر</option>
+            <option value="Cashier">کاربر شعبه</option>
+            <option value="Admin">مدیر سیستم</option>
         </select>
     </label>
-    <label>شعبه (برای کاربر صندوق الزامی است)
+    <label>شعبه‌ی اصلی (برای کاربر شعبه الزامی است)
         <select name="Input.BranchId">
             <option value="">-- انتخاب شعبه --</option>
             @foreach (var b in Model.Branches)

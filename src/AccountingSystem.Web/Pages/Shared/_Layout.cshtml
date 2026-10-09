@@ -20,6 +20,7 @@
                 {
                     <a asp-page="/Branches/Index">شعبه‌ها</a>
                     <a asp-page="/Users/Index">کاربران</a>
+                    <a asp-page="/Roles/Index">نقش‌ها</a>
                 }
             </nav>
             <form method="post" asp-page="/Account/Logout">
@@ -27,7 +28,7 @@
                     @User.Identity.Name
                     @if (User.FindFirst("BranchName")?.Value is { Length: > 0 } branchName)
                     {
-                        <text>(@branchName)</text>
+                        <text>(شعبه‌ی اصلی: @branchName)</text>
                     }
                 </span>
                 <button type="submit">خروج</button>

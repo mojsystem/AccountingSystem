@@ -35,7 +35,7 @@ public sealed class CurrencyTradeService
         var trade = await _repository.GetTradeAsync(tradeId, ct);
         if (trade is not null)
         {
-            BranchScope.ResolveForReport(user, trade.BranchId);
+            await _permissions.RequireReadAsync(user, trade.BranchId, ct);
         }
         return trade;
     }
@@ -45,7 +45,12 @@ public sealed class CurrencyTradeService
     /// </summary>
     public async Task<long> RecordTradeAsync(TradeInput input, TradeType type, CurrentUser user, DateTime now, DateTime? occurredOn = null, CancellationToken ct = default)
     {
-        var branchId = BranchScope.RequireBranch(user, input.BranchId);
+        if (input.BranchId <= 0)
+        {
+            throw new BusinessRuleException("شعبه را انتخاب کنید.");
+        }
+        await _permissions.RequireAsync(user, Permission.TradeRecord, input.BranchId, ct);
+        var branchId = input.BranchId;
         var scoped = input with { BranchId = branchId };
         var currency = await LoadCurrencyAsync(scoped.CurrencyCode, ct);
         var ledger = await _repository.GetBranchLedgerAsync(branchId, ct);

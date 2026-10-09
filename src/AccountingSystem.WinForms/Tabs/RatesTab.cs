@@ -63,7 +63,7 @@ internal sealed class RatesTab : UserControl, IRefreshable
     {
         var currencies = await _services.Admin.GetCurrenciesAsync();
         _rates = await _services.Admin.GetLatestRatesAsync(_user, UiHelpers.SelectedBranchId(_branch));
-        _branches = await _services.Branches.GetBranchesAsync();
+        _branches = await _services.Permissions.GetBranchesAsync(_user, Permission.RateSet);
 
         _filling = true;
         try

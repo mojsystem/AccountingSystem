@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Security.Claims;
 using AccountingSystem.Core.Common;
 using AccountingSystem.Core.Domain;
+using AccountingSystem.Core.Services;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Http;
@@ -34,10 +35,17 @@ public static class WebExtensions
     }
 
     /// <summary>
-    /// شعبه‌ای که صفحه باید نشان دهد: مدیر همان مقدار انتخاب‌شده (null = همه‌ی شعبه‌ها)، کاربر صندوق شعبه‌ی خودش.
+    /// شعبه‌ی فیلتر یک صفحه‌ی گزارش. شعبه‌ای که کاربر عضوش نیست کنار گذاشته می‌شود و پیام توضیح برمی‌گردد.
+    /// مدیر می‌تواند null (همه‌ی شعبه‌ها) بگیرد؛ کاربر دیگر همیشه یک شعبه (پیش‌فرض یا انتخابی‌ی مجاز) می‌بیند.
     /// </summary>
-    public static int? ScopeFor(this CurrentUser user, int? requestedBranchId) =>
-        user.Role == UserRole.Admin ? requestedBranchId : user.BranchId;
+    public static (int? Branch, string? Notice) ReadableBranchFilter(UserAccess access, int? requested)
+    {
+        if (requested is { } branchId && !PermissionRules.CanRead(access, branchId))
+        {
+            return (PermissionRules.ResolveReadBranch(access, null), "شما به اطلاعات این شعبه دسترسی ندارید؛ شعبه‌ی اصلی شما نمایش داده شد.");
+        }
+        return (PermissionRules.ResolveReadBranch(access, requested), null);
+    }
 
     public static Task SignInUserAsync(this HttpContext httpContext, CurrentUser user, bool persistent)
     {
@@ -79,5 +87,5 @@ public static class ViewFormat
 
     public static string TradeText(TradeType type) => type == TradeType.Buy ? "خرید از مشتری" : "فروش به مشتری";
 
-    public static string RoleText(UserRole role) => role == UserRole.Admin ? "مدیر" : "کاربر صندوق";
+    public static string RoleText(UserRole role) => role == UserRole.Admin ? "مدیر" : "کاربر شعبه";
 }

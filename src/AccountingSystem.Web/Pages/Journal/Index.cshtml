@@ -9,12 +9,19 @@
 <form method="get" class="panel filters">
     <label>از تاریخ (شمسی)<input name="From" value="@Model.From" dir="ltr" placeholder="۱۴۰۵/۰۷/۰۱" /></label>
     <label>تا تاریخ (شمسی)<input name="To" value="@Model.To" dir="ltr" placeholder="۱۴۰۵/۰۷/۳۰" /></label>
-    @if (Model.IsAdmin)
+    @if (Model.Notice is { } notice)
+    {
+        <p class="alert error">@notice</p>
+    }
+    @if (Model.IsAdmin || Model.ReadableBranches.Count > 1)
     {
         <label>شعبه
             <select name="BranchFilter">
-                <option value="">همه‌ی شعبه‌ها</option>
-                @foreach (var b in Model.Branches)
+                @if (Model.IsAdmin)
+                {
+                    <option value="">همه‌ی شعبه‌ها</option>
+                }
+                @foreach (var b in Model.ReadableBranches)
                 {
                     <option value="@b.Id" selected="@(Model.BranchFilter == b.Id)">@b.Code - @b.Name</option>
                 }
@@ -38,7 +45,7 @@
     <div class="alert error">@errorMessage</div>
 }
 
-@if (Model.IsAdmin)
+@if (Model.Branches.Count > 0)
 {
     <h2>ثبت سند حسابداری دستی</h2>
     <p class="hint">
@@ -100,14 +107,14 @@
                 <span class="badge void">باطل شد</span>
             }
         </h3>
-        @if (entry.SourceType == "MANUAL" && !entry.IsVoided && (Model.CanEditManual || Model.CanVoidManual))
+        @if (entry.SourceType == "MANUAL" && !entry.IsVoided && (Model.CanAt(Permission.ManualEdit, entry.BranchId) || Model.CanAt(Permission.ManualVoid, entry.BranchId)))
         {
             <div class="inline-form">
-                @if (Model.CanEditManual)
+                @if (Model.CanAt(Permission.ManualEdit, entry.BranchId))
                 {
                     <a class="link-button" asp-page="EditManual" asp-route-id="@entry.Id">ویرایش سند دستی</a>
                 }
-                @if (Model.CanVoidManual)
+                @if (Model.CanAt(Permission.ManualVoid, entry.BranchId))
                 {
                     <form method="post" asp-page-handler="VoidManual" onsubmit="return confirm('این سند دستی باطل شود؟');">
                         <input type="hidden" name="entryId" value="@entry.Id" />

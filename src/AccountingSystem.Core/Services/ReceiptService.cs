@@ -9,20 +9,19 @@ namespace AccountingSystem.Core.Services;
 public sealed class ReceiptService
 {
     private readonly IAccountingRepository _repository;
+    private readonly PermissionService _permissions;
 
     public ReceiptService(IAccountingRepository repository)
     {
         _repository = repository;
+        _permissions = new PermissionService(repository);
     }
 
     public async Task<string> RenderTradeReceiptAsync(CurrentUser actor, long tradeId, CancellationToken ct = default)
     {
         var trade = await _repository.GetTradeAsync(tradeId, ct)
             ?? throw new BusinessRuleException("معامله‌ی انتخابی یافت نشد.");
-        if (actor.Role != UserRole.Admin && actor.BranchId != trade.BranchId)
-        {
-            throw new BusinessRuleException("دسترسی به رسید این شعبه برای کاربر جاری مجاز نیست.");
-        }
+        await _permissions.RequireReadAsync(actor, trade.BranchId, ct);
 
         var currencies = await _repository.GetCurrenciesAsync(ct);
         var currency = currencies.FirstOrDefault(c => c.Code == trade.CurrencyCode)

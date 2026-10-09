@@ -16,13 +16,20 @@
 }
 <div asp-validation-summary="All" class="alert error"></div>
 
-@if (Model.IsAdmin)
+@if (Model.Notice is { } notice)
+{
+    <p class="alert error">@notice</p>
+}
+@if (Model.IsAdmin || Model.ReadableBranches.Count > 1)
 {
     <form method="get" class="panel filters">
         <label>شعبه
             <select name="BranchFilter">
-                <option value="">همه‌ی شعبه‌ها</option>
-                @foreach (var b in Model.Branches)
+                @if (Model.IsAdmin)
+                {
+                    <option value="">همه‌ی شعبه‌ها</option>
+                }
+                @foreach (var b in Model.ReadableBranches)
                 {
                     <option value="@b.Id" selected="@(Model.BranchFilter == b.Id)">@b.Code - @b.Name</option>
                 }
@@ -96,14 +103,14 @@
                     }
                 </td>
                 <td>
-                    @if (!o.IsVoided && (Model.CanEditOpenings || Model.CanVoidOpenings))
+                    @if (!o.IsVoided && (Model.CanAt(Permission.OpeningEdit, o.BranchId) || Model.CanAt(Permission.OpeningVoid, o.BranchId)))
                     {
                         <div class="inline-form">
-                            @if (Model.CanEditOpenings)
+                            @if (Model.CanAt(Permission.OpeningEdit, o.BranchId))
                             {
                                 <a class="link-button" asp-page="EditOpening" asp-route-id="@o.Id">ویرایش</a>
                             }
-                            @if (Model.CanVoidOpenings)
+                            @if (Model.CanAt(Permission.OpeningVoid, o.BranchId))
                             {
                                 <form method="post" asp-page-handler="VoidOpening" onsubmit="return confirm('این موجودی افتتاحیه باطل شود؟');">
                                     <input type="hidden" name="openingId" value="@o.Id" />
@@ -119,7 +126,7 @@
     </tbody>
 </table>
 
-@if (Model.IsAdmin)
+@if (Model.Branches.Count > 0)
 {
     <h2>موجودی افتتاحیه ریال</h2>
     <form method="post" asp-page-handler="OpeningIrr" class="panel form-grid">

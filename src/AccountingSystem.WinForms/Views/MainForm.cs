@@ -61,5 +61,5 @@ internal sealed class MainForm : Form
         }
     }
 
-    private static string RoleText(UserRole role) => role == UserRole.Admin ? "مدیر" : "کاربر صندوق";
+    private static string RoleText(UserRole role) => role == UserRole.Admin ? "مدیر" : "کاربر شعبه";
 }

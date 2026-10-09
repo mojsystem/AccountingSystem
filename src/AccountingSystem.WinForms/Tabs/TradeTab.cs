@@ -43,6 +43,7 @@ internal sealed class TradeTab : UserControl, IRefreshable
     private readonly DataGridView _grid = UiHelpers.CreateGrid();
     private IReadOnlyList<RateInfo> _rates = Array.Empty<RateInfo>();
     private IReadOnlyList<BranchInfo> _branches = Array.Empty<BranchInfo>();
+    private IReadOnlyList<BranchInfo> _readableBranches = Array.Empty<BranchInfo>();
     private IReadOnlyList<TradeInfo> _trades = Array.Empty<TradeInfo>();
     private bool _filling;
 
@@ -104,13 +105,18 @@ internal sealed class TradeTab : UserControl, IRefreshable
 
     public async Task RefreshAsync()
     {
-        var permissions = await _services.Permissions.GetPermissionsAsync(_user);
-        _edit.Visible = permissions.Contains(Permission.TradeEdit);
-        _void.Visible = permissions.Contains(Permission.TradeVoid);
+        _edit.Visible = await _services.Permissions.HasAnyAsync(_user, Permission.TradeEdit);
+        _void.Visible = await _services.Permissions.HasAnyAsync(_user, Permission.TradeVoid);
 
         var currencies = await _services.Admin.GetCurrenciesAsync();
-        _rates = await _services.Admin.GetLatestRatesAsync(_user, null);
-        _branches = await _services.Branches.GetBranchesAsync();
+        _branches = await _services.Permissions.GetBranchesAsync(_user, Permission.TradeRecord);
+        _readableBranches = await _services.Permissions.GetBranchesAsync(_user);
+        var rateList = new List<RateInfo>();
+        foreach (var branch in _branches)
+        {
+            rateList.AddRange(await _services.Admin.GetLatestRatesAsync(_user, branch.Id));
+        }
+        _rates = rateList;
 
         _filling = true;
         try
@@ -127,7 +133,7 @@ internal sealed class TradeTab : UserControl, IRefreshable
             UiHelpers.FillBranches(_branch, _branches, _user, includeAll: false, selectedValue: previousBranch);
 
             var previousFilter = (_filterBranch.SelectedItem as ComboItem)?.Value;
-            UiHelpers.FillBranches(_filterBranch, _branches, _user, includeAll: true, selectedValue: previousFilter);
+            UiHelpers.FillBranches(_filterBranch, _readableBranches, _user, includeAll: true, selectedValue: previousFilter);
         }
         finally
         {

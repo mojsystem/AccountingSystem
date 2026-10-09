@@ -24,7 +24,7 @@ public sealed class ManualJournalService
 
     public async Task<long?> CreateAsync(CurrentUser actor, int branchId, string description, DateTime? occurredOn, IReadOnlyList<JournalLineDraft> lines, DateTime now, CancellationToken ct = default)
     {
-        RoleGuard.RequireAdmin(actor);
+        await _permissions.RequireAsync(actor, Permission.ManualCreate, branchId, ct);
         if (branchId <= 0)
         {
             throw new BusinessRuleException("شعبه‌ی سند را انتخاب کنید.");
@@ -67,7 +67,7 @@ public sealed class ManualJournalService
         var entry = await _repository.GetJournalEntryAsync(entryId, ct);
         if (entry is not null)
         {
-            BranchScope.ResolveForReport(actor, entry.BranchId);
+            await _permissions.RequireReadAsync(actor, entry.BranchId, ct);
         }
         return entry;
     }

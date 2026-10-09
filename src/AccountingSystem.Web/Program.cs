@@ -22,6 +22,7 @@ builder.Services.AddRazorPages(options =>
     options.Conventions.AllowAnonymousToPage("/Error");
     options.Conventions.AuthorizeFolder("/Users", "AdminOnly");
     options.Conventions.AuthorizeFolder("/Branches", "AdminOnly");
+    options.Conventions.AuthorizeFolder("/Roles", "AdminOnly");
 });
 
 builder.Services

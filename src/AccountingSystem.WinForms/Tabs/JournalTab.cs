@@ -38,8 +38,7 @@ internal sealed class JournalTab : UserControl, IRefreshable
             _show, _excel,
             _newManual, _editManual, _voidManual,
         });
-        var isAdmin = user.Role == UserRole.Admin;
-        _newManual.Visible = isAdmin;
+        _newManual.Visible = false; // بر اساس وظیفه‌ی «ثبت سند دستی» در RefreshAsync تنظیم می‌شود.
         // ویرایش و ابطال سند دستی بر اساس دسترسی کاربر در RefreshAsync تنظیم می‌شود.
         _editManual.Visible = false;
         _voidManual.Visible = false;
@@ -56,11 +55,11 @@ internal sealed class JournalTab : UserControl, IRefreshable
 
     public async Task RefreshAsync()
     {
-        var permissions = await _services.Permissions.GetPermissionsAsync(_user);
-        _editManual.Visible = permissions.Contains(Permission.ManualEdit);
-        _voidManual.Visible = permissions.Contains(Permission.ManualVoid);
+        _newManual.Visible = await _services.Permissions.HasAnyAsync(_user, Permission.ManualCreate);
+        _editManual.Visible = await _services.Permissions.HasAnyAsync(_user, Permission.ManualEdit);
+        _voidManual.Visible = await _services.Permissions.HasAnyAsync(_user, Permission.ManualVoid);
 
-        var branches = await _services.Branches.GetBranchesAsync();
+        var branches = await _services.Permissions.GetBranchesAsync(_user);
         var previous = (_branch.SelectedItem as ComboItem)?.Value;
         UiHelpers.FillBranches(_branch, branches, _user, includeAll: true, selectedValue: previous);
 

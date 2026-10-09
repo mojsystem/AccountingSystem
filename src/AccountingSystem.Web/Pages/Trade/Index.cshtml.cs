@@ -50,11 +50,18 @@ public class IndexModel : PageModel
 
     public bool IsAdmin { get; private set; }
 
-    /// <summary>دسترسی ویرایش معامله برای کاربر جاری (مدیر همه را دارد).</summary>
-    public bool CanEditTrades { get; private set; }
+    /// <summary>دسترسی‌های کاربر جاری (برای نمایش دکمه‌ها در هر شعبه).</summary>
+    public UserAccess? Access { get; private set; }
 
-    /// <summary>دسترسی ابطال معامله برای کاربر جاری (مدیر همه را دارد).</summary>
-    public bool CanVoidTrades { get; private set; }
+    /// <summary>پیام توضیحی وقتی شعبه‌ی درخواستی قابل نمایش نیست.</summary>
+    public string? Notice { get; private set; }
+
+    /// <summary>شعبه‌هایی که کاربر می‌بیند (فیلتر گزارش).</summary>
+    public IReadOnlyList<BranchInfo> ReadableBranches { get; private set; } = Array.Empty<BranchInfo>();
+
+    public bool CanEditAt(int branchId) => Access is not null && PermissionRules.IsAllowed(Access, Permission.TradeEdit, branchId);
+
+    public bool CanVoidAt(int branchId) => Access is not null && PermissionRules.IsAllowed(Access, Permission.TradeVoid, branchId);
 
     public string? RangeError { get; private set; }
 
@@ -86,7 +93,7 @@ public class IndexModel : PageModel
             return Page();
         }
 
-        var branchId = user.Role == UserRole.Admin ? Input.BranchId : user.BranchId ?? 0;
+        var branchId = Input.BranchId;
         var input = new TradeInput(branchId, Input.CurrencyCode, amount, rate, Input.CustomerName, Input.NationalCode, Input.Note, fee);
         DateTime? occurredOn = null;
         if (!string.IsNullOrWhiteSpace(Input.OccurredOn))
@@ -133,7 +140,9 @@ public class IndexModel : PageModel
     {
         var user = User.ToCurrentUser();
         var (from, to) = ResolveRange();
-        var trades = await _reports.GetTradesAsync(user, user.ScopeFor(BranchFilter), from, to, ct);
+        var access = await _permissions.GetAccessAsync(user, ct);
+        var (branch, _) = WebExtensions.ReadableBranchFilter(access, BranchFilter);
+        var trades = await _reports.GetTradesAsync(user, branch, from, to, ct);
         var bytes = WorkbookBuilder.Trades(trades);
         return File(bytes, ExcelContentType, $"trades-{from:yyyyMMdd}-{to.AddDays(-1):yyyyMMdd}.xlsx");
     }
@@ -142,17 +151,21 @@ public class IndexModel : PageModel
     {
         var user = User.ToCurrentUser();
         IsAdmin = user.Role == UserRole.Admin;
-        var permissions = await _permissions.GetPermissionsAsync(user, ct);
-        CanEditTrades = permissions.Contains(Permission.TradeEdit);
-        CanVoidTrades = permissions.Contains(Permission.TradeVoid);
+        var access = await _permissions.GetAccessAsync(user, ct);
+        Access = access;
 
         Currencies = (await _admin.GetCurrenciesAsync(ct))
             .Where(c => c.IsActive && c.Code != CurrencyCodes.Irr)
             .ToList();
-        Branches = await _branches.GetBranchesAsync(ct);
+        Branches = await _permissions.GetBranchesAsync(user, Permission.TradeRecord, ct);
+        ReadableBranches = await _permissions.GetBranchesAsync(user, null, ct);
 
         // نرخ‌های هر شعبه‌ی قابل ثبت، برای پر کردن خودکار نرخ در فرم.
-        var rates = await _admin.GetLatestRatesAsync(user, null, ct);
+        var rates = new List<RateInfo>();
+        foreach (var formBranch in Branches)
+        {
+            rates.AddRange(await _admin.GetLatestRatesAsync(user, formBranch.Id, ct));
+        }
         RatesJson = JsonSerializer.Serialize(rates
             .GroupBy(r => r.BranchId.ToString(System.Globalization.CultureInfo.InvariantCulture))
             .ToDictionary(
@@ -160,7 +173,9 @@ public class IndexModel : PageModel
                 g => g.Select(r => new { code = r.CurrencyCode, buy = r.BuyRateIrr, sell = r.SellRateIrr }).ToList()));
 
         var (from, to) = ResolveRange();
-        Trades = await _reports.GetTradesAsync(user, user.ScopeFor(BranchFilter), from, to, ct);
+        var (readBranch, notice) = WebExtensions.ReadableBranchFilter(access, BranchFilter);
+        Notice = notice;
+        Trades = await _reports.GetTradesAsync(user, readBranch, from, to, ct);
     }
 
     /// <summary>بازه‌ی نمایش معاملات. خالی بودن تاریخ یعنی امروز؛ خطای قالب در RangeError نمایش داده می‌شود.</summary>

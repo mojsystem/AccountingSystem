@@ -8,15 +8,17 @@ namespace AccountingSystem.Core.Services;
 public sealed class ReportService
 {
     private readonly IAccountingRepository _repository;
+    private readonly PermissionService _permissions;
 
     public ReportService(IAccountingRepository repository)
     {
         _repository = repository;
+        _permissions = new PermissionService(repository);
     }
 
     public async Task<DashboardInfo> GetDashboardAsync(CurrentUser actor, int? branchId, DateTime now, CancellationToken ct = default)
     {
-        var scope = BranchScope.ResolveForReport(actor, branchId);
+        var scope = await _permissions.ResolveReadBranchAsync(actor, branchId, ct);
         var currencies = await _repository.GetCurrenciesAsync(ct);
         var boxes = await _repository.GetCashBoxesAsync(scope, ct);
         var inventory = await _repository.GetInventoryAsync(scope, ct);
@@ -47,11 +49,17 @@ public sealed class ReportService
             rates);
     }
 
-    public Task<IReadOnlyList<TradeInfo>> GetTradesAsync(CurrentUser actor, int? branchId, DateTime fromInclusive, DateTime toExclusive, CancellationToken ct = default) =>
-        _repository.GetTradesAsync(BranchScope.ResolveForReport(actor, branchId), fromInclusive, toExclusive, ct);
+    public async Task<IReadOnlyList<TradeInfo>> GetTradesAsync(CurrentUser actor, int? branchId, DateTime fromInclusive, DateTime toExclusive, CancellationToken ct = default)
+    {
+        var scope = await _permissions.ResolveReadBranchAsync(actor, branchId, ct);
+        return await _repository.GetTradesAsync(scope, fromInclusive, toExclusive, ct);
+    }
 
-    public Task<IReadOnlyList<JournalEntryInfo>> GetJournalAsync(CurrentUser actor, int? branchId, DateTime fromInclusive, DateTime toExclusive, CancellationToken ct = default) =>
-        _repository.GetJournalAsync(BranchScope.ResolveForReport(actor, branchId), fromInclusive, toExclusive, ct);
+    public async Task<IReadOnlyList<JournalEntryInfo>> GetJournalAsync(CurrentUser actor, int? branchId, DateTime fromInclusive, DateTime toExclusive, CancellationToken ct = default)
+    {
+        var scope = await _permissions.ResolveReadBranchAsync(actor, branchId, ct);
+        return await _repository.GetJournalAsync(scope, fromInclusive, toExclusive, ct);
+    }
 
     private static IReadOnlyList<PositionInfo> BuildPositions(
         IReadOnlyList<CurrencyInfo> currencies,

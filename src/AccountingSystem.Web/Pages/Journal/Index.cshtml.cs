@@ -117,11 +117,16 @@ public class IndexModel : PageModel
 
     public bool IsAdmin { get; private set; }
 
-    /// <summary>دسترسی ویرایش سند دستی برای کاربر جاری (مدیر همه را دارد).</summary>
-    public bool CanEditManual { get; private set; }
+    /// <summary>دسترسی‌های کاربر جاری (برای نمایش دکمه‌ها در هر شعبه).</summary>
+    public UserAccess? Access { get; private set; }
 
-    /// <summary>دسترسی ابطال سند دستی برای کاربر جاری (مدیر همه را دارد).</summary>
-    public bool CanVoidManual { get; private set; }
+    /// <summary>پیام توضیحی وقتی شعبه‌ی درخواستی قابل نمایش نیست.</summary>
+    public string? Notice { get; private set; }
+
+    /// <summary>شعبه‌هایی که کاربر می‌بیند (فیلتر گزارش).</summary>
+    public IReadOnlyList<BranchInfo> ReadableBranches { get; private set; } = Array.Empty<BranchInfo>();
+
+    public bool CanAt(Permission permission, int branchId) => Access is not null && PermissionRules.IsAllowed(Access, permission, branchId);
 
     public string? RangeError { get; private set; }
 
@@ -129,23 +134,26 @@ public class IndexModel : PageModel
     {
         var user = User.ToCurrentUser();
         IsAdmin = user.Role == UserRole.Admin;
-        var permissions = await _permissions.GetPermissionsAsync(user, ct);
-        CanEditManual = permissions.Contains(Permission.ManualEdit);
-        CanVoidManual = permissions.Contains(Permission.ManualVoid);
-        Branches = await _branches.GetBranchesAsync(ct);
-        if (IsAdmin)
+        var access = await _permissions.GetAccessAsync(user, ct);
+        Access = access;
+        Branches = await _permissions.GetBranchesAsync(user, Permission.ManualCreate, ct);
+        ReadableBranches = await _permissions.GetBranchesAsync(user, null, ct);
+        if (Branches.Count > 0)
         {
             Accounts = await _manual.GetAccountsAsync(ct);
         }
         var (from, to) = ResolveRange();
-        Entries = await _reports.GetJournalAsync(user, user.ScopeFor(BranchFilter), from, to, ct);
+        var (readBranch, notice) = WebExtensions.ReadableBranchFilter(access, BranchFilter);
+        Notice = notice;
+        Entries = await _reports.GetJournalAsync(user, readBranch, from, to, ct);
     }
 
     public async Task<IActionResult> OnGetExcelAsync(CancellationToken ct)
     {
         var user = User.ToCurrentUser();
         var (from, to) = ResolveRange();
-        var entries = await _reports.GetJournalAsync(user, user.ScopeFor(BranchFilter), from, to, ct);
+        var (exportBranch, _) = WebExtensions.ReadableBranchFilter(await _permissions.GetAccessAsync(user, ct), BranchFilter);
+        var entries = await _reports.GetJournalAsync(user, exportBranch, from, to, ct);
         var bytes = WorkbookBuilder.Journal(entries);
         return File(bytes, ExcelContentType, $"journal-{from:yyyyMMdd}-{to.AddDays(-1):yyyyMMdd}.xlsx");
     }

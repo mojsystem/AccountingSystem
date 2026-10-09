@@ -43,9 +43,8 @@ internal sealed class OpeningsTab : UserControl, IRefreshable
 
     public async Task RefreshAsync()
     {
-        var permissions = await _services.Permissions.GetPermissionsAsync(_user);
-        _edit.Visible = permissions.Contains(Permission.OpeningEdit);
-        _void.Visible = permissions.Contains(Permission.OpeningVoid);
+        _edit.Visible = await _services.Permissions.HasAnyAsync(_user, Permission.OpeningEdit);
+        _void.Visible = await _services.Permissions.HasAnyAsync(_user, Permission.OpeningVoid);
 
         var today = DateTime.Today;
         _openings = await _services.Admin.GetOpeningsAsync(_user, null, today.AddDays(-90), today.AddDays(1));

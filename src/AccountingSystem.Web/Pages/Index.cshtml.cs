@@ -9,12 +9,12 @@ namespace AccountingSystem.Web.Pages;
 public class IndexModel : PageModel
 {
     private readonly ReportService _reports;
-    private readonly BranchService _branches;
+    private readonly PermissionService _permissions;
 
-    public IndexModel(ReportService reports, BranchService branches)
+    public IndexModel(ReportService reports, PermissionService permissions)
     {
         _reports = reports;
-        _branches = branches;
+        _permissions = permissions;
     }
 
     [BindProperty(SupportsGet = true)]
@@ -26,11 +26,16 @@ public class IndexModel : PageModel
 
     public bool IsAdmin { get; private set; }
 
+    public string? Notice { get; private set; }
+
     public async Task OnGetAsync(CancellationToken ct)
     {
         var user = User.ToCurrentUser();
         IsAdmin = user.Role == UserRole.Admin;
-        Branches = await _branches.GetBranchesAsync(ct);
-        Dashboard = await _reports.GetDashboardAsync(user, user.ScopeFor(BranchFilter), DateTime.Now, ct);
+        var access = await _permissions.GetAccessAsync(user, ct);
+        Branches = await _permissions.GetBranchesAsync(user, null, ct);
+        var (branch, notice) = WebExtensions.ReadableBranchFilter(access, BranchFilter);
+        Notice = notice;
+        Dashboard = await _reports.GetDashboardAsync(user, branch, DateTime.Now, ct);
     }
 }

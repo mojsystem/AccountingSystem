@@ -39,11 +39,16 @@ public class IndexModel : PageModel
 
     public bool IsAdmin { get; private set; }
 
-    /// <summary>دسترسی ویرایش موجودی افتتاحیه برای کاربر جاری (مدیر همه را دارد).</summary>
-    public bool CanEditOpenings { get; private set; }
+    /// <summary>دسترسی‌های کاربر جاری (برای نمایش دکمه‌ها در هر شعبه).</summary>
+    public UserAccess? Access { get; private set; }
 
-    /// <summary>دسترسی ابطال موجودی افتتاحیه برای کاربر جاری (مدیر همه را دارد).</summary>
-    public bool CanVoidOpenings { get; private set; }
+    /// <summary>پیام توضیحی وقتی شعبه‌ی درخواستی قابل نمایش نیست.</summary>
+    public string? Notice { get; private set; }
+
+    /// <summary>شعبه‌هایی که کاربر می‌بیند (فیلتر گزارش).</summary>
+    public IReadOnlyList<BranchInfo> ReadableBranches { get; private set; } = Array.Empty<BranchInfo>();
+
+    public bool CanAt(Permission permission, int branchId) => Access is not null && PermissionRules.IsAllowed(Access, permission, branchId);
 
     public IReadOnlyList<OpeningInfo> Openings { get; private set; } = Array.Empty<OpeningInfo>();
 
@@ -129,7 +134,8 @@ public class IndexModel : PageModel
     public async Task<IActionResult> OnGetExcelAsync(CancellationToken ct)
     {
         var user = User.ToCurrentUser();
-        var boxes = await _admin.GetCashBoxesAsync(user, user.ScopeFor(BranchFilter), ct);
+        var (exportBranch, _) = WebExtensions.ReadableBranchFilter(await _permissions.GetAccessAsync(user, ct), BranchFilter);
+        var boxes = await _admin.GetCashBoxesAsync(user, exportBranch, ct);
         return File(WorkbookBuilder.CashBoxes(boxes), ExcelContentType, $"cash-boxes-{DateTime.Now:yyyyMMdd}.xlsx");
     }
 
@@ -144,11 +150,13 @@ public class IndexModel : PageModel
         Openings = await LoadOpeningsAsync(ct);
         var user = User.ToCurrentUser();
         IsAdmin = user.Role == UserRole.Admin;
-        var permissions = await _permissions.GetPermissionsAsync(user, ct);
-        CanEditOpenings = permissions.Contains(Permission.OpeningEdit);
-        CanVoidOpenings = permissions.Contains(Permission.OpeningVoid);
-        Boxes = await _admin.GetCashBoxesAsync(user, user.ScopeFor(BranchFilter), ct);
-        Branches = await _branches.GetBranchesAsync(ct);
+        var access = await _permissions.GetAccessAsync(user, ct);
+        Access = access;
+        var (readBranch, notice) = WebExtensions.ReadableBranchFilter(access, BranchFilter);
+        Notice = notice;
+        Boxes = await _admin.GetCashBoxesAsync(user, readBranch, ct);
+        Branches = await _permissions.GetBranchesAsync(user, Permission.OpeningCreate, ct);
+        ReadableBranches = await _permissions.GetBranchesAsync(user, null, ct);
         var all = await _admin.GetCurrenciesAsync(ct);
         Currencies = all.Where(c => c.IsActive && c.Code != CurrencyCodes.Irr).ToList();
     }

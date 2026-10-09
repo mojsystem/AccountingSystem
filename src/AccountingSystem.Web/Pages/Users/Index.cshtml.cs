@@ -1,3 +1,4 @@
+using System.Globalization;
 using AccountingSystem.Core.Common;
 using AccountingSystem.Core.Domain;
 using AccountingSystem.Core.Services;
@@ -26,12 +27,12 @@ public class IndexModel : PageModel
 
     public IReadOnlyList<BranchInfo> Branches { get; private set; } = Array.Empty<BranchInfo>();
 
-    /// <summary>دسترسی‌های اضافی کاربران صندوق، با کلید شناسه‌ی کاربر.</summary>
-    public IReadOnlyDictionary<int, IReadOnlySet<Permission>> Assignments { get; private set; } =
-        new Dictionary<int, IReadOnlySet<Permission>>();
+    /// <summary>دسترسی هر کاربر در همه‌ی شعبه‌ها، با کلید شناسه‌ی کاربر.</summary>
+    public IReadOnlyDictionary<int, UserAccess> Access { get; private set; } = new Dictionary<int, UserAccess>();
 
-    /// <summary>همه‌ی دسترسی‌های قابل اعطا، به ترتیب نمایش.</summary>
-    public IReadOnlyList<Permission> AllPermissions { get; } = Enum.GetValues<Permission>();
+    /// <summary>نقش‌های تعریف‌شده‌ی هر شعبه، با کلید شناسه‌ی شعبه.</summary>
+    public IReadOnlyDictionary<int, IReadOnlyList<AccessRoleInfo>> RolesByBranch { get; private set; } =
+        new Dictionary<int, IReadOnlyList<AccessRoleInfo>>();
 
     public async Task OnGetAsync(CancellationToken ct)
     {
@@ -52,7 +53,7 @@ public class IndexModel : PageModel
                 Input.BranchId,
                 DateTime.Now,
                 ct);
-            TempData["Success"] = "کاربر جدید ثبت شد.";
+            TempData["Success"] = "کاربر جدید ثبت شد. شعبه‌ها و نقش‌های او را در همین صفحه تنظیم کنید.";
             return RedirectToPage();
         }
         catch (BusinessRuleException ex)
@@ -64,23 +65,26 @@ public class IndexModel : PageModel
     }
 
     /// <summary>
-    /// تنظیم دسترسی‌های ویرایش و ابطال یک کاربر صندوق (فقط مدیر). دسترسی‌های تیک‌خورده جایگزین قبلی‌ها می‌شوند.
+    /// ذخیره‌ی عضویت‌های یک کاربر: برای هر شعبه یک نقش یا هیچ‌کدام، و شعبه‌ی اصلی. تغییرات همان لحظه اعمال می‌شوند.
     /// </summary>
-    public async Task<IActionResult> OnPostPermissionsAsync(int userId, List<string>? permissions, CancellationToken ct)
+    public async Task<IActionResult> OnPostMembershipsAsync(int userId, int? defaultBranchId, CancellationToken ct)
     {
         try
         {
-            var selected = new List<Permission>();
-            foreach (var code in permissions ?? new List<string>())
+            var actor = User.ToCurrentUser();
+            var branches = await _branches.GetBranchesAsync(ct);
+            var roleByBranch = new Dictionary<int, int?>();
+            foreach (var branch in branches)
             {
-                if (!PermissionCodes.TryParse(code, out var permission))
-                {
-                    throw new BusinessRuleException("دسترسی انتخابی نامعتبر است.");
-                }
-                selected.Add(permission);
+                var raw = Request.Form["role_" + branch.Id.ToString(CultureInfo.InvariantCulture)].ToString();
+                var parsedOk = int.TryParse(raw, NumberStyles.Integer, CultureInfo.InvariantCulture, out var roleId);
+                roleByBranch[branch.Id] = parsedOk && roleId > 0 ? roleId : (int?)null;
             }
-            await _permissions.SetPermissionsAsync(User.ToCurrentUser(), userId, selected, DateTime.Now, ct);
-            TempData["Success"] = "دسترسی‌های کاربر به‌روز شد و همان لحظه اعمال می‌شود.";
+
+            var current = await _permissions.GetAllAccessAsync(actor, ct);
+            int? fallbackDefault = current.TryGetValue(userId, out var currentAccess) ? currentAccess.DefaultBranchId : null;
+            await _permissions.ApplyMembershipsAsync(actor, userId, roleByBranch, defaultBranchId ?? fallbackDefault, DateTime.Now, ct);
+            TempData["Success"] = "شعبه‌ها و نقش‌های کاربر به‌روز شد و همان لحظه اعمال می‌شود.";
         }
         catch (Exception ex) when (ex is BusinessRuleException or ConcurrencyConflictException)
         {
@@ -89,15 +93,18 @@ public class IndexModel : PageModel
         return RedirectToPage();
     }
 
-    public bool HasPermission(int userId, Permission permission) =>
-        Assignments.TryGetValue(userId, out var set) && set.Contains(permission);
-
     private async Task LoadAsync(CancellationToken ct)
     {
         var user = User.ToCurrentUser();
         UserList = await _users.GetUsersAsync(user, ct);
         Branches = await _branches.GetBranchesAsync(ct);
-        Assignments = await _permissions.GetAssignmentsAsync(user, ct);
+        Access = await _permissions.GetAllAccessAsync(user, ct);
+        var roles = new Dictionary<int, IReadOnlyList<AccessRoleInfo>>();
+        foreach (var branch in Branches)
+        {
+            roles[branch.Id] = await _permissions.GetRolesAsync(user, branch.Id, ct);
+        }
+        RolesByBranch = roles;
     }
 }
 
@@ -111,6 +118,6 @@ public sealed class NewUserForm
 
     public string Role { get; set; } = "Cashier";
 
-    /// <summary>شعبه‌ی کاربر صندوق. برای مدیر نادیده گرفته می‌شود.</summary>
+    /// <summary>شعبه‌ی اصلی کاربر شعبه (کاربر با نقش «کاربر صندوق» در این شعبه ساخته می‌شود). برای مدیر نادیده گرفته می‌شود.</summary>
     public int? BranchId { get; set; }
 }

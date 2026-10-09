@@ -18,6 +18,7 @@ public sealed class SqlAccountingRepository : IAccountingRepository
 {
     private const int DuplicateKeyError = 2627;
     private const int UniqueIndexError = 2601;
+    private const int ForeignKeyError = 547;
 
     private const string OpeningSelect = @"
 SELECT o.Id, o.BranchId, br.Name, o.CurrencyCode, o.Quantity, o.RateIrr, o.CostIrr, o.OccurredAt, u.Username, o.IsVoided, o.VoidReason
@@ -83,6 +84,11 @@ LEFT JOIN dbo.Users vu ON vu.Id = t.VoidedBy";
                     "INSERT INTO dbo.CurrencyInventory (BranchId, CurrencyCode, TotalCostIrr, UpdatedAt) SELECT @branchId, c.Code, 0, @now FROM dbo.Currencies c WHERE c.Code <> N'IRR';",
                     new SqlParameter("@branchId", branchId),
                     new SqlParameter("@now", now));
+
+                foreach (var preset in RolePresets.All)
+                {
+                    await InsertRoleAsync(conn, tx, branchId, preset.Name, preset.Permissions, null, now, ct);
+                }
 
                 return branchId;
             }, ct);
@@ -905,134 +911,394 @@ ORDER BY t.OccurredAt DESC, t.Id DESC;";
         return await QueryTradeAsync(conn, tradeId, ct);
     }
 
-    /// <summary>دسترسی‌های کاربر از جدول کاربران و جدول دسترسی‌ها؛ در هر بار فراخوانی تازه خوانده می‌شود.</summary>
+    /// <summary>
+    /// دسترسی کاربر (نقش سیستمی، فعال بودن، شعبه‌ی اصلی و عضویت‌ها با نقش هر شعبه)؛ در هر بار فراخوانی تازه خوانده می‌شود.
+    /// </summary>
     public async Task<UserAccess?> GetUserAccessAsync(int userId, CancellationToken ct = default)
     {
-        const string userSql = "SELECT Role, IsActive, BranchId FROM dbo.Users WHERE Id = @userId;";
-        const string permissionSql = "SELECT Permission FROM dbo.UserPermissions WHERE UserId = @userId;";
         await using var conn = await OpenAsync(ct);
-
-        UserRole role;
-        bool isActive;
-        int? branchId;
-        await using (var cmd = new SqlCommand(userSql, conn))
-        {
-            cmd.Parameters.Add(new SqlParameter("@userId", userId));
-            await using var reader = await cmd.ExecuteReaderAsync(ct);
-            if (!await reader.ReadAsync(ct))
-            {
-                return null;
-            }
-            role = ParseRole(reader.GetString(0));
-            isActive = reader.GetBoolean(1);
-            branchId = reader.IsDBNull(2) ? (int?)null : reader.GetInt32(2);
-        }
-
-        var permissions = new HashSet<Permission>();
-        await using (var cmd = new SqlCommand(permissionSql, conn))
-        {
-            cmd.Parameters.Add(new SqlParameter("@userId", userId));
-            await using var reader = await cmd.ExecuteReaderAsync(ct);
-            while (await reader.ReadAsync(ct))
-            {
-                if (PermissionCodes.TryParse(reader.GetString(0), out var permission))
-                {
-                    permissions.Add(permission);
-                }
-            }
-        }
-        return new UserAccess(userId, role, isActive, branchId, permissions);
+        var all = await ReadAccessAsync(conn, userId, ct);
+        return all.TryGetValue(userId, out var access) ? access : null;
     }
 
-    public async Task<IReadOnlyDictionary<int, IReadOnlySet<Permission>>> GetAllUserPermissionsAsync(CancellationToken ct = default)
+    public async Task<IReadOnlyDictionary<int, UserAccess>> GetAllUserAccessAsync(CancellationToken ct = default)
     {
-        const string sql = "SELECT UserId, Permission FROM dbo.UserPermissions;";
-        var result = new Dictionary<int, HashSet<Permission>>();
+        await using var conn = await OpenAsync(ct);
+        return await ReadAccessAsync(conn, null, ct);
+    }
+
+    public async Task<IReadOnlyList<AccessRoleInfo>> GetRolesAsync(int branchId, CancellationToken ct = default)
+    {
+        const string sql = @"
+SELECT r.Id, r.Name, p.Permission,
+       (SELECT COUNT(*) FROM dbo.UserBranchRoles m WHERE m.RoleId = r.Id) AS AssignedUsers
+FROM dbo.AccessRoles r
+LEFT JOIN dbo.AccessRolePermissions p ON p.RoleId = r.Id
+WHERE r.BranchId = @branchId;";
+        var roles = new Dictionary<int, (string Name, int Assigned, HashSet<Permission> Permissions)>();
         await using var conn = await OpenAsync(ct);
         await using var cmd = new SqlCommand(sql, conn);
+        cmd.Parameters.Add(new SqlParameter("@branchId", branchId));
         await using var reader = await cmd.ExecuteReaderAsync(ct);
         while (await reader.ReadAsync(ct))
         {
-            if (!PermissionCodes.TryParse(reader.GetString(1), out var permission))
+            var roleId = reader.GetInt32(0);
+            if (!roles.TryGetValue(roleId, out var role))
             {
-                continue;
+                role = (reader.GetString(1), reader.GetInt32(3), new HashSet<Permission>());
+                roles[roleId] = role;
             }
-            var userId = reader.GetInt32(0);
-            if (!result.TryGetValue(userId, out var set))
+            if (!reader.IsDBNull(2) && PermissionCodes.TryParse(reader.GetString(2), out var permission))
             {
-                set = new HashSet<Permission>();
-                result[userId] = set;
+                role.Permissions.Add(permission);
             }
-            set.Add(permission);
         }
-        return result.ToDictionary(pair => pair.Key, pair => (IReadOnlySet<Permission>)pair.Value);
+        return roles
+            .OrderBy(pair => pair.Value.Name)
+            .Select(pair => new AccessRoleInfo(pair.Key, branchId, pair.Value.Name, pair.Value.Permissions, pair.Value.Assigned))
+            .ToList();
+    }
+
+    public async Task<int> CreateRoleAsync(int branchId, string name, IReadOnlyCollection<Permission> permissions, int actorId, DateTime now, CancellationToken ct = default)
+    {
+        try
+        {
+            return await WithTransactionAsync(async (conn, tx) =>
+            {
+                var roleId = await InsertRoleAsync(conn, tx, branchId, name, permissions, actorId, now, ct);
+                await InsertAuditAsync(conn, tx, actorId, now, "ROLE_CREATE", "ROLE", roleId,
+                    $"«{name}» در شعبه {branchId} با دسترسی‌های: {DescribePermissions(permissions)}", ct);
+                return roleId;
+            }, ct);
+        }
+        catch (SqlException ex) when (ex.Number is DuplicateKeyError or UniqueIndexError)
+        {
+            throw new BusinessRuleException("نقشی با این نام در این شعبه وجود دارد.");
+        }
     }
 
     /// <summary>
     /// فقط تفاوت‌ها اعمال می‌شوند: دسترسی‌های حذف‌شده پاک و دسترسی‌های تازه ثبت می‌شوند. تغییر در سابقه ثبت می‌شود.
     /// </summary>
-    public async Task SetUserPermissionsAsync(int userId, IReadOnlyCollection<Permission> permissions, int actorId, DateTime now, CancellationToken ct = default)
+    public async Task SetRolePermissionsAsync(int roleId, IReadOnlyCollection<Permission> permissions, int actorId, DateTime now, CancellationToken ct = default)
     {
         try
         {
-            await ApplyUserPermissionsAsync(userId, permissions, actorId, now, ct);
+            await WithTransactionAsync(async (conn, tx) =>
+            {
+                var role = await ReadRoleAsync(conn, tx, roleId, ct)
+                    ?? throw new BusinessRuleException("نقش انتخاب‌شده پیدا نشد.");
+                var current = await ReadRolePermissionsAsync(conn, tx, roleId, ct);
+                var wanted = new HashSet<Permission>(permissions);
+                var added = wanted.Except(current).ToList();
+                var removed = current.Except(wanted).ToList();
+                if (added.Count == 0 && removed.Count == 0)
+                {
+                    return false;
+                }
+
+                foreach (var permission in removed)
+                {
+                    await ExecuteAsync(conn, tx, ct,
+                        "DELETE FROM dbo.AccessRolePermissions WHERE RoleId = @roleId AND Permission = @code;",
+                        new SqlParameter("@roleId", roleId),
+                        new SqlParameter("@code", PermissionCodes.ToCode(permission)));
+                }
+                foreach (var permission in added)
+                {
+                    await ExecuteAsync(conn, tx, ct,
+                        "INSERT INTO dbo.AccessRolePermissions (RoleId, Permission) VALUES (@roleId, @code);",
+                        new SqlParameter("@roleId", roleId),
+                        new SqlParameter("@code", PermissionCodes.ToCode(permission)));
+                }
+
+                await InsertAuditAsync(conn, tx, actorId, now, "ROLE_PERMISSIONS", "ROLE", roleId,
+                    $"«{role.Name}» افزوده: {DescribePermissions(added)}؛ حذف: {DescribePermissions(removed)}", ct);
+                return true;
+            }, ct);
         }
         catch (SqlException ex) when (ex.Number is DuplicateKeyError or UniqueIndexError)
         {
-            // دو ثبت هم‌زمان (مثلاً دو بار کلیک روی ذخیره) یک دسترسی را دوبار درج کرده‌اند.
+            // دو ذخیره‌ی هم‌زمان یک دسترسی را دوبار درج کرده‌اند.
             throw new ConcurrencyConflictException();
         }
     }
 
-    private Task ApplyUserPermissionsAsync(int userId, IReadOnlyCollection<Permission> permissions, int actorId, DateTime now, CancellationToken ct)
+    /// <summary>نقش را حذف می‌کند؛ اگر هنوز به کاربری داده شده باشد، خطای کاربری برمی‌گرداند.</summary>
+    public async Task DeleteRoleAsync(int roleId, int actorId, DateTime now, CancellationToken ct = default)
     {
-        return WithTransactionAsync<bool>(async (conn, tx) =>
+        try
         {
-            var current = new HashSet<Permission>();
-            await using (var cmd = new SqlCommand("SELECT Permission FROM dbo.UserPermissions WHERE UserId = @userId;", conn, tx))
+            await WithTransactionAsync(async (conn, tx) =>
             {
-                cmd.Parameters.Add(new SqlParameter("@userId", userId));
-                await using var reader = await cmd.ExecuteReaderAsync(ct);
-                while (await reader.ReadAsync(ct))
+                var role = await ReadRoleAsync(conn, tx, roleId, ct)
+                    ?? throw new BusinessRuleException("نقش انتخاب‌شده پیدا نشد.");
+                var assigned = Convert.ToInt32(await ScalarAsync(conn, tx, ct,
+                    "SELECT COUNT(*) FROM dbo.UserBranchRoles WHERE RoleId = @roleId;",
+                    new SqlParameter("@roleId", roleId)), CultureInfo.InvariantCulture);
+                if (assigned > 0)
                 {
-                    if (PermissionCodes.TryParse(reader.GetString(0), out var existing))
-                    {
-                        current.Add(existing);
-                    }
+                    throw new BusinessRuleException($"این نقش به {assigned} کاربر داده شده است. اول نقش آن‌ها را در این شعبه تغییر دهید.");
                 }
+
+                await ExecuteAsync(conn, tx, ct,
+                    "DELETE FROM dbo.AccessRolePermissions WHERE RoleId = @roleId;",
+                    new SqlParameter("@roleId", roleId));
+                await ExecuteAsync(conn, tx, ct,
+                    "DELETE FROM dbo.AccessRoles WHERE Id = @roleId;",
+                    new SqlParameter("@roleId", roleId));
+                await InsertAuditAsync(conn, tx, actorId, now, "ROLE_DELETE", "ROLE", roleId,
+                    $"«{role.Name}» از شعبه {role.BranchId} حذف شد", ct);
+                return true;
+            }, ct);
+        }
+        catch (SqlException ex) when (ex.Number == ForeignKeyError)
+        {
+            throw new BusinessRuleException("این نقش هنوز به کاربری داده شده است.");
+        }
+    }
+
+    /// <summary>
+    /// عضویت کاربر در شعبه را با نقش داده‌شده می‌گذارد یا (roleId = null) حذف می‌کند.
+    /// نقش باید متعلق به همان شعبه باشد و شعبه‌ی اصلی کاربر نمی‌تواند حذف شود.
+    /// </summary>
+    public async Task SetMembershipAsync(int userId, int branchId, int? roleId, int actorId, DateTime now, CancellationToken ct = default)
+    {
+        try
+        {
+            await WithTransactionAsync(async (conn, tx) =>
+            {
+                var currentRoleId = ToNullableInt(await ScalarAsync(conn, tx, ct,
+                    "SELECT RoleId FROM dbo.UserBranchRoles WHERE UserId = @userId AND BranchId = @branchId;",
+                    new SqlParameter("@userId", userId),
+                    new SqlParameter("@branchId", branchId)));
+                var defaultBranchId = ToNullableInt(await ScalarAsync(conn, tx, ct,
+                    "SELECT BranchId FROM dbo.Users WHERE Id = @userId;",
+                    new SqlParameter("@userId", userId)));
+
+                if (roleId is null)
+                {
+                    if (currentRoleId is null)
+                    {
+                        return false;
+                    }
+                    if (defaultBranchId == branchId)
+                    {
+                        throw new BusinessRuleException("این شعبه، شعبه‌ی اصلی کاربر است. اول شعبه‌ی اصلی دیگری انتخاب کنید.");
+                    }
+                    await ExecuteAsync(conn, tx, ct,
+                        "DELETE FROM dbo.UserBranchRoles WHERE UserId = @userId AND BranchId = @branchId;",
+                        new SqlParameter("@userId", userId),
+                        new SqlParameter("@branchId", branchId));
+                    await InsertAuditAsync(conn, tx, actorId, now, "USER_BRANCH_ROLE", "USER", userId,
+                        $"شعبه {branchId}: عضویت حذف شد", ct);
+                    return true;
+                }
+
+                if (currentRoleId == roleId)
+                {
+                    return false;
+                }
+                var role = await ReadRoleAsync(conn, tx, roleId.Value, ct)
+                    ?? throw new BusinessRuleException("نقش انتخابی پیدا نشد.");
+                if (role.BranchId != branchId)
+                {
+                    throw new BusinessRuleException("نقش انتخابی متعلق به این شعبه نیست.");
+                }
+
+                if (currentRoleId is null)
+                {
+                    await ExecuteAsync(conn, tx, ct, @"
+INSERT INTO dbo.UserBranchRoles (UserId, BranchId, RoleId, GrantedBy, GrantedAt)
+VALUES (@userId, @branchId, @roleId, @actorId, @now);",
+                        new SqlParameter("@userId", userId),
+                        new SqlParameter("@branchId", branchId),
+                        new SqlParameter("@roleId", roleId.Value),
+                        new SqlParameter("@actorId", actorId),
+                        new SqlParameter("@now", now));
+                }
+                else
+                {
+                    await ExecuteAsync(conn, tx, ct, @"
+UPDATE dbo.UserBranchRoles
+SET RoleId = @roleId, GrantedBy = @actorId, GrantedAt = @now
+WHERE UserId = @userId AND BranchId = @branchId;",
+                        new SqlParameter("@userId", userId),
+                        new SqlParameter("@branchId", branchId),
+                        new SqlParameter("@roleId", roleId.Value),
+                        new SqlParameter("@actorId", actorId),
+                        new SqlParameter("@now", now));
+                }
+
+                await InsertAuditAsync(conn, tx, actorId, now, "USER_BRANCH_ROLE", "USER", userId,
+                    $"شعبه {branchId}: نقش «{role.Name}»", ct);
+                return true;
+            }, ct);
+        }
+        catch (SqlException ex) when (ex.Number == ForeignKeyError)
+        {
+            throw new BusinessRuleException("شعبه یا نقش انتخابی معتبر نیست.");
+        }
+    }
+
+    /// <summary>شعبه‌ی اصلی کاربر را تغییر می‌دهد؛ شعبه باید یکی از عضویت‌های همان کاربر باشد.</summary>
+    public async Task SetDefaultBranchAsync(int userId, int branchId, int actorId, DateTime now, CancellationToken ct = default)
+    {
+        await WithTransactionAsync(async (conn, tx) =>
+        {
+            var memberCount = Convert.ToInt32(await ScalarAsync(conn, tx, ct,
+                "SELECT COUNT(*) FROM dbo.UserBranchRoles WHERE UserId = @userId AND BranchId = @branchId;",
+                new SqlParameter("@userId", userId),
+                new SqlParameter("@branchId", branchId)), CultureInfo.InvariantCulture);
+            if (memberCount == 0)
+            {
+                throw new BusinessRuleException("شعبه‌ی اصلی باید یکی از شعبه‌هایی باشد که کاربر در آن عضو است.");
             }
 
-            var wanted = new HashSet<Permission>(permissions);
-            var added = wanted.Except(current).ToList();
-            var removed = current.Except(wanted).ToList();
-            if (added.Count == 0 && removed.Count == 0)
+            var previous = ToNullableInt(await ScalarAsync(conn, tx, ct,
+                "SELECT BranchId FROM dbo.Users WHERE Id = @userId;",
+                new SqlParameter("@userId", userId)));
+            if (previous == branchId)
             {
                 return false;
             }
 
-            foreach (var permission in removed)
-            {
-                await ExecuteAsync(conn, tx, ct,
-                    "DELETE FROM dbo.UserPermissions WHERE UserId = @userId AND Permission = @code;",
-                    new SqlParameter("@userId", userId),
-                    new SqlParameter("@code", PermissionCodes.ToCode(permission)));
-            }
-            foreach (var permission in added)
-            {
-                await ExecuteAsync(conn, tx, ct, @"
-INSERT INTO dbo.UserPermissions (UserId, Permission, GrantedBy, GrantedAt)
-VALUES (@userId, @code, @actorId, @now);",
-                    new SqlParameter("@userId", userId),
-                    new SqlParameter("@code", PermissionCodes.ToCode(permission)),
-                    new SqlParameter("@actorId", actorId),
-                    new SqlParameter("@now", now));
-            }
-
-            await InsertAuditAsync(conn, tx, actorId, now, "USER_PERMISSIONS", "USER", userId,
-                $"افزوده: {DescribePermissions(added)}؛ حذف: {DescribePermissions(removed)}", ct);
+            await ExecuteAsync(conn, tx, ct,
+                "UPDATE dbo.Users SET BranchId = @branchId WHERE Id = @userId;",
+                new SqlParameter("@userId", userId),
+                new SqlParameter("@branchId", branchId));
+            await InsertAuditAsync(conn, tx, actorId, now, "USER_DEFAULT_BRANCH", "USER", userId,
+                $"شعبه‌ی اصلی: {previous?.ToString(CultureInfo.InvariantCulture) ?? "—"} → {branchId}", ct);
             return true;
         }, ct);
     }
+
+    /// <summary>
+    /// خواندن دسترسی یک کاربر یا همه‌ی کاربران. عضویت‌ها و دسترسی‌های نقش‌ها در یک پرس‌وجو می‌آیند.
+    /// </summary>
+    private static async Task<Dictionary<int, UserAccess>> ReadAccessAsync(SqlConnection conn, int? userId, CancellationToken ct)
+    {
+        var filter = userId is null ? string.Empty : "\nWHERE u.Id = @userId";
+        var sql = @"
+SELECT u.Id, u.Role, u.IsActive, u.BranchId, m.BranchId, br.Name, m.RoleId, ar.Name, p.Permission
+FROM dbo.Users u
+LEFT JOIN dbo.UserBranchRoles m ON m.UserId = u.Id
+LEFT JOIN dbo.Branches br ON br.Id = m.BranchId
+LEFT JOIN dbo.AccessRoles ar ON ar.Id = m.RoleId
+LEFT JOIN dbo.AccessRolePermissions p ON p.RoleId = m.RoleId" + filter + ";";
+
+        var users = new Dictionary<int, (UserRole Role, bool IsActive, int? DefaultBranchId)>();
+        var memberships = new Dictionary<int, Dictionary<int, (string BranchName, int RoleId, string RoleName, HashSet<Permission> Permissions)>>();
+        await using var cmd = new SqlCommand(sql, conn);
+        if (userId is { } id)
+        {
+            cmd.Parameters.Add(new SqlParameter("@userId", id));
+        }
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+        {
+            var uid = reader.GetInt32(0);
+            if (!users.ContainsKey(uid))
+            {
+                users[uid] = (ParseRole(reader.GetString(1)), reader.GetBoolean(2), reader.IsDBNull(3) ? (int?)null : reader.GetInt32(3));
+                memberships[uid] = new Dictionary<int, (string BranchName, int RoleId, string RoleName, HashSet<Permission> Permissions)>();
+            }
+            if (reader.IsDBNull(4))
+            {
+                continue;
+            }
+
+            var branchId = reader.GetInt32(4);
+            var byBranch = memberships[uid];
+            if (!byBranch.TryGetValue(branchId, out var entry))
+            {
+                entry = (reader.GetString(5), reader.GetInt32(6), reader.GetString(7), new HashSet<Permission>());
+                byBranch[branchId] = entry;
+            }
+            if (!reader.IsDBNull(8) && PermissionCodes.TryParse(reader.GetString(8), out var permission))
+            {
+                entry.Permissions.Add(permission);
+            }
+        }
+
+        var result = new Dictionary<int, UserAccess>();
+        foreach (var pair in users)
+        {
+            var branches = memberships[pair.Key].ToDictionary(
+                b => b.Key,
+                b => new BranchAccess(b.Key, b.Value.BranchName, b.Value.RoleId, b.Value.RoleName, b.Value.Permissions));
+            result[pair.Key] = new UserAccess(pair.Key, pair.Value.Role, pair.Value.IsActive, pair.Value.DefaultBranchId, branches);
+        }
+        return result;
+    }
+
+    private static async Task<int> InsertRoleAsync(
+        SqlConnection conn,
+        SqlTransaction tx,
+        int branchId,
+        string name,
+        IEnumerable<Permission> permissions,
+        int? actorId,
+        DateTime now,
+        CancellationToken ct)
+    {
+        var idValue = await ScalarAsync(conn, tx, ct, @"
+INSERT INTO dbo.AccessRoles (BranchId, Name, CreatedBy, CreatedAt)
+OUTPUT INSERTED.Id
+VALUES (@branchId, @name, @actorId, @now);",
+            new SqlParameter("@branchId", branchId),
+            new SqlParameter("@name", name),
+            NullableInt("@actorId", actorId),
+            new SqlParameter("@now", now));
+        var roleId = Convert.ToInt32(idValue, CultureInfo.InvariantCulture);
+        foreach (var permission in permissions)
+        {
+            await ExecuteAsync(conn, tx, ct,
+                "INSERT INTO dbo.AccessRolePermissions (RoleId, Permission) VALUES (@roleId, @code);",
+                new SqlParameter("@roleId", roleId),
+                new SqlParameter("@code", PermissionCodes.ToCode(permission)));
+        }
+        return roleId;
+    }
+
+    private static async Task<(int BranchId, string Name)?> ReadRoleAsync(SqlConnection conn, SqlTransaction tx, int roleId, CancellationToken ct)
+    {
+        await using var cmd = new SqlCommand("SELECT BranchId, Name FROM dbo.AccessRoles WHERE Id = @roleId;", conn, tx);
+        cmd.Parameters.Add(new SqlParameter("@roleId", roleId));
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        if (!await reader.ReadAsync(ct))
+        {
+            return null;
+        }
+        return (reader.GetInt32(0), reader.GetString(1));
+    }
+
+    private static async Task<HashSet<Permission>> ReadRolePermissionsAsync(SqlConnection conn, SqlTransaction tx, int roleId, CancellationToken ct)
+    {
+        var result = new HashSet<Permission>();
+        await using var cmd = new SqlCommand("SELECT Permission FROM dbo.AccessRolePermissions WHERE RoleId = @roleId;", conn, tx);
+        cmd.Parameters.Add(new SqlParameter("@roleId", roleId));
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+        {
+            if (PermissionCodes.TryParse(reader.GetString(0), out var permission))
+            {
+                result.Add(permission);
+            }
+        }
+        return result;
+    }
+
+    private static async Task<int?> FindRoleIdAsync(SqlConnection conn, SqlTransaction tx, int branchId, string name, CancellationToken ct)
+    {
+        return ToNullableInt(await ScalarAsync(conn, tx, ct,
+            "SELECT Id FROM dbo.AccessRoles WHERE BranchId = @branchId AND Name = @name;",
+            new SqlParameter("@branchId", branchId),
+            new SqlParameter("@name", name)));
+    }
+
+    private static int? ToNullableInt(object? value) =>
+        value is null or DBNull ? (int?)null : Convert.ToInt32(value, CultureInfo.InvariantCulture);
 
     private static string DescribePermissions(IEnumerable<Permission> permissions)
     {
@@ -1100,24 +1366,40 @@ ORDER BY u.Username;";
         return result;
     }
 
-    public async Task<int> AddUserAsync(string username, string fullName, UserRole role, int? branchId, string passwordHash, DateTime now, CancellationToken ct = default)
+    public async Task<int> AddUserAsync(string username, string fullName, UserRole role, int? branchId, string passwordHash, DateTime now, int? actorId, string? initialRoleName, CancellationToken ct = default)
     {
-        const string sql = @"
-INSERT INTO dbo.Users (Username, FullName, PasswordHash, Role, BranchId, IsActive, CreatedAt)
-OUTPUT INSERTED.Id
-VALUES (@username, @fullName, @passwordHash, @role, @branchId, 1, @now);";
         try
         {
-            await using var conn = await OpenAsync(ct);
-            await using var cmd = new SqlCommand(sql, conn);
-            cmd.Parameters.Add(new SqlParameter("@username", username));
-            cmd.Parameters.Add(new SqlParameter("@fullName", fullName));
-            cmd.Parameters.Add(new SqlParameter("@passwordHash", passwordHash));
-            cmd.Parameters.Add(new SqlParameter("@role", role.ToString()));
-            cmd.Parameters.Add(NullableInt("@branchId", branchId));
-            cmd.Parameters.Add(new SqlParameter("@now", now));
-            var id = await cmd.ExecuteScalarAsync(ct);
-            return Convert.ToInt32(id, CultureInfo.InvariantCulture);
+            return await WithTransactionAsync(async (conn, tx) =>
+            {
+                var idValue = await ScalarAsync(conn, tx, ct, @"
+INSERT INTO dbo.Users (Username, FullName, PasswordHash, Role, BranchId, IsActive, CreatedAt)
+OUTPUT INSERTED.Id
+VALUES (@username, @fullName, @passwordHash, @role, @branchId, 1, @now);",
+                    new SqlParameter("@username", username),
+                    new SqlParameter("@fullName", fullName),
+                    new SqlParameter("@passwordHash", passwordHash),
+                    new SqlParameter("@role", role.ToString()),
+                    NullableInt("@branchId", branchId),
+                    new SqlParameter("@now", now));
+                var userId = Convert.ToInt32(idValue, CultureInfo.InvariantCulture);
+
+                // کاربر شعبه: شعبه‌ی اصلی و عضویت با نقش داده‌شده در همان شعبه در یک تراکنش ثبت می‌شوند.
+                if (role != UserRole.Admin && branchId is { } homeBranch && initialRoleName is not null)
+                {
+                    var roleId = await FindRoleIdAsync(conn, tx, homeBranch, initialRoleName, ct)
+                        ?? throw new BusinessRuleException($"نقش «{initialRoleName}» در این شعبه وجود ندارد. آن را در بخش نقش‌ها بسازید یا نقش دیگری انتخاب کنید.");
+                    await ExecuteAsync(conn, tx, ct, @"
+INSERT INTO dbo.UserBranchRoles (UserId, BranchId, RoleId, GrantedBy, GrantedAt)
+VALUES (@userId, @branchId, @roleId, @actorId, @now);",
+                        new SqlParameter("@userId", userId),
+                        new SqlParameter("@branchId", homeBranch),
+                        new SqlParameter("@roleId", roleId),
+                        new SqlParameter("@actorId", actorId ?? throw new InvalidOperationException("عضویت شعبه بدون ثبت‌کننده ساخته نمی‌شود.")),
+                        new SqlParameter("@now", now));
+                }
+                return userId;
+            }, ct);
         }
         catch (SqlException ex) when (ex.Number is DuplicateKeyError or UniqueIndexError)
         {

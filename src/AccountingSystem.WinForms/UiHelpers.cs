@@ -109,25 +109,14 @@ internal static class UiHelpers
     }
 
     /// <summary>
-    /// فهرست شعبه‌ها. مدیر همه‌ی شعبه‌ها را می‌بیند (با گزینه‌ی «همه» در صورت includeAll)؛
-    /// کاربر صندوق فقط شعبه‌ی خودش را می‌بیند و فهرست قفل می‌شود.
+    /// فهرست شعبه‌ها. فهرست ورودی را فراخواننده از قبل فیلتر می‌کند (فقط شعبه‌هایی که کاربر وظیفه‌ی لازم را دارد).
+    /// «همه‌ی شعبه‌ها» فقط برای مدیر سیستم نمایش داده می‌شود.
     /// </summary>
     public static void FillBranches(ComboBox box, IReadOnlyList<BranchInfo> branches, CurrentUser user, bool includeAll, string? selectedValue)
     {
         box.Items.Clear();
-        if (user.Role != UserRole.Admin)
-        {
-            var own = branches.FirstOrDefault(b => b.Id == user.BranchId);
-            if (own is not null)
-            {
-                box.Items.Add(new ComboItem(own.Id.ToString(CultureInfo.InvariantCulture), $"{own.Code} - {own.Name}"));
-            }
-            box.SelectedIndex = box.Items.Count > 0 ? 0 : -1;
-            box.Enabled = false;
-            return;
-        }
-
-        if (includeAll)
+        var allowAll = includeAll && user.Role == UserRole.Admin;
+        if (allowAll)
         {
             box.Items.Add(new ComboItem(string.Empty, "همه‌ی شعبه‌ها"));
         }
@@ -136,7 +125,12 @@ internal static class UiHelpers
             box.Items.Add(new ComboItem(branch.Id.ToString(CultureInfo.InvariantCulture), $"{branch.Code} - {branch.Name}"));
         }
         box.Enabled = true;
-        SelectByValue(box, selectedValue ?? (includeAll ? string.Empty : null));
+        var fallback = allowAll ? string.Empty : user.BranchId?.ToString(CultureInfo.InvariantCulture);
+        SelectByValue(box, selectedValue ?? fallback);
+        if (box.SelectedIndex < 0 && box.Items.Count > 0)
+        {
+            box.SelectedIndex = 0;
+        }
     }
 
     /// <summary>شناسه‌ی شعبه‌ی انتخاب‌شده؛ null یعنی «همه‌ی شعبه‌ها».</summary>
