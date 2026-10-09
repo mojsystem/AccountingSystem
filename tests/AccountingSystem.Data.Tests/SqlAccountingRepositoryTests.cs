@@ -129,6 +129,7 @@ public class SqlAccountingRepositoryTests : IClassFixture<SqlServerFixture>, IAs
         await admin.AddCurrencyAsync(user, settlementCode, "ارز تسویه‌ی مستقیم", 2, now);
         await admin.SetRateAsync(user, branchId, tradedCode, 1_000_000m, 1_100_000m, now);
         await admin.SetRateAsync(user, branchId, settlementCode, 500_000m, 550_000m, now);
+        var irrBefore = await IrrBalanceAsync(repo, branchId);
         await admin.OpeningIrrAsync(user, branchId, 100_000_000m, now);
         await admin.OpeningForeignAsync(user, branchId, settlementCode, 100m, 500_000m, now);
 
@@ -156,7 +157,7 @@ public class SqlAccountingRepositoryTests : IClassFixture<SqlServerFixture>, IAs
         var settlementSnapshot = await repo.GetTradeSnapshotAsync(branchId, settlementCode);
         Assert.Equal(10m, directSnapshot!.ForeignBalance);
         Assert.Equal(80m, settlementSnapshot!.ForeignBalance);
-        Assert.Equal(100_000_000m, directSnapshot.IrrBalance);
+        Assert.Equal(irrBefore + 100_000_000m, directSnapshot.IrrBalance);
 
         var derivedId = await trades.BuyFromCustomerAsync(new TradeInput(
             branchId, tradedCode, 5.5m, 0m, null, null, null,
