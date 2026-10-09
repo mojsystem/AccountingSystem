@@ -22,8 +22,14 @@ internal sealed class TradeTab : UserControl, IRefreshable
     private readonly TextBox _amount = new() { Width = 110 };
     private readonly TextBox _rate = new() { Width = 110 };
     private readonly TextBox _fee = new() { Width = 100, Text = "0" };
-    private readonly TextBox _customer = new() { Width = 150 };
-    private readonly TextBox _nationalCode = new() { Width = 120 };
+    private readonly ComboBox _customerBox = new()
+    {
+        Width = 260,
+        DropDownStyle = ComboBoxStyle.DropDown,
+        AutoCompleteMode = AutoCompleteMode.SuggestAppend,
+        AutoCompleteSource = AutoCompleteSource.ListItems,
+    };
+    private readonly Button _newCustomer = new() { Text = "مشتری تازه…", AutoSize = true };
     private readonly TextBox _note = new() { Width = 170 };
     private readonly TextBox _occurredOn = new() { Width = 110, PlaceholderText = "امروز" };
     private readonly Label _preview = UiHelpers.MakeLabel(string.Empty);
@@ -62,8 +68,7 @@ internal sealed class TradeTab : UserControl, IRefreshable
             UiHelpers.MakeLabel("مقدار:"), _amount,
             UiHelpers.MakeLabel("نرخ (ریال):"), _rate,
             UiHelpers.MakeLabel("کارمزد (ریال):"), _fee,
-            UiHelpers.MakeLabel("نام مشتری:"), _customer,
-            UiHelpers.MakeLabel("کد ملی:"), _nationalCode,
+            UiHelpers.MakeLabel("مشتری:"), _customerBox, _newCustomer,
             UiHelpers.MakeLabel("توضیحات:"), _note,
             UiHelpers.MakeLabel("تاریخ (شمسی):"), _occurredOn,
             _preview,
@@ -95,6 +100,7 @@ internal sealed class TradeTab : UserControl, IRefreshable
         _rate.TextChanged += (_, _) => UpdatePreview();
         _fee.TextChanged += (_, _) => UpdatePreview();
         _submit.Click += async (_, _) => await SubmitAsync();
+        _newCustomer.Click += async (_, _) => await AddCustomerAsync();
         _show.Click += async (_, _) => await SafeRefreshAsync();
         _receipt.Click += async (_, _) => await OpenReceiptAsync();
         _void.Click += async (_, _) => await VoidSelectedAsync();
@@ -108,6 +114,8 @@ internal sealed class TradeTab : UserControl, IRefreshable
         _edit.Visible = await _services.Permissions.HasAnyAsync(_user, Permission.TradeEdit);
         _void.Visible = await _services.Permissions.HasAnyAsync(_user, Permission.TradeVoid);
 
+        await LoadCustomersAsync();
+        _newCustomer.Enabled = await _services.Customers.CanEditAsync(_user);
         var currencies = await _services.Admin.GetCurrenciesAsync();
         _branches = await _services.Permissions.GetBranchesAsync(_user, Permission.TradeRecord);
         _readableBranches = await _services.Permissions.GetBranchesAsync(_user);
@@ -197,8 +205,7 @@ internal sealed class TradeTab : UserControl, IRefreshable
             _amount.Text = trade.Amount.ToString("0.####", CultureInfo.InvariantCulture);
             _rate.Text = trade.Rate.ToString("0.####", CultureInfo.InvariantCulture);
             _fee.Text = trade.FeeIrr.ToString("0", CultureInfo.InvariantCulture);
-            _customer.Text = trade.CustomerName ?? string.Empty;
-            _nationalCode.Text = trade.NationalCode ?? string.Empty;
+            SelectCustomer(trade.CustomerId, trade.CustomerName);
             _note.Text = trade.Note ?? string.Empty;
             _occurredOn.Text = PersianDate.FormatDate(trade.OccurredAt);
         }
@@ -219,8 +226,7 @@ internal sealed class TradeTab : UserControl, IRefreshable
         _cancelEdit.Visible = false;
         _amount.Clear();
         _fee.Text = "0";
-        _customer.Clear();
-        _nationalCode.Clear();
+        _customerBox.SelectedIndex = -1;
         _note.Clear();
         _occurredOn.Clear();
         UpdatePreview();
@@ -286,7 +292,10 @@ internal sealed class TradeTab : UserControl, IRefreshable
                 occurredOn = parsedDate;
             }
 
-            var input = new TradeInput(branchId, item.Value, amount, rate, _customer.Text, _nationalCode.Text, _note.Text, fee);
+            int? customerId = int.TryParse((_customerBox.SelectedItem as ComboItem)?.Value, NumberStyles.None, CultureInfo.InvariantCulture, out var selectedCustomer)
+                ? selectedCustomer
+                : null;
+            var input = new TradeInput(branchId, item.Value, amount, rate, null, null, _note.Text, fee, customerId);
             var type = _sell.Checked ? TradeType.Sell : TradeType.Buy;
             if (_editingTradeId is { } editId)
             {
@@ -299,8 +308,6 @@ internal sealed class TradeTab : UserControl, IRefreshable
                 var id = await _services.Trades.RecordTradeAsync(input, type, _user, DateTime.Now, occurredOn);
                 _amount.Clear();
                 _fee.Text = "0";
-                _customer.Clear();
-                _nationalCode.Clear();
                 _note.Clear();
                 _occurredOn.Clear();
                 UiHelpers.ShowInfo(this, $"معامله شماره {id} ثبت شد.");
@@ -376,6 +383,82 @@ internal sealed class TradeTab : UserControl, IRefreshable
             UiHelpers.ShowError(this, ex);
         }
     }
+
+    private async Task LoadCustomersAsync()
+    {
+        var keep = (_customerBox.SelectedItem as ComboItem)?.Value;
+        IReadOnlyList<CustomerInfo> customers;
+        try
+        {
+            customers = await _services.Customers.SearchAsync(_user, null, take: 2000);
+        }
+        catch (BusinessRuleException)
+        {
+            customers = Array.Empty<CustomerInfo>();
+        }
+
+        _customerBox.BeginUpdate();
+        _customerBox.Items.Clear();
+        foreach (var customer in customers)
+        {
+            _customerBox.Items.Add(new ComboItem(customer.Id.ToString(CultureInfo.InvariantCulture), CustomerLabel(customer)));
+        }
+        _customerBox.EndUpdate();
+
+        if (int.TryParse(keep, NumberStyles.None, CultureInfo.InvariantCulture, out var keepId))
+        {
+            SelectCustomer(keepId, null);
+        }
+    }
+
+    /// <summary>
+    /// مشتری را انتخاب می‌کند. اگر در فهرست نباشد (مثلاً بیش از سقف فهرست)، به فهرست اضافه می‌شود تا
+    /// معامله‌ی قدیمی با مشتری اشتباه ویرایش نشود.
+    /// </summary>
+    private void SelectCustomer(int? customerId, string? fallbackName)
+    {
+        if (customerId is null)
+        {
+            _customerBox.SelectedIndex = -1;
+            return;
+        }
+
+        var value = customerId.Value.ToString(CultureInfo.InvariantCulture);
+        for (var i = 0; i < _customerBox.Items.Count; i++)
+        {
+            if (_customerBox.Items[i] is ComboItem item && item.Value == value)
+            {
+                _customerBox.SelectedIndex = i;
+                return;
+            }
+        }
+
+        var fallback = new ComboItem(value, fallbackName ?? $"مشتری شماره {value}");
+        _customerBox.Items.Add(fallback);
+        _customerBox.SelectedItem = fallback;
+    }
+
+    private async Task AddCustomerAsync()
+    {
+        using var dialog = new CustomerDialog();
+        if (dialog.ShowDialog(this) != DialogResult.OK || dialog.Result is null)
+        {
+            return;
+        }
+        try
+        {
+            var id = await _services.Customers.CreateAsync(_user, dialog.Result, DateTime.Now);
+            await LoadCustomersAsync();
+            SelectCustomer(id, null);
+        }
+        catch (Exception ex) when (ex is BusinessRuleException or ConcurrencyConflictException)
+        {
+            UiHelpers.ShowError(this, ex);
+        }
+    }
+
+    private static string CustomerLabel(CustomerInfo customer) =>
+        string.IsNullOrEmpty(customer.NationalCode) ? customer.FullName : $"{customer.FullName} · {customer.NationalCode}";
 
     private async Task SafeRefreshAsync()
     {

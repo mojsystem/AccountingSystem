@@ -17,6 +17,7 @@ internal sealed class AppServices
         Users = new UserService(repository);
         Permissions = new PermissionService(repository);
         Accounts = new AccountService(repository);
+        Customers = new CustomerService(repository, Permissions);
     }
 
     public BranchService Branches { get; }
@@ -36,4 +37,6 @@ internal sealed class AppServices
     public PermissionService Permissions { get; }
 
     public AccountService Accounts { get; }
+
+    public CustomerService Customers { get; }
 }

@@ -35,7 +35,7 @@ INNER JOIN dbo.Accounts a ON a.Code = l.AccountCode";
 
     private const string TradeSelect = @"
 SELECT t.Id, t.BranchId, br.Code, br.Name, t.TradeType, t.CurrencyCode, t.Amount, t.Rate, t.IrrAmount, t.CostIrr, t.ProfitIrr, t.FeeIrr,
-       t.CustomerName, t.NationalCode, t.Note, t.OccurredAt, u.Username, t.IsVoided, t.VoidedAt, vu.Username, t.VoidReason
+       t.CustomerName, t.NationalCode, t.Note, t.OccurredAt, u.Username, t.IsVoided, t.VoidedAt, vu.Username, t.VoidReason, t.CustomerId
 FROM dbo.CurrencyTransactions t
 INNER JOIN dbo.Branches br ON br.Id = t.BranchId
 INNER JOIN dbo.Users u ON u.Id = t.CreatedBy
@@ -505,14 +505,15 @@ GROUP BY e.Id, e.OccurredAt, e.Seq;";
         }
     }
 
-    public async Task UpdateTradeDetailsAsync(long tradeId, int branchId, string? customerName, string? nationalCode, string? note, int userId, DateTime now, CancellationToken ct = default)
+    public async Task UpdateTradeDetailsAsync(long tradeId, int branchId, int customerId, string customerName, string? nationalCode, string? note, int userId, DateTime now, CancellationToken ct = default)
     {
         await WithTransactionAsync<bool>(async (conn, tx) =>
         {
             var affected = await ExecuteAsync(conn, tx, ct, @"
 UPDATE dbo.CurrencyTransactions
-SET CustomerName = @customer, NationalCode = @nationalCode, Note = @note
+SET CustomerId = @customerId, CustomerName = @customer, NationalCode = @nationalCode, Note = @note
 WHERE Id = @id AND BranchId = @branchId AND IsVoided = 0;",
+                new SqlParameter("@customerId", customerId),
                 new SqlParameter("@customer", (object?)customerName ?? DBNull.Value),
                 new SqlParameter("@nationalCode", (object?)nationalCode ?? DBNull.Value),
                 new SqlParameter("@note", (object?)note ?? DBNull.Value),
@@ -831,9 +832,9 @@ VALUES (@branchId, @occurredAt, @description, @sourceType, @sourceId, @userId, @
     {
         const string sql = @"
 INSERT INTO dbo.CurrencyTransactions
-    (BranchId, TradeType, CurrencyCode, Amount, Rate, IrrAmount, CostIrr, ProfitIrr, FeeIrr, CustomerName, NationalCode, Note, OccurredAt, CreatedBy, ReplacesId)
+    (BranchId, TradeType, CurrencyCode, Amount, Rate, IrrAmount, CostIrr, ProfitIrr, FeeIrr, CustomerId, CustomerName, NationalCode, Note, OccurredAt, CreatedBy, ReplacesId)
 OUTPUT INSERTED.Id
-VALUES (@branchId, @tradeType, @code, @amount, @rate, @irr, @cost, @profit, @fee, @customer, @nationalCode, @note, @occurredAt, @userId, @replacesId);";
+VALUES (@branchId, @tradeType, @code, @amount, @rate, @irr, @cost, @profit, @fee, @customerId, @customer, @nationalCode, @note, @occurredAt, @userId, @replacesId);";
         await using var cmd = new SqlCommand(sql, conn, tx);
         cmd.Parameters.Add(new SqlParameter("@branchId", branchId));
         cmd.Parameters.Add(new SqlParameter("@tradeType", trade.Type == TradeType.Buy ? "BUY" : "SELL"));
@@ -844,6 +845,7 @@ VALUES (@branchId, @tradeType, @code, @amount, @rate, @irr, @cost, @profit, @fee
         cmd.Parameters.Add(Money("@cost", trade.CostIrr));
         cmd.Parameters.Add(Money("@profit", trade.ProfitIrr));
         cmd.Parameters.Add(Money("@fee", trade.FeeIrr));
+        cmd.Parameters.Add(new SqlParameter("@customerId", (object?)trade.CustomerId ?? DBNull.Value));
         cmd.Parameters.Add(new SqlParameter("@customer", (object?)trade.CustomerName ?? DBNull.Value));
         cmd.Parameters.Add(new SqlParameter("@nationalCode", (object?)trade.NationalCode ?? DBNull.Value));
         cmd.Parameters.Add(new SqlParameter("@note", (object?)trade.Note ?? DBNull.Value));
@@ -1572,6 +1574,114 @@ WHERE BranchId = @branchId AND CurrencyCode = @code AND TotalCostIrr = @expected
         }
     }
 
+    public async Task<IReadOnlyList<CustomerInfo>> GetCustomersAsync(string search, int take, CancellationToken ct = default)
+    {
+        const string sql = @"
+SELECT TOP (@take) Id, FullName, NationalCode, Phone, Address, Note, UpdatedAt
+FROM dbo.Customers
+WHERE FullName LIKE @pattern OR NationalCode LIKE @pattern OR Phone LIKE @pattern
+ORDER BY FullName, Id;";
+        var result = new List<CustomerInfo>();
+        await using var conn = await OpenAsync(ct);
+        await using var cmd = new SqlCommand(sql, conn);
+        cmd.Parameters.Add(new SqlParameter("@take", take));
+        cmd.Parameters.Add(new SqlParameter("@pattern", "%" + search + "%"));
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+        {
+            result.Add(ReadCustomer(reader));
+        }
+        return result;
+    }
+
+    public async Task<CustomerInfo?> GetCustomerAsync(int id, CancellationToken ct = default)
+    {
+        const string sql = @"
+SELECT Id, FullName, NationalCode, Phone, Address, Note, UpdatedAt
+FROM dbo.Customers
+WHERE Id = @id;";
+        await using var conn = await OpenAsync(ct);
+        await using var cmd = new SqlCommand(sql, conn);
+        cmd.Parameters.Add(new SqlParameter("@id", id));
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        return await reader.ReadAsync(ct) ? ReadCustomer(reader) : null;
+    }
+
+    public async Task<int> AddCustomerAsync(CustomerInput input, int actorId, DateTime now, CancellationToken ct = default)
+    {
+        try
+        {
+            return await WithTransactionAsync(async (conn, tx) =>
+            {
+                const string sql = @"
+INSERT INTO dbo.Customers (FullName, NationalCode, Phone, Address, Note, CreatedBy, CreatedAt, UpdatedBy, UpdatedAt)
+OUTPUT INSERTED.Id
+VALUES (@name, @nationalCode, @phone, @address, @note, @userId, @now, @userId, @now);";
+                await using var cmd = new SqlCommand(sql, conn, tx);
+                AddCustomerParameters(cmd, input);
+                cmd.Parameters.Add(new SqlParameter("@userId", actorId));
+                cmd.Parameters.Add(new SqlParameter("@now", now));
+                var id = (int)(await cmd.ExecuteScalarAsync(ct) ?? throw new InvalidOperationException("شناسه‌ی مشتری ایجاد نشد."));
+                await InsertAuditAsync(conn, tx, actorId, now, "CUSTOMER_CREATE", "CUSTOMER", id,
+                    $"مشتری «{input.FullName}» ثبت شد", ct);
+                return id;
+            }, ct);
+        }
+        catch (SqlException ex) when (ex.Number is DuplicateKeyError or UniqueIndexError)
+        {
+            throw new BusinessRuleException("این کد ملی یا شناسه قبلاً برای مشتری دیگری ثبت شده است.");
+        }
+    }
+
+    public async Task UpdateCustomerAsync(int id, CustomerInput input, int actorId, DateTime now, CancellationToken ct = default)
+    {
+        try
+        {
+            await WithTransactionAsync<bool>(async (conn, tx) =>
+            {
+                const string sql = @"
+UPDATE dbo.Customers
+SET FullName = @name, NationalCode = @nationalCode, Phone = @phone, Address = @address, Note = @note,
+    UpdatedBy = @userId, UpdatedAt = @now
+WHERE Id = @id;";
+                await using var cmd = new SqlCommand(sql, conn, tx);
+                AddCustomerParameters(cmd, input);
+                cmd.Parameters.Add(new SqlParameter("@userId", actorId));
+                cmd.Parameters.Add(new SqlParameter("@now", now));
+                cmd.Parameters.Add(new SqlParameter("@id", id));
+                if (await cmd.ExecuteNonQueryAsync(ct) != 1)
+                {
+                    throw new BusinessRuleException("مشتری مورد نظر پیدا نشد.");
+                }
+                await InsertAuditAsync(conn, tx, actorId, now, "CUSTOMER_UPDATE", "CUSTOMER", id,
+                    $"اطلاعات مشتری «{input.FullName}» به‌روز شد", ct);
+                return true;
+            }, ct);
+        }
+        catch (SqlException ex) when (ex.Number is DuplicateKeyError or UniqueIndexError)
+        {
+            throw new BusinessRuleException("این کد ملی یا شناسه قبلاً برای مشتری دیگری ثبت شده است.");
+        }
+    }
+
+    private static void AddCustomerParameters(SqlCommand cmd, CustomerInput input)
+    {
+        cmd.Parameters.Add(new SqlParameter("@name", input.FullName ?? string.Empty));
+        cmd.Parameters.Add(new SqlParameter("@nationalCode", (object?)input.NationalCode ?? DBNull.Value));
+        cmd.Parameters.Add(new SqlParameter("@phone", (object?)input.Phone ?? DBNull.Value));
+        cmd.Parameters.Add(new SqlParameter("@address", (object?)input.Address ?? DBNull.Value));
+        cmd.Parameters.Add(new SqlParameter("@note", (object?)input.Note ?? DBNull.Value));
+    }
+
+    private static CustomerInfo ReadCustomer(SqlDataReader reader) => new(
+        reader.GetInt32(0),
+        reader.GetString(1),
+        ReadNullableString(reader, 2),
+        ReadNullableString(reader, 3),
+        ReadNullableString(reader, 4),
+        ReadNullableString(reader, 5),
+        reader.GetDateTime(6));
+
     private async Task<T> WithTransactionAsync<T>(Func<SqlConnection, SqlTransaction, Task<T>> work, CancellationToken ct)
     {
         await using var conn = await OpenAsync(ct);
@@ -1648,7 +1758,8 @@ WHERE BranchId = @branchId AND CurrencyCode = @code AND TotalCostIrr = @expected
             reader.GetBoolean(17),
             reader.IsDBNull(18) ? (DateTime?)null : reader.GetDateTime(18),
             ReadNullableString(reader, 19),
-            ReadNullableString(reader, 20));
+            ReadNullableString(reader, 20),
+            reader.GetInt32(21));
     }
 
     private static SqlParameter Money(string name, decimal value) =>

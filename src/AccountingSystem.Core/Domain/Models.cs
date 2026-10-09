@@ -48,6 +48,12 @@ public sealed record BranchInfo(int Id, string Code, string Name, DateTime Creat
 
 public sealed record CurrencyInfo(string Code, string Name, int DecimalPlaces, bool IsActive);
 
+/// <summary>مشتری ثبت‌شده‌ی صرافی (فهرست مشترک همه‌ی شعبه‌ها).</summary>
+public sealed record CustomerInfo(int Id, string FullName, string? NationalCode, string? Phone, string? Address, string? Note, DateTime UpdatedAt);
+
+/// <summary>داده‌ی ثبت یا ویرایش مشتری، پیش از اعتبارسنجی.</summary>
+public sealed record CustomerInput(string? FullName, string? NationalCode, string? Phone, string? Address, string? Note);
+
 public sealed record RateInfo(
     int BranchId,
     string BranchName,
@@ -90,7 +96,8 @@ public sealed record TradeInfo(
     bool IsVoided,
     DateTime? VoidedAt,
     string? VoidedBy,
-    string? VoidReason);
+    string? VoidReason,
+    int CustomerId);
 
 public sealed record JournalLineInfo(int LineNo, string AccountCode, string AccountName, decimal Debit, decimal Credit);
 

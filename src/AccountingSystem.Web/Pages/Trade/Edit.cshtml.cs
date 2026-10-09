@@ -17,9 +17,11 @@ public class EditModel : PageModel
     private readonly CurrencyTradeService _trades;
     private readonly CurrencyAdminService _admin;
     private readonly PermissionService _permissions;
+    private readonly CustomerService _customers;
 
-    public EditModel(CurrencyTradeService trades, CurrencyAdminService admin, PermissionService permissions)
+    public EditModel(CurrencyTradeService trades, CurrencyAdminService admin, PermissionService permissions, CustomerService customers)
     {
+        _customers = customers;
         _trades = trades;
         _admin = admin;
         _permissions = permissions;
@@ -36,6 +38,9 @@ public class EditModel : PageModel
     public bool CanEdit { get; private set; }
 
     public IReadOnlyList<CurrencyInfo> Currencies { get; private set; } = Array.Empty<CurrencyInfo>();
+
+    /// <summary>مشتریان مشترک برای انتخاب مشتری معامله.</summary>
+    public IReadOnlyList<CustomerInfo> Customers { get; private set; } = Array.Empty<CustomerInfo>();
 
     public async Task<IActionResult> OnGetAsync(long id, CancellationToken ct)
     {
@@ -57,12 +62,12 @@ public class EditModel : PageModel
             Amount = trade.Amount.ToString("0.####", CultureInfo.InvariantCulture),
             Rate = trade.Rate.ToString("0.####", CultureInfo.InvariantCulture),
             Fee = trade.FeeIrr.ToString("0", CultureInfo.InvariantCulture),
-            CustomerName = trade.CustomerName,
-            NationalCode = trade.NationalCode,
+            CustomerId = trade.CustomerId,
             Note = trade.Note,
             OccurredOn = PersianDate.FormatDate(trade.OccurredAt),
         };
         Currencies = await LoadCurrenciesAsync(ct);
+        Customers = await LoadCustomersAsync(user, ct);
         return Page();
     }
 
@@ -96,7 +101,7 @@ public class EditModel : PageModel
 
         try
         {
-            var input = new TradeInput(Input.BranchId, Input.CurrencyCode, amount, rate, Input.CustomerName, Input.NationalCode, Input.Note, fee);
+            var input = new TradeInput(Input.BranchId, Input.CurrencyCode, amount, rate, null, null, Input.Note, fee, Input.CustomerId);
             var type = Input.TradeType == "SELL" ? TradeType.Sell : TradeType.Buy;
             var newId = await _trades.EditTradeAsync(user, id, input, type, occurredOn, DateTime.Now, ct);
             TempData["Success"] = newId is null
@@ -118,7 +123,20 @@ public class EditModel : PageModel
         IsVoided = trade?.IsVoided ?? false;
         CanEdit = trade is not null && await _permissions.HasAsync(user, Permission.TradeEdit, trade.BranchId, ct);
         Currencies = await LoadCurrenciesAsync(ct);
+        Customers = await LoadCustomersAsync(user, ct);
         return Page();
+    }
+
+    private async Task<IReadOnlyList<CustomerInfo>> LoadCustomersAsync(CurrentUser user, CancellationToken ct)
+    {
+        try
+        {
+            return await _customers.SearchAsync(user, null, ct, 2000);
+        }
+        catch (BusinessRuleException)
+        {
+            return Array.Empty<CustomerInfo>();
+        }
     }
 
     private async Task<IReadOnlyList<CurrencyInfo>> LoadCurrenciesAsync(CancellationToken ct) =>

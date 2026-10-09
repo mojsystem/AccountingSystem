@@ -18,9 +18,11 @@ public class IndexModel : PageModel
     private readonly ReportService _reports;
     private readonly BranchService _branches;
     private readonly PermissionService _permissions;
+    private readonly CustomerService _customers;
 
-    public IndexModel(CurrencyTradeService trades, CurrencyAdminService admin, ReportService reports, BranchService branches, PermissionService permissions)
+    public IndexModel(CurrencyTradeService trades, CurrencyAdminService admin, ReportService reports, BranchService branches, PermissionService permissions, CustomerService customers)
     {
+        _customers = customers;
         _trades = trades;
         _admin = admin;
         _reports = reports;
@@ -43,6 +45,9 @@ public class IndexModel : PageModel
     public IReadOnlyList<CurrencyInfo> Currencies { get; private set; } = Array.Empty<CurrencyInfo>();
 
     public IReadOnlyList<BranchInfo> Branches { get; private set; } = Array.Empty<BranchInfo>();
+
+    /// <summary>مشتریان مشترک برای انتخاب در فرم معامله (هر معامله باید مشتری داشته باشد).</summary>
+    public IReadOnlyList<CustomerInfo> Customers { get; private set; } = Array.Empty<CustomerInfo>();
 
     public IReadOnlyList<TradeInfo> Trades { get; private set; } = Array.Empty<TradeInfo>();
 
@@ -94,7 +99,7 @@ public class IndexModel : PageModel
         }
 
         var branchId = Input.BranchId;
-        var input = new TradeInput(branchId, Input.CurrencyCode, amount, rate, Input.CustomerName, Input.NationalCode, Input.Note, fee);
+        var input = new TradeInput(branchId, Input.CurrencyCode, amount, rate, null, null, Input.Note, fee, Input.CustomerId);
         DateTime? occurredOn = null;
         if (!string.IsNullOrWhiteSpace(Input.OccurredOn))
         {
@@ -158,6 +163,7 @@ public class IndexModel : PageModel
             .Where(c => c.IsActive && c.Code != CurrencyCodes.Irr)
             .ToList();
         Branches = await _permissions.GetBranchesAsync(user, Permission.TradeRecord, ct);
+        Customers = await LoadCustomersAsync(user, ct);
         ReadableBranches = await _permissions.GetBranchesAsync(user, null, ct);
 
         // نرخ‌های هر شعبه‌ی قابل ثبت، برای پر کردن خودکار نرخ در فرم.
@@ -179,6 +185,18 @@ public class IndexModel : PageModel
     }
 
     /// <summary>بازه‌ی نمایش معاملات. خالی بودن تاریخ یعنی امروز؛ خطای قالب در RangeError نمایش داده می‌شود.</summary>
+    private async Task<IReadOnlyList<CustomerInfo>> LoadCustomersAsync(CurrentUser user, CancellationToken ct)
+    {
+        try
+        {
+            return await _customers.SearchAsync(user, null, ct, 2000);
+        }
+        catch (BusinessRuleException)
+        {
+            return Array.Empty<CustomerInfo>();
+        }
+    }
+
     private (DateTime From, DateTime To) ResolveRange()
     {
         var today = DateTime.Now;
@@ -208,9 +226,7 @@ public sealed class TradeForm
 
     public string? Fee { get; set; }
 
-    public string? CustomerName { get; set; }
-
-    public string? NationalCode { get; set; }
+    public int? CustomerId { get; set; }
 
     public string? Note { get; set; }
 

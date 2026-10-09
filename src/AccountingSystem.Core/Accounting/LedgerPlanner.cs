@@ -68,7 +68,7 @@ public static class LedgerPlanner
                 var cost = type == TradeType.Sell ? state.Disposals[tradeRef].CostIrr : irr;
                 var profit = type == TradeType.Sell ? irr - cost : 0m;
                 var trade = new TradeDraft(type, code, input.Amount, input.Rate, irr, cost, profit, fee,
-                    customer, nationalCode, note, occurredAt, userId, ReplacedId(replaces));
+                    input.CustomerId, customer, nationalCode, note, occurredAt, userId, ReplacedId(replaces));
                 var lines = type == TradeType.Buy
                     ? TradePlanner.BuyLines(code, irr, fee)
                     : TradePlanner.SellLines(code, irr, fee, cost, profit);

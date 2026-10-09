@@ -1,0 +1,121 @@
+@page
+@model IndexModel
+@{
+    ViewData["Title"] = "مشتریان";
+    var current = Model.Current;
+    var isNew = current is null;
+}
+
+<div class="page-head">
+    <div>
+        <h1>مشتریان</h1>
+        <p class="hint">
+            فهرست مشترک همه‌ی شعبه‌ها. هر معامله باید به یک مشتری ثبت‌شده وصل باشد.
+            ثبت و ویرایش مشتری برای کسانی است که وظیفه‌ی «ثبت معامله» را دارند.
+        </p>
+    </div>
+</div>
+
+@if (TempData["Success"] is string successMessage)
+{
+    <div class="alert ok" role="status">@successMessage</div>
+}
+<div asp-validation-summary="All" class="alert error" role="alert"></div>
+
+<div class="split">
+    <section class="panel">
+        <form method="get" class="search-bar">
+            <input type="search" name="Search" value="@Model.Search" placeholder="جستجوی نام، کد ملی یا تلفن" aria-label="جستجوی مشتری" />
+            <button type="submit" class="btn">جستجو</button>
+            @if (!string.IsNullOrEmpty(Model.Search))
+            {
+                <a class="btn ghost" asp-page="/Customers/Index">پاک کردن</a>
+            }
+        </form>
+
+        <h2>فهرست مشتریان <span class="count">(@Model.Customers.Count)</span></h2>
+        <div class="table-wrap">
+            <table class="table">
+                <thead>
+                    <tr>
+                        <th>نام و نام خانوادگی</th>
+                        <th>کد ملی / شناسه</th>
+                        <th>تلفن</th>
+                        <th>آخرین به‌روزرسانی</th>
+                        <th></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var c in Model.Customers)
+                    {
+                        <tr class="@(c.Id == current?.Id ? "selected" : null)">
+                            <td>@c.FullName</td>
+                            <td class="code">@c.NationalCode</td>
+                            <td class="code">@c.Phone</td>
+                            <td>@PersianDate.FormatDateTime(c.UpdatedAt)</td>
+                            <td class="row-actions">
+                                @if (Model.CanEdit)
+                                {
+                                    <a class="link" asp-page="/Customers/Index" asp-route-edit="@c.Id" asp-route-search="@Model.Search">ویرایش</a>
+                                }
+                            </td>
+                        </tr>
+                    }
+                    @if (Model.Customers.Count == 0)
+                    {
+                        <tr><td colspan="5" class="empty">مشتری‌ای پیدا نشد.</td></tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    </section>
+
+    <aside class="panel form-panel">
+        @if (!Model.CanEdit)
+        {
+            <h2>فقط مشاهده</h2>
+            <p class="notice">برای ثبت و ویرایش مشتری، وظیفه‌ی «ثبت معامله» را در حداقل یک شعبه لازم دارید.</p>
+        }
+        else
+        {
+            <h2>@(isNew ? "مشتری تازه" : "ویرایش «" + current!.FullName + "»")</h2>
+            <form method="post" class="stack" asp-page-handler="Save">
+                <input type="hidden" name="Search" value="@Model.Search" />
+                @if (!isNew)
+                {
+                    <input type="hidden" name="Form.Id" value="@(current!.Id)" />
+                }
+
+                <label>
+                    <span>نام و نام خانوادگی</span>
+                    <input name="Form.FullName" value="@Model.Form.FullName" required maxlength="100" />
+                </label>
+                <label>
+                    <span>کد ملی یا شناسه</span>
+                    <input name="Form.NationalCode" value="@Model.Form.NationalCode" maxlength="20" dir="ltr" autocomplete="off" />
+                    <small class="hint">اختیاری؛ اگر وارد شود نباید برای مشتری دیگری ثبت شده باشد. ارقام فارسی خودکار لاتین می‌شوند.</small>
+                </label>
+                <label>
+                    <span>تلفن</span>
+                    <input name="Form.Phone" value="@Model.Form.Phone" maxlength="20" dir="ltr" autocomplete="off" />
+                </label>
+                <label>
+                    <span>نشانی</span>
+                    <input name="Form.Address" value="@Model.Form.Address" maxlength="250" />
+                </label>
+                <label>
+                    <span>یادداشت</span>
+                    <input name="Form.Note" value="@Model.Form.Note" maxlength="250" />
+                </label>
+
+                <div class="actions">
+                    <button type="submit" class="btn primary">@(isNew ? "ثبت مشتری" : "ذخیره‌ی تغییرات")</button>
+                    @if (!isNew)
+                    {
+                        <a class="btn ghost" asp-page="/Customers/Index" asp-route-search="@Model.Search">انصراف</a>
+                    }
+                </div>
+            </form>
+        }
+    </aside>
+</div>

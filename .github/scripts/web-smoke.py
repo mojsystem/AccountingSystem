@@ -22,7 +22,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-PROTECTED_PAGES = ["/", "/Trade", "/Rates", "/Cash", "/Journal", "/Users", "/Branches", "/Roles", "/Accounts"]
+PROTECTED_PAGES = ["/", "/Trade", "/Rates", "/Cash", "/Journal", "/Users", "/Branches", "/Roles", "/Accounts", "/Customers"]
 EXCEL_EXPORTS = ["/Trade?handler=Excel", "/Journal?handler=Excel"]
 STYLESHEET = "/css/site.css"
 STARTUP_TIMEOUT_SECONDS = 120

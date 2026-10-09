@@ -72,6 +72,27 @@ CREATE TABLE dbo.Users
 );
 GO
 
+-- مشتریان صرافی: فهرست مشترک همه‌ی شعبه‌ها. هر معامله به یک مشتری وصل است و نام/کد ملی آن را نیز نگه می‌دارد.
+CREATE TABLE dbo.Customers
+(
+    Id           INT           IDENTITY(1,1) NOT NULL,
+    FullName     NVARCHAR(100) NOT NULL,
+    NationalCode NVARCHAR(20)  NULL,
+    Phone        NVARCHAR(20)  NULL,
+    Address      NVARCHAR(250) NULL,
+    Note         NVARCHAR(250) NULL,
+    CreatedBy    INT           NOT NULL,
+    CreatedAt    DATETIME2(0)  NOT NULL,
+    UpdatedBy    INT           NOT NULL,
+    UpdatedAt    DATETIME2(0)  NOT NULL,
+    CONSTRAINT PK_Customers PRIMARY KEY (Id),
+    CONSTRAINT FK_Customers_CreatedBy FOREIGN KEY (CreatedBy) REFERENCES dbo.Users (Id),
+    CONSTRAINT FK_Customers_UpdatedBy FOREIGN KEY (UpdatedBy) REFERENCES dbo.Users (Id),
+    CONSTRAINT CK_Customers_FullName CHECK (LEN(LTRIM(RTRIM(FullName))) >= 2)
+);
+CREATE UNIQUE INDEX UX_Customers_NationalCode ON dbo.Customers (NationalCode) WHERE NationalCode IS NOT NULL;
+GO
+
 CREATE TABLE dbo.Accounts
 (
     Code        NVARCHAR(20)  NOT NULL,
@@ -174,6 +195,7 @@ CREATE TABLE dbo.CurrencyTransactions
     CostIrr      DECIMAL(19,4)        NOT NULL,
     ProfitIrr    DECIMAL(19,4)        NOT NULL,
     FeeIrr       DECIMAL(19,4)        NOT NULL CONSTRAINT DF_CurrencyTransactions_Fee DEFAULT (0),
+    CustomerId   INT                  NOT NULL CONSTRAINT FK_CurrencyTransactions_Customers REFERENCES dbo.Customers (Id),
     CustomerName NVARCHAR(100)        NULL,
     NationalCode NVARCHAR(20)         NULL,
     Note         NVARCHAR(250)        NULL,

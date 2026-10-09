@@ -14,7 +14,8 @@ public sealed record TradeInput(
     string? CustomerName,
     string? NationalCode,
     string? Note,
-    decimal FeeIrr = 0m);
+    decimal FeeIrr = 0m,
+    int? CustomerId = null);
 
 /// <summary>وضعیت فعلی صندوق و موجودی یک ارز در یک شعبه (برای نمایش و آزمون‌های ساده).</summary>
 public sealed record TradeSnapshot(int BranchId, CurrencyInfo Currency, decimal IrrBalance, decimal ForeignBalance, decimal ForeignCostIrr);
@@ -29,6 +30,7 @@ public sealed record TradeDraft(
     decimal CostIrr,
     decimal ProfitIrr,
     decimal FeeIrr,
+    int? CustomerId,
     string? CustomerName,
     string? NationalCode,
     string? Note,

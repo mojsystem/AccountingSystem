@@ -51,7 +51,15 @@ public interface IAccountingRepository
     /// <summary>
     /// ویرایش اطلاعات توصیفی معامله (نام مشتری، کد ملی، یادداشت). این تغییر اثر مالی ندارد و بازمحاسبه نمی‌شود.
     /// </summary>
-    Task UpdateTradeDetailsAsync(long tradeId, int branchId, string? customerName, string? nationalCode, string? note, int userId, DateTime now, CancellationToken ct = default);
+    Task UpdateTradeDetailsAsync(long tradeId, int branchId, int customerId, string customerName, string? nationalCode, string? note, int userId, DateTime now, CancellationToken ct = default);
+
+    Task<IReadOnlyList<CustomerInfo>> GetCustomersAsync(string search, int take, CancellationToken ct = default);
+
+    Task<CustomerInfo?> GetCustomerAsync(int id, CancellationToken ct = default);
+
+    Task<int> AddCustomerAsync(CustomerInput input, int actorId, DateTime now, CancellationToken ct = default);
+
+    Task UpdateCustomerAsync(int id, CustomerInput input, int actorId, DateTime now, CancellationToken ct = default);
 
     Task<IReadOnlyList<TradeInfo>> GetTradesAsync(int? branchId, DateTime fromInclusive, DateTime toExclusive, CancellationToken ct = default);
 

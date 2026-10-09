@@ -51,7 +51,8 @@ public sealed class CurrencyTradeService
         }
         await _permissions.RequireAsync(user, Permission.TradeRecord, input.BranchId, ct);
         var branchId = input.BranchId;
-        var scoped = input with { BranchId = branchId };
+        var customer = await RequireCustomerAsync(input.CustomerId, ct);
+        var scoped = input with { BranchId = branchId, CustomerId = customer.Id, CustomerName = customer.FullName, NationalCode = customer.NationalCode };
         var currency = await LoadCurrencyAsync(scoped.CurrencyCode, ct);
         var ledger = await _repository.GetBranchLedgerAsync(branchId, ct);
         var occurredAt = OccurrenceRules.Resolve(occurredOn, now);
@@ -99,18 +100,30 @@ public sealed class CurrencyTradeService
             || input.FeeIrr != old.FeeIrr
             || !sameDay;
 
+        var customer = await RequireCustomerAsync(input.CustomerId, ct);
+        var (_, _, note) = TradePlanner.CleanDetails(customer.FullName, customer.NationalCode, input.Note);
         if (!financialChanged)
         {
-            var (customer, nationalCode, note) = TradePlanner.CleanDetails(input.CustomerName, input.NationalCode, input.Note);
-            await _repository.UpdateTradeDetailsAsync(tradeId, old.BranchId, customer, nationalCode, note, user.Id, now, ct);
+            await _repository.UpdateTradeDetailsAsync(tradeId, old.BranchId, customer.Id, customer.FullName, customer.NationalCode, note, user.Id, now, ct);
             return null;
         }
 
         var ledger = await _repository.GetBranchLedgerAsync(old.BranchId, ct);
-        var scoped = input with { BranchId = old.BranchId };
+        var scoped = input with { BranchId = old.BranchId, CustomerId = customer.Id, CustomerName = customer.FullName, NationalCode = customer.NationalCode };
         var posting = LedgerPlanner.PlanTrade(ledger, currency, scoped, type, user.Id, occurredAt, now,
             new DocRef(LedgerDocKind.Trade, tradeId), ReplacementReason);
         return await _repository.PostAsync(posting, ct);
+    }
+
+    /// <summary>هر معامله باید به یک مشتری ثبت‌شده وصل باشد.</summary>
+    private async Task<CustomerInfo> RequireCustomerAsync(int? customerId, CancellationToken ct)
+    {
+        if (customerId is null or <= 0)
+        {
+            throw new BusinessRuleException("مشتری را انتخاب کنید؛ هر معامله باید به یک مشتری ثبت‌شده وصل باشد.");
+        }
+        return await _repository.GetCustomerAsync(customerId.Value, ct)
+            ?? throw new BusinessRuleException("مشتری انتخاب‌شده پیدا نشد.");
     }
 
     private async Task<CurrencyInfo> LoadCurrencyAsync(string currencyCode, CancellationToken ct)

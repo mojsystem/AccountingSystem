@@ -13,14 +13,32 @@ namespace AccountingSystem.Data.Tests;
 /// <summary>
 /// تست‌های یکپارچگی روی SQL Server. هر تست ارز اختصاصی خودش را می‌سازد تا مستقل از بقیه باشد.
 /// </summary>
-public class SqlAccountingRepositoryTests : IClassFixture<SqlServerFixture>
+public class SqlAccountingRepositoryTests : IClassFixture<SqlServerFixture>, IAsyncLifetime
 {
+    private const string SharedCustomerName = "مشتری آزمایشی";
+
     private readonly SqlServerFixture _fixture;
+    private int _customerId;
 
     public SqlAccountingRepositoryTests(SqlServerFixture fixture)
     {
         _fixture = fixture;
     }
+
+    /// <summary>هر تست یک مشتری مشترک دارد تا هر معامله‌ی آزمایشی به مشتری ثبت‌شده وصل باشد.</summary>
+    public async Task InitializeAsync()
+    {
+        if (!_fixture.IsEnabled)
+        {
+            return;
+        }
+        var repo = new SqlAccountingRepository(_fixture.ConnectionString!);
+        var admin = await EnsureAdminAsync(repo, DateTime.Now);
+        _customerId = await new CustomerService(repo, new PermissionService(repo))
+            .CreateAsync(admin, new CustomerInput(SharedCustomerName, null, null, null, null), DateTime.Now);
+    }
+
+    public Task DisposeAsync() => Task.CompletedTask;
 
     [Fact]
     public async Task Buy_then_sell_updates_cash_inventory_and_journal()
@@ -46,7 +64,7 @@ public class SqlAccountingRepositoryTests : IClassFixture<SqlServerFixture>
         await admin.OpeningIrrAsync(user, branchId, 100_000_000m, now);
         await admin.OpeningForeignAsync(user, branchId, code, 50m, 1_000_000m, now);
 
-        var buyId = await tradeService.BuyFromCustomerAsync(new TradeInput(branchId, code, 10m, 1_000_000m, "مشتری تست", "0012345678", null), user, now);
+        var buyId = await tradeService.BuyFromCustomerAsync(new TradeInput(branchId, code, 10m, 1_000_000m, "مشتری تست", "0012345678", null, CustomerId: _customerId), user, now);
         Assert.True(buyId > 0);
 
         var afterBuy = await repo.GetTradeSnapshotAsync(branchId, code);
@@ -55,7 +73,7 @@ public class SqlAccountingRepositoryTests : IClassFixture<SqlServerFixture>
         Assert.Equal(60_000_000m, afterBuy.ForeignCostIrr);
         Assert.Equal(irrBefore + 100_000_000m - 10_000_000m, afterBuy.IrrBalance);
 
-        var sellId = await tradeService.SellToCustomerAsync(new TradeInput(branchId, code, 40m, 1_200_000m, null, null, null), user, now);
+        var sellId = await tradeService.SellToCustomerAsync(new TradeInput(branchId, code, 40m, 1_200_000m, null, null, null, CustomerId: _customerId), user, now);
         Assert.True(sellId > 0);
 
         var afterSell = await repo.GetTradeSnapshotAsync(branchId, code);
@@ -105,7 +123,7 @@ public class SqlAccountingRepositoryTests : IClassFixture<SqlServerFixture>
         await admin.OpeningForeignAsync(user, branchId, code, 5m, 1_000_000m, now);
 
         await Assert.ThrowsAsync<BusinessRuleException>(() =>
-            tradeService.SellToCustomerAsync(new TradeInput(branchId, code, 6m, 1_000_000m, null, null, null), user, now));
+            tradeService.SellToCustomerAsync(new TradeInput(branchId, code, 6m, 1_000_000m, null, null, null, CustomerId: _customerId), user, now));
     }
 
     [Fact]
@@ -131,9 +149,9 @@ public class SqlAccountingRepositoryTests : IClassFixture<SqlServerFixture>
         // نسخه‌ای از وضعیت که یک کاربر دیگر قبل از ثبت، آن را تغییر داده است.
         var stale = await repo.GetTradeSnapshotAsync(branchId, code);
         Assert.NotNull(stale);
-        await tradeService.SellToCustomerAsync(new TradeInput(branchId, code, 1m, 1_100_000m, null, null, null), user, now);
+        await tradeService.SellToCustomerAsync(new TradeInput(branchId, code, 1m, 1_100_000m, null, null, null, CustomerId: _customerId), user, now);
 
-        var posting = TradePlanner.PlanSell(new TradeInput(branchId, code, 1m, 1_100_000m, null, null, null), stale!, user.Id, now);
+        var posting = TradePlanner.PlanSell(new TradeInput(branchId, code, 1m, 1_100_000m, null, null, null, CustomerId: _customerId), stale!, user.Id, now);
         await Assert.ThrowsAsync<ConcurrencyConflictException>(() => repo.PostAsync(posting));
     }
 
@@ -176,7 +194,7 @@ public class SqlAccountingRepositoryTests : IClassFixture<SqlServerFixture>
         await admin.OpeningForeignAsync(user, branchId, code, 20m, 1_000_000m, now);
 
         var sellId = await tradeService.SellToCustomerAsync(
-            new TradeInput(branchId, code, 5m, 1_200_000m, "مشتری کارمزد", null, "توضیح", FeeIrr: 150_000m), user, now);
+            new TradeInput(branchId, code, 5m, 1_200_000m, "مشتری کارمزد", null, "توضیح", FeeIrr: 150_000m, CustomerId: _customerId), user, now);
 
         var day = now.Date;
         var trade = (await reports.GetTradesAsync(user, branchId, day, day.AddDays(1))).Single(t => t.Id == sellId);
@@ -230,7 +248,7 @@ public class SqlAccountingRepositoryTests : IClassFixture<SqlServerFixture>
         Assert.DoesNotContain(mainRates, r => r.CurrencyCode == code);
 
         await Assert.ThrowsAsync<BusinessRuleException>(() =>
-            tradeService.SellToCustomerAsync(new TradeInput(otherId, code, 1m, 1_000_000m, null, null, null), user, now));
+            tradeService.SellToCustomerAsync(new TradeInput(otherId, code, 1m, 1_000_000m, null, null, null, CustomerId: _customerId), user, now));
 
         var dashboard = await reports.GetDashboardAsync(user, otherId, now);
         Assert.Equal(0m, dashboard.Positions.Single(p => p.CurrencyCode == code).Quantity);
@@ -262,7 +280,7 @@ public class SqlAccountingRepositoryTests : IClassFixture<SqlServerFixture>
         Assert.Equal(mainId, cashier.BranchId);
 
         await Assert.ThrowsAsync<BusinessRuleException>(() =>
-            tradeService.BuyFromCustomerAsync(new TradeInput(otherId, "USD", 1m, 1_000_000m, null, null, null), cashier, now));
+            tradeService.BuyFromCustomerAsync(new TradeInput(otherId, "USD", 1m, 1_000_000m, null, null, null, CustomerId: _customerId), cashier, now));
         await Assert.ThrowsAsync<BusinessRuleException>(() => reports.GetDashboardAsync(cashier, otherId, now));
         await Assert.ThrowsAsync<BusinessRuleException>(() => tradeService.VoidTradeAsync(cashier, 1, "دلیل", now));
 
@@ -340,8 +358,8 @@ public class SqlAccountingRepositoryTests : IClassFixture<SqlServerFixture>
         await admin.AddCurrencyAsync(user, code, "ارز ابطال میانی", 2, now);
         await admin.RecordOpeningAsync(user, branchId, CurrencyCodes.Irr, 500_000_000m, null, now, now.Date.AddDays(-5));
         await admin.RecordOpeningAsync(user, branchId, code, 100m, 1_000_000m, now, now.Date.AddDays(-5));
-        var buyId = await tradeService.RecordTradeAsync(new TradeInput(branchId, code, 50m, 1_000_000m, null, null, null), TradeType.Buy, user, now, now.Date.AddDays(-4));
-        var saleId = await tradeService.RecordTradeAsync(new TradeInput(branchId, code, 120m, 1_200_000m, null, null, null), TradeType.Sell, user, now, now.Date.AddDays(-3));
+        var buyId = await tradeService.RecordTradeAsync(new TradeInput(branchId, code, 50m, 1_000_000m, null, null, null, CustomerId: _customerId), TradeType.Buy, user, now, now.Date.AddDays(-4));
+        var saleId = await tradeService.RecordTradeAsync(new TradeInput(branchId, code, 120m, 1_200_000m, null, null, null, CustomerId: _customerId), TradeType.Sell, user, now, now.Date.AddDays(-3));
 
         // بدون خرید، ۱۰۰ واحد باقی می‌ماند و فروش ۱۲۰ واحدی با موجودی کافی انجام نمی‌شد.
         var blocked = await Assert.ThrowsAsync<BusinessRuleException>(() => tradeService.VoidTradeAsync(user, buyId, "خطا در مقدار", now));
@@ -381,12 +399,12 @@ public class SqlAccountingRepositoryTests : IClassFixture<SqlServerFixture>
         await admin.AddCurrencyAsync(user, code, "ارز پس‌نگر", 2, now);
         await admin.RecordOpeningAsync(user, branchId, CurrencyCodes.Irr, 500_000_000m, null, now, now.Date.AddDays(-5));
         await admin.RecordOpeningAsync(user, branchId, code, 100m, 1_000_000m, now, now.Date.AddDays(-5));
-        var saleId = await tradeService.RecordTradeAsync(new TradeInput(branchId, code, 50m, 1_200_000m, null, null, null), TradeType.Sell, user, now, now.Date.AddDays(-2));
+        var saleId = await tradeService.RecordTradeAsync(new TradeInput(branchId, code, 50m, 1_200_000m, null, null, null, CustomerId: _customerId), TradeType.Sell, user, now, now.Date.AddDays(-2));
         var before = await repo.GetTradeAsync(saleId);
         Assert.Equal(50_000_000m, before!.CostIrr);
 
         // خرید ۱۰۰ واحدی با تاریخ سه روز قبل: بهای میانگین فروش دو روز قبل باید بازمحاسبه شود.
-        await tradeService.RecordTradeAsync(new TradeInput(branchId, code, 100m, 1_500_000m, null, null, null), TradeType.Buy, user, now, now.Date.AddDays(-3));
+        await tradeService.RecordTradeAsync(new TradeInput(branchId, code, 100m, 1_500_000m, null, null, null, CustomerId: _customerId), TradeType.Buy, user, now, now.Date.AddDays(-3));
 
         var after = await repo.GetTradeAsync(saleId);
         Assert.Equal(62_500_000m, after!.CostIrr);
@@ -417,18 +435,18 @@ public class SqlAccountingRepositoryTests : IClassFixture<SqlServerFixture>
         await admin.AddCurrencyAsync(user, code, "ارز ویرایش", 2, now);
         await admin.OpeningIrrAsync(user, branchId, 100_000_000m, now);
         await admin.OpeningForeignAsync(user, branchId, code, 50m, 1_000_000m, now);
-        var buyId = await tradeService.BuyFromCustomerAsync(new TradeInput(branchId, code, 10m, 1_000_000m, null, null, null), user, now);
+        var buyId = await tradeService.BuyFromCustomerAsync(new TradeInput(branchId, code, 10m, 1_000_000m, null, null, null, CustomerId: _customerId), user, now);
 
         // تغییر اطلاعات توصیفی: همان سند به‌روز می‌شود و نسخه‌ی جدید ساخته نمی‌شود.
-        var metadataOnly = await tradeService.EditTradeAsync(user, buyId, new TradeInput(branchId, code, 10m, 1_000_000m, "علی رضایی", "0012345678", "یادداشت"),
+        var metadataOnly = await tradeService.EditTradeAsync(user, buyId, new TradeInput(branchId, code, 10m, 1_000_000m, "علی رضایی", "0012345678", "یادداشت", CustomerId: _customerId),
             TradeType.Buy, null, now);
         Assert.Null(metadataOnly);
         var same = await repo.GetTradeAsync(buyId);
-        Assert.Equal("علی رضایی", same!.CustomerName);
+        Assert.Equal(SharedCustomerName, same!.CustomerName);
         Assert.False(same.IsVoided);
 
         // تغییر مبلغ: نسخه‌ی قبلی باطل می‌شود و نسخه‌ی اصلاحی جای آن را می‌گیرد.
-        var newId = await tradeService.EditTradeAsync(user, buyId, new TradeInput(branchId, code, 12m, 1_000_000m, "علی رضایی", null, null),
+        var newId = await tradeService.EditTradeAsync(user, buyId, new TradeInput(branchId, code, 12m, 1_000_000m, "علی رضایی", null, null, CustomerId: _customerId),
             TradeType.Buy, null, now);
         Assert.NotNull(newId);
         var old = await repo.GetTradeAsync(buyId);
@@ -527,7 +545,7 @@ public class SqlAccountingRepositoryTests : IClassFixture<SqlServerFixture>
         var branchId = await MainBranchIdAsync(repo);
 
         await Assert.ThrowsAsync<BusinessRuleException>(() => tradeService.RecordTradeAsync(
-            new TradeInput(branchId, "USD", 1m, 1_000_000m, null, null, null), TradeType.Buy, user, now, now.Date.AddDays(-31)));
+            new TradeInput(branchId, "USD", 1m, 1_000_000m, null, null, null, CustomerId: _customerId), TradeType.Buy, user, now, now.Date.AddDays(-31)));
     }
 
     /// <summary>
@@ -598,7 +616,7 @@ public class SqlAccountingRepositoryTests : IClassFixture<SqlServerFixture>
 
         // ثبت معامله در شعبه‌ی دوم رد می‌شود چون نقش حسابدار آن را ندارد.
         var recordInOther = await Assert.ThrowsAsync<BusinessRuleException>(() =>
-            tradeService.BuyFromCustomerAsync(new TradeInput(otherId, "USD", 1m, 1_000_000m, null, null, null), cashier, now));
+            tradeService.BuyFromCustomerAsync(new TradeInput(otherId, "USD", 1m, 1_000_000m, null, null, null, CustomerId: _customerId), cashier, now));
         Assert.Contains("ثبت معامله", recordInOther.Message);
 
         // نقش شعبه‌ی اول به مدیر شعبه تغییر می‌کند؛ نقش شعبه‌ی دوم دست‌نخورده می‌ماند.
@@ -836,6 +854,50 @@ public class SqlAccountingRepositoryTests : IClassFixture<SqlServerFixture>
         await chart.DeleteAsync(admin, detail, now);
         await chart.DeleteAsync(admin, code, now);
         Assert.DoesNotContain(await repo.GetAccountsAsync(), a => a.Code == code);
+    }
+
+    [Fact]
+    public async Task Every_trade_needs_a_customer_and_keeps_the_name_it_was_recorded_with()
+    {
+        if (!_fixture.IsEnabled)
+        {
+            return;
+        }
+
+        var repo = new SqlAccountingRepository(_fixture.ConnectionString!);
+        var admin = new CurrencyAdminService(repo);
+        var trades = new CurrencyTradeService(repo);
+        var customers = new CustomerService(repo, new PermissionService(repo));
+        var now = DateTime.Now;
+        var user = await EnsureAdminAsync(repo, now);
+        var branchId = await MainBranchIdAsync(repo);
+        var code = await NewCurrencyCodeAsync(repo);
+        await admin.AddCurrencyAsync(user, code, "ارز آزمایشی", 2, now);
+        await admin.SetRateAsync(user, branchId, code, 1_000_000m, 1_100_000m, now);
+        var nationalCode = "T" + Guid.NewGuid().ToString("N")[..10];
+
+        await Assert.ThrowsAsync<BusinessRuleException>(() =>
+            trades.BuyFromCustomerAsync(new TradeInput(branchId, code, 1m, 1_000_000m, null, null, null), user, now));
+
+        var customerId = await customers.CreateAsync(user,
+            new CustomerInput("  زهرا احمدی ", nationalCode, "۰۹۱۲۳۴۵۶۷۸۹", null, null), now);
+        var buyId = await trades.BuyFromCustomerAsync(
+            new TradeInput(branchId, code, 1m, 1_000_000m, null, null, null, CustomerId: customerId), user, now);
+
+        var recorded = await repo.GetTradeAsync(buyId);
+        Assert.Equal(customerId, recorded!.CustomerId);
+        Assert.Equal("زهرا احمدی", recorded.CustomerName);
+        Assert.Equal(nationalCode, recorded.NationalCode);
+
+        await customers.UpdateAsync(user, customerId, new CustomerInput("زهرا احمدی‌نژاد", nationalCode, null, null, null), now);
+        var afterEdit = await repo.GetTradeAsync(buyId);
+        Assert.Equal("زهرا احمدی", afterEdit!.CustomerName);
+
+        var found = await customers.SearchAsync(user, "احمدی‌نژاد");
+        Assert.Contains(found, c => c.Id == customerId && c.Phone == "09123456789");
+
+        await Assert.ThrowsAsync<BusinessRuleException>(() =>
+            customers.CreateAsync(user, new CustomerInput("کس دیگر", nationalCode, null, null, null), now));
     }
 
     private static async Task AssertLedgerConsistentAsync(string connectionString, int branchId, string currencyCode)

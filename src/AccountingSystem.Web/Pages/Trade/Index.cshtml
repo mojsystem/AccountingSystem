@@ -49,8 +49,16 @@
         <label>مقدار ارز<input name="Input.Amount" value="@Model.Input.Amount" dir="ltr" inputmode="decimal" /></label>
         <label>نرخ (ریال به ازای یک واحد)<input id="rate" name="Input.Rate" value="@Model.Input.Rate" dir="ltr" inputmode="decimal" /></label>
         <label>کارمزد (ریال، اختیاری)<input name="Input.Fee" value="@Model.Input.Fee" dir="ltr" inputmode="numeric" /></label>
-        <label>نام مشتری<input name="Input.CustomerName" value="@Model.Input.CustomerName" /></label>
-        <label>کد ملی / شناسه<input name="Input.NationalCode" value="@Model.Input.NationalCode" dir="ltr" /></label>
+        <label>مشتری
+            <select name="Input.CustomerId" required>
+                <option value="">— انتخاب مشتری —</option>
+                @foreach (var c in Model.Customers)
+                {
+                    <option value="@c.Id" selected="@(c.Id == Model.Input.CustomerId)">@c.FullName@(string.IsNullOrEmpty(c.NationalCode) ? "" : " · " + c.NationalCode)</option>
+                }
+            </select>
+            <a class="link small" asp-page="/Customers/Index">مشتری تازه</a>
+        </label>
         <label>توضیحات<input name="Input.Note" value="@Model.Input.Note" /></label>
         <label>تاریخ معامله (شمسی، اختیاری)<input name="Input.OccurredOn" value="@Model.Input.OccurredOn" dir="ltr" placeholder="۱۴۰۵/۰۷/۱۵" /></label>
     </div>
