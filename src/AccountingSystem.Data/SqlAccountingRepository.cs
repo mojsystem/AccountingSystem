@@ -9,7 +9,7 @@ using Microsoft.Data.SqlClient;
 namespace AccountingSystem.Data;
 
 /// <summary>
-/// پیاده‌سازی IAccountingRepository با ADO.NET و SQL Server (سازگار با SQL Server 2016).
+/// پیاده‌سازی IAccountingRepository با ADO.NET و SQL Server (هدف: SQL Server 2019).
 /// همه‌ی ثبت‌ها داخل یک تراکنش انجام می‌شوند. به‌روزرسانی موجودی‌ها با «مقایسه‌ی مقدار قبلی»
 /// انجام می‌شود تا تغییر همزمان داده باعث موجودی منفی یا ثبت نادرست نشود.
 /// ترتیب قفل: ابتدا صندوق ریال شعبه، سپس صندوق ارز و در آخر بهای تمام‌شده (در همه‌ی ثبت‌ها یکسان است).
