@@ -29,6 +29,7 @@ internal sealed class MainForm : Form
             AddTab("شعبه‌ها", new BranchesTab(services, user));
             AddTab("کاربران", new UsersTab(services, user));
             AddTab("سرفصل حساب‌ها", new AccountsTab(services, user));
+            AddTab("پشتیبان و بازیابی", new BackupTab(services, user));
         }
 
         Controls.Add(_tabs);

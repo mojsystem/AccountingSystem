@@ -1,32 +1,6 @@
-/*
-    AccountingSystem - مرجع ساختار کامل پایگاه داده (آخرین نسخه)
-    برای SQL Server 2019 (سطح سازگاری 150)
-
-    این فایل فقط مرجع و نصب دستی روی یک پایگاه داده‌ی تازه است.
-    برنامه‌ی وب و ویندوز پایگاه داده را خودشان از پوشه‌ی database/migrations می‌سازند و
-    هر بار که اجرا می‌شوند، نسخه‌ی آن را با نسخه‌ی برنامه مقایسه و نسخه‌های باقی‌مانده را اجرا می‌کنند.
-    هر تغییر ساختار باید هم در یک فایل مهاجرت جدید و هم در این فایل اعمال شود؛
-    تست Fresh_database_matches_the_install_script این دو را با هم مقایسه می‌کند.
-
-    نصب دستی (فقط روی بانک جدید):
-      - در SSMS با کاربری که دسترسی sysadmin دارد باز و Execute کنید، یا
-      - از خط فرمان:  sqlcmd -S localhost -E -b -f 65001 -i AccountingSystem.sql
-*/
-SET NOCOUNT ON;
-GO
-
-IF DB_ID(N'AccountingSystem') IS NULL
-    CREATE DATABASE [AccountingSystem];
-GO
-
-ALTER DATABASE [AccountingSystem] SET COMPATIBILITY_LEVEL = 150;
-GO
-
-USE [AccountingSystem];
-GO
-
-IF OBJECT_ID(N'dbo.Currencies', N'U') IS NOT NULL
-    THROW 50000, N'پایگاه داده‌ی AccountingSystem قبلاً ساخته شده است. این اسکریپت فقط برای نصب تازه است.', 1;
+-- 0001 - نسخه‌ی ۱: پایه‌ی دسترسی‌های نقش‌دار (permission v2)
+-- این فایل توسط برنامه در تراکنش خودش اجرا می‌شود و جداکننده‌ی دسته‌ها خط GO است.
+-- هیچ CREATE DATABASE / USE / ALTER DATABASE در این فایل نیست؛ بانک را برنامه می‌سازد.
 GO
 
 -- ترتیب ثابت همه‌ی اسناد با زمان یکسان. با هر سند جدید مقدار بعدی گرفته می‌شود.
@@ -78,54 +52,14 @@ CREATE TABLE dbo.Users
 );
 GO
 
--- مشتریان صرافی: فهرست مشترک همه‌ی شعبه‌ها. هر معامله به یک مشتری وصل است و نام/کد ملی آن را نیز نگه می‌دارد.
--- CustomerCode ستون محاسباتی پایدار است: سیستم آن را از شناسه‌ی داخلی می‌سازد و هیچ نوشتنی (حتی SQL مستقیم) آن را تغییر نمی‌دهد.
-CREATE TABLE dbo.Customers
-(
-    Id            INT           IDENTITY(1,1) NOT NULL,
-    CustomerCode  AS ('C' + RIGHT('0000000000' + CONVERT(VARCHAR(11), [Id]), 10)) PERSISTED NOT NULL,
-    FullName      NVARCHAR(100) NOT NULL,
-    NationalCode  NVARCHAR(20)  NULL,
-    Phone         NVARCHAR(20)  NULL,
-    Mobile        NVARCHAR(20)  NULL,
-    Address       NVARCHAR(250) NULL,
-    City          NVARCHAR(60)  NULL,
-    Sheba1        NVARCHAR(26)  NULL,
-    Sheba2        NVARCHAR(26)  NULL,
-    CardNumber1   NVARCHAR(16)  NULL,
-    CardNumber2   NVARCHAR(16)  NULL,
-    Note          NVARCHAR(250) NULL,
-    CreatedBy     INT           NOT NULL,
-    CreatedAt     DATETIME2(0)  NOT NULL,
-    UpdatedBy     INT           NOT NULL,
-    UpdatedAt     DATETIME2(0)  NOT NULL,
-    CONSTRAINT PK_Customers PRIMARY KEY (Id),
-    CONSTRAINT UX_Customers_CustomerCode UNIQUE (CustomerCode),
-    CONSTRAINT FK_Customers_CreatedBy FOREIGN KEY (CreatedBy) REFERENCES dbo.Users (Id),
-    CONSTRAINT FK_Customers_UpdatedBy FOREIGN KEY (UpdatedBy) REFERENCES dbo.Users (Id),
-    CONSTRAINT CK_Customers_FullName CHECK (LEN(LTRIM(RTRIM(FullName))) >= 2),
-    CONSTRAINT CK_Customers_Sheba1 CHECK (Sheba1 IS NULL OR (LEN(Sheba1) = 26 AND LEFT(Sheba1, 2) = 'IR' AND SUBSTRING(Sheba1, 3, 24) NOT LIKE '%[^0-9]%')),
-    CONSTRAINT CK_Customers_Sheba2 CHECK (Sheba2 IS NULL OR (LEN(Sheba2) = 26 AND LEFT(Sheba2, 2) = 'IR' AND SUBSTRING(Sheba2, 3, 24) NOT LIKE '%[^0-9]%')),
-    CONSTRAINT CK_Customers_CardNumber1 CHECK (CardNumber1 IS NULL OR (LEN(CardNumber1) = 16 AND CardNumber1 NOT LIKE '%[^0-9]%')),
-    CONSTRAINT CK_Customers_CardNumber2 CHECK (CardNumber2 IS NULL OR (LEN(CardNumber2) = 16 AND CardNumber2 NOT LIKE '%[^0-9]%'))
-);
-CREATE UNIQUE INDEX UX_Customers_NationalCode ON dbo.Customers (NationalCode) WHERE NationalCode IS NOT NULL;
-GO
-
 CREATE TABLE dbo.Accounts
 (
     Code        NVARCHAR(20)  NOT NULL,
     Name        NVARCHAR(100) NOT NULL,
     AccountType NVARCHAR(20)  NOT NULL,
-    Level       TINYINT       NOT NULL,
-    ParentCode  NVARCHAR(20)  NULL,
-    IsSystem    BIT           NOT NULL CONSTRAINT DF_Accounts_IsSystem DEFAULT (0),
     IsActive    BIT           NOT NULL CONSTRAINT DF_Accounts_IsActive DEFAULT (1),
     CONSTRAINT PK_Accounts PRIMARY KEY (Code),
-    CONSTRAINT FK_Accounts_Parent FOREIGN KEY (ParentCode) REFERENCES dbo.Accounts (Code),
-    CONSTRAINT CK_Accounts_Type CHECK (AccountType IN (N'Asset', N'Liability', N'Equity', N'Revenue', N'Expense')),
-    CONSTRAINT CK_Accounts_Level CHECK (Level BETWEEN 1 AND 4),
-    CONSTRAINT CK_Accounts_Parent CHECK ((Level = 1 AND ParentCode IS NULL) OR (Level > 1 AND ParentCode IS NOT NULL))
+    CONSTRAINT CK_Accounts_Type CHECK (AccountType IN (N'Asset', N'Liability', N'Equity', N'Revenue', N'Expense'))
 );
 GO
 
@@ -214,7 +148,6 @@ CREATE TABLE dbo.CurrencyTransactions
     CostIrr      DECIMAL(19,4)        NOT NULL,
     ProfitIrr    DECIMAL(19,4)        NOT NULL,
     FeeIrr       DECIMAL(19,4)        NOT NULL CONSTRAINT DF_CurrencyTransactions_Fee DEFAULT (0),
-    CustomerId   INT                  NOT NULL CONSTRAINT FK_CurrencyTransactions_Customers REFERENCES dbo.Customers (Id),
     CustomerName NVARCHAR(100)        NULL,
     NationalCode NVARCHAR(20)         NULL,
     Note         NVARCHAR(250)        NULL,
@@ -418,35 +351,20 @@ INSERT INTO dbo.Currencies (Code, Name, DecimalPlaces) VALUES
 (N'TRY', N'لیر ترکیه', 2);
 GO
 
--- سرفصل چهارسطحی: گروه (۱) ← کل (۲) ← معین (۳) ← تفصیلی (۴). نوع حساب از گروه به زیرمجموعه‌ها به ارث می‌رسد.
--- حساب‌های IsSystem=1 پایه‌ی موتور معاملات و سندهای خودکارند: کد، پدر، نوع و وضعیت آن‌ها قابل تغییر نیست؛ فقط نام قابل ویرایش است.
-INSERT INTO dbo.Accounts (Code, Name, AccountType, Level, ParentCode, IsSystem) VALUES
-(N'1',          N'دارایی‌ها',                       N'Asset',   1, NULL,     0),
-(N'10',         N'دارایی‌های نقدی',                 N'Asset',   2, N'1',     0),
-(N'1001',       N'صندوق ریال',                      N'Asset',   3, N'10',    1),
-(N'11',         N'دارایی‌های ارزی',                 N'Asset',   2, N'1',     0),
-(N'1101',       N'موجودی ارز به تفکیک ارز',         N'Asset',   3, N'11',    0),
-(N'1101-USD',   N'موجودی ارز - دلار آمریکا',        N'Asset',   4, N'1101',  1),
-(N'1101-EUR',   N'موجودی ارز - یورو',               N'Asset',   4, N'1101',  1),
-(N'1101-GBP',   N'موجودی ارز - پوند استرلینگ',      N'Asset',   4, N'1101',  1),
-(N'1101-AED',   N'موجودی ارز - درهم امارات',        N'Asset',   4, N'1101',  1),
-(N'1101-TRY',   N'موجودی ارز - لیر ترکیه',          N'Asset',   4, N'1101',  1),
-(N'3',          N'سرمایه',                          N'Equity',  1, NULL,     0),
-(N'30',         N'سرمایه‌ی پایه',                    N'Equity',  2, N'3',     0),
-(N'3001',       N'سرمایه افتتاحیه',                 N'Equity',  3, N'30',    1),
-(N'4',          N'درآمدها',                         N'Revenue', 1, NULL,     0),
-(N'40',         N'درآمد معاملات ارزی',              N'Revenue', 2, N'4',     0),
-(N'4001',       N'سود معاملات ارزی',                N'Revenue', 3, N'40',    1),
-(N'41',         N'درآمد کارمزد',                    N'Revenue', 2, N'4',     0),
-(N'4101',       N'درآمد کارمزد معاملات',            N'Revenue', 3, N'41',    1),
-(N'5',          N'زیان‌ها',                         N'Expense', 1, NULL,     0),
-(N'50',         N'زیان‌های معاملات ارزی',           N'Expense', 2, N'5',     0),
-(N'5001',       N'زیان معاملات ارزی',               N'Expense', 3, N'50',    1),
-(N'6',          N'هزینه‌های عملیاتی',               N'Expense', 1, NULL,     0),
-(N'60',         N'هزینه‌های جاری',                  N'Expense', 2, N'6',     0),
-(N'6001',       N'هزینه‌های اداری و جاری',          N'Expense', 3, N'60',    0),
-(N'6002',       N'هزینه‌ی اجاره',                   N'Expense', 3, N'60',    0),
-(N'6003',       N'سایر هزینه‌ها',                   N'Expense', 3, N'60',    0);
+INSERT INTO dbo.Accounts (Code, Name, AccountType) VALUES
+(N'1001', N'صندوق ریال', N'Asset'),
+(N'1101-USD', N'موجودی ارز - دلار آمریکا', N'Asset'),
+(N'1101-EUR', N'موجودی ارز - یورو', N'Asset'),
+(N'1101-GBP', N'موجودی ارز - پوند استرلینگ', N'Asset'),
+(N'1101-AED', N'موجودی ارز - درهم امارات', N'Asset'),
+(N'1101-TRY', N'موجودی ارز - لیر ترکیه', N'Asset'),
+(N'3001', N'سرمایه افتتاحیه', N'Equity'),
+(N'4001', N'سود معاملات ارزی', N'Revenue'),
+(N'4101', N'درآمد کارمزد معاملات', N'Revenue'),
+(N'5001', N'زیان معاملات ارزی', N'Expense'),
+(N'6001', N'هزینه‌های اداری و جاری', N'Expense'),
+(N'6002', N'هزینه‌ی اجاره', N'Expense'),
+(N'6003', N'سایر هزینه‌ها', N'Expense');
 GO
 
 INSERT INTO dbo.CashBoxes (BranchId, CurrencyCode, Name)

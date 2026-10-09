@@ -15,4 +15,9 @@
     <ProjectReference Include="..\AccountingSystem.Core\AccountingSystem.Core.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- مهاجرت‌ها در اسمبلی جاسازی می‌شوند تا برنامه‌ی وب و ویندوز بدون فایل جداگانه ارتقا دهند. -->
+    <EmbeddedResource Include="..\..\database\migrations\*.sql" LogicalName="migrations/%(Filename)%(Extension)" />
+  </ItemGroup>
+
 </Project>

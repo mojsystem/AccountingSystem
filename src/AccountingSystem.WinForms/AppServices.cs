@@ -6,7 +6,7 @@ namespace AccountingSystem.WinForms;
 /// <summary>همان سرویس‌های هسته‌ی مشترک که نسخه وب نیز استفاده می‌کند.</summary>
 internal sealed class AppServices
 {
-    public AppServices(IAccountingRepository repository)
+    public AppServices(IAccountingRepository repository, IDatabaseMaintenance maintenance)
     {
         Branches = new BranchService(repository);
         Trades = new CurrencyTradeService(repository);
@@ -18,6 +18,7 @@ internal sealed class AppServices
         Permissions = new PermissionService(repository);
         Accounts = new AccountService(repository);
         Customers = new CustomerService(repository, Permissions);
+        Backup = new BackupService(maintenance);
     }
 
     public BranchService Branches { get; }
@@ -39,4 +40,6 @@ internal sealed class AppServices
     public AccountService Accounts { get; }
 
     public CustomerService Customers { get; }
+
+    public BackupService Backup { get; }
 }
