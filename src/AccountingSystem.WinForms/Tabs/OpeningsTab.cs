@@ -5,7 +5,7 @@ using AccountingSystem.Core.Domain;
 namespace AccountingSystem.WinForms.Tabs;
 
 /// <summary>
-/// موجودی‌های افتتاحیه‌ی ۹۰ روز اخیر. ویرایش و ابطال فقط برای مدیر است؛ هر دو با بازمحاسبه‌ی تاریخچه انجام می‌شوند.
+/// موجودی‌های افتتاحیه‌ی ۹۰ روز اخیر. ویرایش و ابطال با مدیر یا دارنده‌ی دسترسی مربوط در همان شعبه است؛ هر دو با بازمحاسبه‌ی تاریخچه انجام می‌شوند.
 /// </summary>
 internal sealed class OpeningsTab : UserControl, IRefreshable
 {

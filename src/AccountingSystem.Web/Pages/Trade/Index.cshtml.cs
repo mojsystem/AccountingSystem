@@ -114,7 +114,7 @@ public class IndexModel : PageModel
         }
     }
 
-    /// <summary>ابطال معامله (فقط مدیر). سند معکوس ثبت می‌شود و سطر معامله حذف نمی‌شود.</summary>
+    /// <summary>ابطال معامله (مدیر، یا دارنده‌ی دسترسی «ابطال معامله» در همان شعبه). سند معکوس ثبت می‌شود و سطر معامله حذف نمی‌شود.</summary>
     public async Task<IActionResult> OnPostVoidAsync(long voidTradeId, string? voidReason, CancellationToken ct)
     {
         try

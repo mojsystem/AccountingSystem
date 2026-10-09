@@ -971,7 +971,20 @@ ORDER BY t.OccurredAt DESC, t.Id DESC;";
     /// <summary>
     /// فقط تفاوت‌ها اعمال می‌شوند: دسترسی‌های حذف‌شده پاک و دسترسی‌های تازه ثبت می‌شوند. تغییر در سابقه ثبت می‌شود.
     /// </summary>
-    public Task SetUserPermissionsAsync(int userId, IReadOnlyCollection<Permission> permissions, int actorId, DateTime now, CancellationToken ct = default)
+    public async Task SetUserPermissionsAsync(int userId, IReadOnlyCollection<Permission> permissions, int actorId, DateTime now, CancellationToken ct = default)
+    {
+        try
+        {
+            await ApplyUserPermissionsAsync(userId, permissions, actorId, now, ct);
+        }
+        catch (SqlException ex) when (ex.Number is DuplicateKeyError or UniqueIndexError)
+        {
+            // دو ثبت هم‌زمان (مثلاً دو بار کلیک روی ذخیره) یک دسترسی را دوبار درج کرده‌اند.
+            throw new ConcurrencyConflictException();
+        }
+    }
+
+    private Task ApplyUserPermissionsAsync(int userId, IReadOnlyCollection<Permission> permissions, int actorId, DateTime now, CancellationToken ct)
     {
         return WithTransactionAsync<bool>(async (conn, tx) =>
         {

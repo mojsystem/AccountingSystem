@@ -47,7 +47,7 @@ public class IndexModel : PageModel
         return RedirectToPage(new { From, To, BranchFilter });
     }
 
-    /// <summary>ابطال سند دستی (فقط مدیر). سند معکوس ثبت می‌شود و سند اصلی علامت باطل می‌خورد.</summary>
+    /// <summary>ابطال سند دستی (مدیر، یا دارنده‌ی دسترسی «ابطال سند دستی» در همان شعبه). سند معکوس ثبت می‌شود و سند اصلی علامت باطل می‌خورد.</summary>
     public async Task<IActionResult> OnPostVoidManualAsync(long entryId, string? voidReason, CancellationToken ct)
     {
         try
