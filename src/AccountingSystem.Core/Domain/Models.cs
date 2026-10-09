@@ -29,7 +29,14 @@ public enum TradeSettlementDirection
     Receipt,
 }
 
-/// <summary>Admin: دسترسی کامل به همه‌ی شعبه‌ها. Cashier: ثبت معاملات و نرخ‌ها در شعبه‌ی خودش.</summary>
+/// <summary>نوع سند مستقل دریافت یا پرداخت از/به مشتری.</summary>
+public enum CashTransactionDirection
+{
+    Receipt,
+    Payment,
+}
+
+/// <summary>Admin: دسترسی کامل به همه‌ی شعبه‌ها. Cashier: وظایف پایه‌ی صندوق در شعبه‌های مجاز.</summary>
 public enum UserRole
 {
     Admin,
@@ -63,6 +70,11 @@ public static class SourceTypes
     public const string Adjust = "ADJUST";
     /// <summary>سند حسابداری دستی (مثلاً هزینه یا تعدیل توسط مدیر).</summary>
     public const string Manual = "MANUAL";
+    public const string CashReceipt = "CASH_RECEIPT";
+    public const string CashPayment = "CASH_PAYMENT";
+    /// <summary>تعدیل بهای تمام‌شده‌ی پرداخت ارزی در اثر تغییر تاریخچه‌ی صندوق ارز.</summary>
+    public const string CashAdjustment = "CASH_ADJUST";
+    public const string CashTransaction = "CASH_TRANSACTION";
 }
 
 /// <summary>کاربر جاری. BranchId برای کاربر صندوق الزامی است؛ مدیر BranchId ندارد و به همه‌ی شعبه‌ها دسترسی دارد.</summary>
@@ -142,6 +154,33 @@ public sealed record TradeSettlementInfo(
 
 /// <summary>مانده‌ی تفصیلی حساب مشتری در یک شعبه، به ریال.</summary>
 public sealed record CustomerAccountBalance(int BranchId, int CustomerId, decimal ReceivableIrr, decimal PayableIrr);
+
+/// <summary>رسید دریافت یا پرداخت مستقل از معامله، ثبت‌شده روی صندوق و حساب مشتری.</summary>
+public sealed record CashTransactionInfo(
+    long Id,
+    int BranchId,
+    string BranchCode,
+    string BranchName,
+    CashTransactionDirection Direction,
+    int CustomerId,
+    string CustomerCode,
+    string CustomerName,
+    string CurrencyCode,
+    string CurrencyName,
+    int DecimalPlaces,
+    decimal Amount,
+    TradeRateMode RateMode,
+    decimal RateIrr,
+    decimal IrrAmount,
+    decimal CostIrr,
+    decimal ProfitIrr,
+    string? Note,
+    DateTime OccurredAt,
+    string CreatedBy,
+    bool IsVoided,
+    DateTime? VoidedAt,
+    string? VoidedBy,
+    string? VoidReason);
 
 /// <summary>مانده‌ی خالص هر شخص در گزارش معین؛ مثبت یعنی بدهکار و منفی یعنی بستانکار.</summary>
 public sealed record CustomerBalanceReportRow(int CustomerId, string CustomerCode, string FullName, decimal BalanceIrr)

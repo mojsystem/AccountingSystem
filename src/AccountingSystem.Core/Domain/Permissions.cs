@@ -15,6 +15,9 @@ public enum Permission
     ManualEdit,
     ManualVoid,
     RateSet,
+    CashTransactionCreate,
+    CashTransactionEdit,
+    CashTransactionVoid,
 }
 
 public static class PermissionCodes
@@ -31,6 +34,9 @@ public static class PermissionCodes
         Permission.ManualEdit => "MANUAL_EDIT",
         Permission.ManualVoid => "MANUAL_VOID",
         Permission.RateSet => "RATE_SET",
+        Permission.CashTransactionCreate => "CASH_TRANSACTION_CREATE",
+        Permission.CashTransactionEdit => "CASH_TRANSACTION_EDIT",
+        Permission.CashTransactionVoid => "CASH_TRANSACTION_VOID",
         _ => throw new ArgumentOutOfRangeException(nameof(permission), permission, null),
     };
 
@@ -61,6 +67,9 @@ public static class PermissionCodes
         Permission.ManualEdit => "ویرایش سند دستی",
         Permission.ManualVoid => "ابطال سند دستی",
         Permission.RateSet => "تنظیم نرخ خرید و فروش",
+        Permission.CashTransactionCreate => "ثبت دریافت/پرداخت",
+        Permission.CashTransactionEdit => "ویرایش دریافت/پرداخت",
+        Permission.CashTransactionVoid => "ابطال دریافت/پرداخت",
         _ => permission.ToString(),
     };
 
@@ -70,6 +79,7 @@ public static class PermissionCodes
         Permission.TradeRecord or Permission.TradeEdit or Permission.TradeVoid => "معاملات",
         Permission.OpeningCreate or Permission.OpeningEdit or Permission.OpeningVoid => "موجودی افتتاحیه",
         Permission.ManualCreate or Permission.ManualEdit or Permission.ManualVoid => "اسناد حسابداری دستی",
+        Permission.CashTransactionCreate or Permission.CashTransactionEdit or Permission.CashTransactionVoid => "دریافت و پرداخت",
         _ => "نرخ‌ها",
     };
 }

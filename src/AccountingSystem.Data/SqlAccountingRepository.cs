@@ -43,6 +43,17 @@ INNER JOIN dbo.Branches br ON br.Id = t.BranchId
 INNER JOIN dbo.Users u ON u.Id = t.CreatedBy
 LEFT JOIN dbo.Users vu ON vu.Id = t.VoidedBy";
 
+    private const string CashTransactionSelect = @"
+SELECT t.Id, t.BranchId, br.Code, br.Name, t.Direction, t.CustomerId, c.CustomerCode, c.FullName,
+       t.CurrencyCode, cur.Name, cur.DecimalPlaces, t.Amount, t.RateMode, t.RateIrr, t.IrrAmount,
+       t.CostIrr, t.ProfitIrr, t.Note, t.OccurredAt, u.Username, t.IsVoided, t.VoidedAt, vu.Username, t.VoidReason
+FROM dbo.CashTransactions t
+INNER JOIN dbo.Branches br ON br.Id = t.BranchId
+INNER JOIN dbo.Customers c ON c.Id = t.CustomerId
+INNER JOIN dbo.Currencies cur ON cur.Code = t.CurrencyCode
+INNER JOIN dbo.Users u ON u.Id = t.CreatedBy
+LEFT JOIN dbo.Users vu ON vu.Id = t.VoidedBy";
+
     private readonly string _connectionString;
 
     public SqlAccountingRepository(string connectionString)
@@ -391,6 +402,7 @@ ORDER BY a.Code;";
         await ReadTradeEventsAsync(conn, branchId, events, active, ct);
         await ReadOpeningEventsAsync(conn, branchId, events, active, ct);
         await ReadManualEventsAsync(conn, branchId, events, active, ct);
+        await ReadCashTransactionEventsAsync(conn, branchId, events, active, ct);
 
         var irrBalance = 0m;
         var pools = new Dictionary<string, PoolBalance>(StringComparer.Ordinal);
@@ -547,6 +559,43 @@ GROUP BY e.Id, e.OccurredAt, e.Seq;";
         }
     }
 
+    private static async Task ReadCashTransactionEventsAsync(
+        SqlConnection conn,
+        int branchId,
+        List<LedgerEvent> events,
+        HashSet<DocRef> active,
+        CancellationToken ct)
+    {
+        const string sql = @"
+SELECT Id, Direction, CurrencyCode, Amount, IrrAmount, CostIrr, ProfitIrr, OccurredAt, Seq
+FROM dbo.CashTransactions
+WHERE BranchId = @branchId AND IsVoided = 0;";
+        await using var cmd = new SqlCommand(sql, conn);
+        cmd.Parameters.Add(new SqlParameter("@branchId", branchId));
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+        {
+            var id = reader.GetInt64(0);
+            var isReceipt = reader.GetString(1) == "RECEIVE";
+            var code = reader.GetString(2).Trim();
+            var amount = reader.GetDecimal(3);
+            var valueIrr = reader.GetDecimal(4);
+            var cost = reader.GetDecimal(5);
+            var profit = reader.GetDecimal(6);
+            var occurredAt = reader.GetDateTime(7);
+            var seq = checked(reader.GetInt64(8) * LedgerSeqFactor);
+            var reference = new DocRef(LedgerDocKind.CashTransaction, id);
+            active.Add(reference);
+
+            events.Add(code == CurrencyCodes.Irr
+                ? new LedgerEvent(LedgerDocKind.CashTransaction, id, LedgerEventKind.CashOnly, code, occurredAt, seq,
+                    0m, valueIrr, 0m, isReceipt ? amount : -amount, cost, profit)
+                : new LedgerEvent(LedgerDocKind.CashTransaction, id,
+                    isReceipt ? LedgerEventKind.Acquire : LedgerEventKind.Dispose,
+                    code, occurredAt, seq, amount, valueIrr, 0m, 0m, cost, profit));
+        }
+    }
+
     public async Task UpdateTradeDetailsAsync(long tradeId, int branchId, int customerId, string customerName, string? nationalCode, string? note, int userId, DateTime now, CancellationToken ct = default)
     {
         await WithTransactionAsync<bool>(async (conn, tx) =>
@@ -690,6 +739,10 @@ ORDER BY e.OccurredAt DESC, e.Id DESC, l.LineNumber;";
             {
                 newId = await InsertOpeningAsync(conn, tx, posting.BranchId, opening, posting.Now, ct);
             }
+            else if (posting.CashTransaction is { } cashTransaction)
+            {
+                newId = await InsertCashTransactionAsync(conn, tx, posting.BranchId, cashTransaction, posting.Now, ct);
+            }
 
             foreach (var journal in posting.Journals)
             {
@@ -728,6 +781,21 @@ WHERE s.TradeId = @tradeId AND s.LineNumber = @lineNumber AND t.BranchId = @bran
                     Money("@profit", update.ProfitIrr),
                     new SqlParameter("@tradeId", update.TradeId),
                     new SqlParameter("@lineNumber", update.LineNumber),
+                    new SqlParameter("@branchId", posting.BranchId));
+                if (affected != 1)
+                {
+                    throw new ConcurrencyConflictException();
+                }
+            }
+
+            foreach (var update in posting.CashTransactionCostUpdates ?? Array.Empty<CashTransactionCostUpdate>())
+            {
+                var affected = await ExecuteAsync(conn, tx, ct, @"
+UPDATE dbo.CashTransactions SET CostIrr = @cost, ProfitIrr = @profit
+WHERE Id = @id AND BranchId = @branchId AND IsVoided = 0;",
+                    Money("@cost", update.CostIrr),
+                    Money("@profit", update.ProfitIrr),
+                    new SqlParameter("@id", update.CashTransactionId),
                     new SqlParameter("@branchId", posting.BranchId));
                 if (affected != 1)
                 {
@@ -802,6 +870,18 @@ UPDATE dbo.JournalEntries SET IsVoided = 1
 WHERE BranchId = @branchId AND SourceType = N'OPENING' AND SourceId = @id;", CloneParameters(parameters));
                 break;
 
+            case LedgerDocKind.CashTransaction:
+                affected = await ExecuteAsync(conn, tx, ct, @"
+UPDATE dbo.CashTransactions
+SET IsVoided = 1, VoidedAt = @now, VoidedBy = @userId, VoidReason = @reason
+WHERE Id = @id AND BranchId = @branchId AND IsVoided = 0;", CloneParameters(parameters));
+                await ExecuteAsync(conn, tx, ct, @"
+UPDATE dbo.JournalEntries SET IsVoided = 1
+WHERE BranchId = @branchId
+  AND SourceType IN (N'CASH_RECEIPT', N'CASH_PAYMENT', N'CASH_ADJUST')
+  AND SourceId = @id;", CloneParameters(parameters));
+                break;
+
             default:
                 affected = await ExecuteAsync(conn, tx, ct, @"
 UPDATE dbo.JournalEntries SET IsVoided = 1
@@ -828,6 +908,7 @@ WHERE Id = @id AND BranchId = @branchId AND SourceType = N'MANUAL' AND IsVoided 
         {
             LedgerDocKind.Trade => "e.SourceType IN (N'TRADE', N'ADJUST') AND e.SourceId = @docId",
             LedgerDocKind.Opening => "e.SourceType = N'OPENING' AND e.SourceId = @docId",
+            LedgerDocKind.CashTransaction => "e.SourceType IN (N'CASH_RECEIPT', N'CASH_PAYMENT', N'CASH_ADJUST') AND e.SourceId = @docId",
             _ => "e.Id = @docId AND e.SourceType = N'MANUAL'",
         };
         var sql = $@"
@@ -968,6 +1049,40 @@ VALUES (@tradeId, @lineNumber, @direction, @currencyCode, @amount, @rateIrr, @ir
         }
     }
 
+    private static async Task<long> InsertCashTransactionAsync(
+        SqlConnection conn,
+        SqlTransaction tx,
+        int branchId,
+        CashTransactionDraft transaction,
+        DateTime now,
+        CancellationToken ct)
+    {
+        const string sql = @"
+INSERT INTO dbo.CashTransactions
+    (BranchId, Direction, CustomerId, CurrencyCode, Amount, RateMode, RateIrr, IrrAmount, CostIrr, ProfitIrr, Note,
+     OccurredAt, CreatedBy, CreatedAt, ReplacesId)
+OUTPUT INSERTED.Id
+VALUES (@branchId, @direction, @customerId, @currencyCode, @amount, @rateMode, @rateIrr, @irrAmount, @costIrr, @profitIrr,
+        @note, @occurredAt, @userId, @createdAt, @replacesId);";
+        await using var cmd = new SqlCommand(sql, conn, tx);
+        cmd.Parameters.Add(new SqlParameter("@branchId", branchId));
+        cmd.Parameters.Add(new SqlParameter("@direction", transaction.Direction == CashTransactionDirection.Receipt ? "RECEIVE" : "PAY"));
+        cmd.Parameters.Add(new SqlParameter("@customerId", transaction.CustomerId));
+        cmd.Parameters.Add(new SqlParameter("@currencyCode", transaction.CurrencyCode));
+        cmd.Parameters.Add(Money("@amount", transaction.Amount));
+        cmd.Parameters.Add(new SqlParameter("@rateMode", transaction.RateMode == TradeRateMode.Direct ? "DIRECT" : "DERIVED"));
+        cmd.Parameters.Add(Money("@rateIrr", transaction.RateIrr));
+        cmd.Parameters.Add(Money("@irrAmount", transaction.IrrAmount));
+        cmd.Parameters.Add(Money("@costIrr", transaction.CostIrr));
+        cmd.Parameters.Add(Money("@profitIrr", transaction.ProfitIrr));
+        cmd.Parameters.Add(new SqlParameter("@note", (object?)transaction.Note ?? DBNull.Value));
+        cmd.Parameters.Add(new SqlParameter("@occurredAt", transaction.OccurredAt));
+        cmd.Parameters.Add(new SqlParameter("@userId", transaction.UserId));
+        cmd.Parameters.Add(new SqlParameter("@createdAt", now));
+        cmd.Parameters.Add(RefIdParam("@replacesId", transaction.ReplacesId));
+        return Convert.ToInt64(await cmd.ExecuteScalarAsync(ct), CultureInfo.InvariantCulture);
+    }
+
     private static async Task<long> InsertOpeningAsync(SqlConnection conn, SqlTransaction tx, int branchId, OpeningDraft opening, DateTime now, CancellationToken ct)
     {
         const string sql = @"
@@ -1099,6 +1214,7 @@ VALUES (@now, @userId, @action, @entityType, @entityId, @details);",
     {
         LedgerDocKind.Trade => SourceTypes.Trade,
         LedgerDocKind.Opening => SourceTypes.Opening,
+        LedgerDocKind.CashTransaction => SourceTypes.CashTransaction,
         _ => SourceTypes.Manual,
     };
 
@@ -1108,6 +1224,38 @@ VALUES (@now, @userId, @action, @entityType, @entityId, @details);",
     /// <summary>هر پارامتر فقط یک بار در یک دستور استفاده می‌شود؛ این تابع نسخه‌ی تازه‌ای از آرایه می‌سازد.</summary>
     private static SqlParameter[] CloneParameters(SqlParameter[] parameters) =>
         parameters.Select(p => new SqlParameter(p.ParameterName, p.Value)).ToArray();
+
+    public async Task<IReadOnlyList<CashTransactionInfo>> GetCashTransactionsAsync(
+        int? branchId,
+        DateTime fromInclusive,
+        DateTime toExclusive,
+        CancellationToken ct = default)
+    {
+        var sql = CashTransactionSelect + @"
+WHERE t.OccurredAt >= @from AND t.OccurredAt < @to AND (@branchId IS NULL OR t.BranchId = @branchId)
+ORDER BY t.OccurredAt DESC, t.Id DESC;";
+        var result = new List<CashTransactionInfo>();
+        await using var conn = await OpenAsync(ct);
+        await using var cmd = new SqlCommand(sql, conn);
+        cmd.Parameters.Add(new SqlParameter("@from", fromInclusive));
+        cmd.Parameters.Add(new SqlParameter("@to", toExclusive));
+        cmd.Parameters.Add(NullableInt("@branchId", branchId));
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+        {
+            result.Add(ReadCashTransaction(reader));
+        }
+        return result;
+    }
+
+    public async Task<CashTransactionInfo?> GetCashTransactionAsync(long cashTransactionId, CancellationToken ct = default)
+    {
+        await using var conn = await OpenAsync(ct);
+        await using var cmd = new SqlCommand(CashTransactionSelect + " WHERE t.Id = @id;", conn);
+        cmd.Parameters.Add(new SqlParameter("@id", cashTransactionId));
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        return await reader.ReadAsync(ct) ? ReadCashTransaction(reader) : null;
+    }
 
     public async Task<IReadOnlyList<TradeInfo>> GetTradesAsync(int? branchId, DateTime fromInclusive, DateTime toExclusive, CancellationToken ct = default)
     {
@@ -1206,6 +1354,7 @@ ORDER BY LineNumber;";
         int customerId,
         DateTime asOf,
         long? excludeTradeId = null,
+        long? excludeCashTransactionId = null,
         CancellationToken ct = default)
     {
         const string sql = @"
@@ -1232,6 +1381,7 @@ WHERE e.BranchId = @branchId AND e.OccurredAt <= @asOf
       FROM TradeLineage lineage
       WHERE e.SourceId = lineage.Id AND e.SourceType IN (N'TRADE', N'ADJUST', N'VOID')
   )
+  AND (@excludeCashTransactionId IS NULL OR NOT (e.SourceId = @excludeCashTransactionId AND e.SourceType IN (N'CASH_RECEIPT', N'CASH_PAYMENT')))
 OPTION (MAXRECURSION 32767);";
         await using var conn = await OpenAsync(ct);
         await using var cmd = new SqlCommand(sql, conn);
@@ -1239,6 +1389,7 @@ OPTION (MAXRECURSION 32767);";
         cmd.Parameters.Add(new SqlParameter("@customerId", customerId));
         cmd.Parameters.Add(new SqlParameter("@asOf", asOf));
         cmd.Parameters.Add(RefIdParam("@excludeTradeId", excludeTradeId));
+        cmd.Parameters.Add(RefIdParam("@excludeCashTransactionId", excludeCashTransactionId));
         await using var reader = await cmd.ExecuteReaderAsync(ct);
         if (!await reader.ReadAsync(ct))
         {
@@ -2079,6 +2230,32 @@ WHERE Id = @id;";
         cmd.Parameters.AddRange(parameters);
         return await cmd.ExecuteScalarAsync(ct);
     }
+
+    private static CashTransactionInfo ReadCashTransaction(SqlDataReader reader) => new(
+        reader.GetInt64(0),
+        reader.GetInt32(1),
+        reader.GetString(2),
+        reader.GetString(3),
+        reader.GetString(4) == "RECEIVE" ? CashTransactionDirection.Receipt : CashTransactionDirection.Payment,
+        reader.GetInt32(5),
+        reader.GetString(6),
+        reader.GetString(7),
+        reader.GetString(8).Trim(),
+        reader.GetString(9),
+        reader.GetByte(10),
+        reader.GetDecimal(11),
+        ParseRateMode(reader.GetString(12)),
+        reader.GetDecimal(13),
+        reader.GetDecimal(14),
+        reader.GetDecimal(15),
+        reader.GetDecimal(16),
+        ReadNullableString(reader, 17),
+        reader.GetDateTime(18),
+        reader.GetString(19),
+        reader.GetBoolean(20),
+        reader.IsDBNull(21) ? (DateTime?)null : reader.GetDateTime(21),
+        ReadNullableString(reader, 22),
+        ReadNullableString(reader, 23));
 
     private static TradeInfo ReadTrade(SqlDataReader reader)
     {

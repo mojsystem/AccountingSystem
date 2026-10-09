@@ -20,8 +20,9 @@ public static class RolePresets
             Permission.TradeEdit, Permission.TradeVoid,
             Permission.OpeningEdit, Permission.OpeningVoid,
             Permission.ManualCreate, Permission.ManualEdit, Permission.ManualVoid,
+            Permission.CashTransactionCreate, Permission.CashTransactionEdit, Permission.CashTransactionVoid,
         }),
         new RolePreset(BranchManager, Enum.GetValues<Permission>()),
-        new RolePreset(Cashier, new[] { Permission.TradeRecord }),
+        new RolePreset(Cashier, new[] { Permission.TradeRecord, Permission.CashTransactionCreate }),
     };
 }

@@ -129,6 +129,7 @@ builder.Services.AddScoped<IAccountingRepository>(sp =>
     new SqlAccountingRepository(sp.GetRequiredService<SqlConnectionRuntime>().ConnectionString));
 builder.Services.AddScoped<BranchService>();
 builder.Services.AddScoped<CurrencyTradeService>();
+builder.Services.AddScoped<CashTransactionService>();
 builder.Services.AddScoped<CurrencyAdminService>();
 builder.Services.AddScoped<ManualJournalService>();
 builder.Services.AddScoped<ReportService>();

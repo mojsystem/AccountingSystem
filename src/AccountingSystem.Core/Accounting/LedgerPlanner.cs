@@ -192,7 +192,7 @@ public static class LedgerPlanner
                 var lines = TradeJournalLines(code, irr, fee, cost, baseProfit, input.CustomerId,
                     input.CustomerOffsetIrr, completedSettlements, type);
                 var journal = new JournalDraft(description, occurredAt, lines, SourceTypes.Trade, tradeRef);
-                return new NewDocumentResult(trade, null, new[] { journal });
+                return new NewDocumentResult(trade, null, null, new[] { journal });
             });
     }
 
@@ -322,7 +322,7 @@ public static class LedgerPlanner
             }, SourceTypes.Opening, openingRef);
             var irrOpening = new OpeningDraft(CurrencyCodes.Irr, quantity, null, quantity, occurredAt, userId, ReplacedId(replaces));
             return Compose(ledger, OpeningAction(replaces), openingRef, userId, now, replaces, replaceReason,
-                new[] { cashEvent }, _ => new NewDocumentResult(null, irrOpening, new[] { irrJournal }));
+                new[] { cashEvent }, _ => new NewDocumentResult(null, irrOpening, null, new[] { irrJournal }));
         }
 
         if (!currency.IsActive)
@@ -352,7 +352,7 @@ public static class LedgerPlanner
         }, SourceTypes.Opening, openingRef);
         var opening = new OpeningDraft(code, quantity, rate, costIrr, occurredAt, userId, ReplacedId(replaces));
         return Compose(ledger, OpeningAction(replaces), openingRef, userId, now, replaces, replaceReason,
-            new[] { acquire }, _ => new NewDocumentResult(null, opening, new[] { journal }));
+            new[] { acquire }, _ => new NewDocumentResult(null, opening, null, new[] { journal }));
     }
 
     /// <summary>
@@ -409,11 +409,164 @@ public static class LedgerPlanner
                     NewEventSeq, 0m, 0m, 0m, irrDelta, 0m, 0m),
             };
         return Compose(ledger, replaces is null ? "MANUAL_CREATE" : "MANUAL_REPLACE", manualRef, userId, now,
-            replaces, replaceReason, events, _ => new NewDocumentResult(null, null, new[] { journal }));
+            replaces, replaceReason, events, _ => new NewDocumentResult(null, null, null, new[] { journal }));
     }
 
-    /// <summary>نتیجه‌ی ساخت سند جدید: سند معامله یا افتتاحیه و سندهای حسابداری آن.</summary>
-    private sealed record NewDocumentResult(TradeDraft? Trade, OpeningDraft? Opening, IReadOnlyList<JournalDraft> Journals);
+    /// <summary>
+    /// رسید یا پرداخت مستقل از معامله. دریافت، حساب دریافتنی مشتری را بستانکار می‌کند؛ پرداخت، حساب پرداختنی را بدهکار.
+    /// پرداخت ارزی با میانگین موزون صندوق ارزش‌گذاری و در صورت تفاوت، سود/زیان ارزی شناسایی می‌شود.
+    /// </summary>
+    public static PostingDraft PlanCashTransaction(
+        BranchLedger ledger,
+        CurrencyInfo currency,
+        CashTransactionInput input,
+        decimal rateIrr,
+        DateTime occurredAt,
+        int userId,
+        DateTime now,
+        DocRef? replaces = null,
+        string? replaceReason = null)
+    {
+        if (input.BranchId <= 0 || input.BranchId != ledger.BranchId)
+        {
+            throw new BusinessRuleException("شعبه‌ی دریافت/پرداخت با وضعیت صندوق همخوانی ندارد.");
+        }
+        if (input.CustomerId <= 0)
+        {
+            throw new BusinessRuleException("مشتری را انتخاب کنید.");
+        }
+        if (!Enum.IsDefined(input.Direction) || !Enum.IsDefined(input.RateMode))
+        {
+            throw new BusinessRuleException("نوع یا روش نرخ دریافت/پرداخت نامعتبر است.");
+        }
+        if (!currency.IsActive)
+        {
+            throw new BusinessRuleException("این ارز غیرفعال است.");
+        }
+        TradePlanner.ValidateQuantity(input.Amount, currency);
+
+        var code = currency.Code;
+        if (code == CurrencyCodes.Irr)
+        {
+            if (input.RateMode != TradeRateMode.Derived)
+            {
+                throw new BusinessRuleException("نرخ ریال همیشه یک است و نرخ توافقی برای آن وارد نمی‌شود.");
+            }
+            rateIrr = 1m;
+        }
+        else
+        {
+            TradePlanner.ValidateRate(rateIrr);
+        }
+
+        var irrAmount = code == CurrencyCodes.Irr
+            ? MoneyMath.RoundIrr(input.Amount)
+            : MoneyMath.RoundIrr(input.Amount * rateIrr);
+        if (irrAmount <= 0m)
+        {
+            throw new BusinessRuleException("ارزش ریالی دریافت/پرداخت صفر است؛ مقدار و نرخ را بررسی کنید.");
+        }
+
+        var note = TradePlanner.CleanDetails(null, null, input.Note).Note;
+        var reference = new DocRef(LedgerDocKind.CashTransaction, 0);
+        var isReceipt = input.Direction == CashTransactionDirection.Receipt;
+        var events = code == CurrencyCodes.Irr
+            ? new[]
+            {
+                new LedgerEvent(LedgerDocKind.CashTransaction, 0, LedgerEventKind.CashOnly, CurrencyCodes.Irr,
+                    occurredAt, NewEventSeq, 0m, irrAmount, 0m,
+                    isReceipt ? input.Amount : -input.Amount, 0m, 0m),
+            }
+            : new[]
+            {
+                new LedgerEvent(LedgerDocKind.CashTransaction, 0,
+                    isReceipt ? LedgerEventKind.Acquire : LedgerEventKind.Dispose,
+                    code, occurredAt, NewEventSeq, input.Amount, irrAmount, 0m, 0m, 0m, 0m),
+            };
+
+        var description = $"{(isReceipt ? "دریافت از مشتری" : "پرداخت به مشتری")}؛ " +
+            $"{MoneyMath.FormatAmount(input.Amount, currency.DecimalPlaces)} {code}";
+        if (note is not null)
+        {
+            description += "؛ " + note;
+        }
+        if (description.Length > MaxDescriptionLength)
+        {
+            description = description[..MaxDescriptionLength];
+        }
+
+        var sourceType = isReceipt ? SourceTypes.CashReceipt : SourceTypes.CashPayment;
+        return Compose(
+            ledger,
+            isReceipt
+                ? (replaces is null ? "CASH_RECEIPT_CREATE" : "CASH_RECEIPT_REPLACE")
+                : (replaces is null ? "CASH_PAYMENT_CREATE" : "CASH_PAYMENT_REPLACE"),
+            reference,
+            userId,
+            now,
+            replaces,
+            replaceReason,
+            events,
+            state =>
+            {
+                var disposal = !isReceipt && code != CurrencyCodes.Irr
+                    ? state.Disposals[reference]
+                    : default;
+                var costIrr = !isReceipt && code != CurrencyCodes.Irr ? disposal.CostIrr : irrAmount;
+                var profitIrr = !isReceipt && code != CurrencyCodes.Irr ? disposal.ProfitIrr : 0m;
+                var transaction = new CashTransactionDraft(
+                    input.Direction,
+                    input.CustomerId,
+                    code,
+                    input.Amount,
+                    input.RateMode,
+                    rateIrr,
+                    irrAmount,
+                    costIrr,
+                    profitIrr,
+                    note,
+                    occurredAt,
+                    userId,
+                    ReplacedId(replaces));
+
+                var cashAccount = code == CurrencyCodes.Irr ? AccountCodes.IrrCash : AccountCodes.ForeignCash(code);
+                var lines = isReceipt
+                    ? new[]
+                    {
+                        new JournalLineDraft(cashAccount, irrAmount, 0m),
+                        new JournalLineDraft(AccountCodes.CustomerReceivable, 0m, irrAmount, input.CustomerId),
+                    }
+                    : CashPaymentJournalLines(cashAccount, irrAmount, costIrr, profitIrr, input.CustomerId);
+                var journal = new JournalDraft(description, occurredAt, lines, sourceType, reference);
+                return new NewDocumentResult(null, null, transaction, new[] { journal });
+            });
+    }
+
+    private static IReadOnlyList<JournalLineDraft> CashPaymentJournalLines(
+        string cashAccount,
+        decimal irrAmount,
+        decimal costIrr,
+        decimal profitIrr,
+        int customerId)
+    {
+        var lines = new List<JournalLineDraft>
+        {
+            new(AccountCodes.CustomerPayable, irrAmount, 0m, customerId),
+        };
+        if (costIrr > 0m)
+        {
+            lines.Add(new JournalLineDraft(cashAccount, 0m, costIrr));
+        }
+        AddProfitLoss(lines, profitIrr);
+        return lines;
+    }
+
+    /// <summary>نتیجه‌ی ساخت سند جدید: معامله، افتتاحیه، رسید/پرداخت و سندهای حسابداری آن.</summary>
+    private sealed record NewDocumentResult(
+        TradeDraft? Trade,
+        OpeningDraft? Opening,
+        CashTransactionDraft? CashTransaction,
+        IReadOnlyList<JournalDraft> Journals);
 
     /// <summary>
     /// موتور مشترک: حذف رویدادهای سند ابطال‌شده، افزودن رویدادهای سند جدید، بازپخش کل تاریخچه،
@@ -452,12 +605,13 @@ public static class LedgerPlanner
         // اگر تاریخچه‌ی جدید از نظر موجودی ریال یا ارز معتبر نباشد، Replay خطای قواعد کسب‌وکار پرتاب می‌کند.
         var after = LedgerEngine.Replay(kept.Concat(newEvents));
         var created = finish is null
-            ? new NewDocumentResult(null, null, Array.Empty<JournalDraft>())
+            ? new NewDocumentResult(null, null, null, Array.Empty<JournalDraft>())
             : finish(after);
 
         var journals = new List<JournalDraft>(created.Journals);
         var costUpdates = new List<TradeCostUpdate>();
         var settlementCostUpdates = new List<TradeSettlementCostUpdate>();
+        var cashTransactionCostUpdates = new List<CashTransactionCostUpdate>();
         foreach (var disposal in kept.Where(e => e.Kind == LedgerEventKind.Dispose))
         {
             var result = disposal.SettlementLineNumber is { } lineNumber
@@ -471,6 +625,10 @@ public static class LedgerPlanner
             if (disposal.SettlementLineNumber is { } settlementLine)
             {
                 settlementCostUpdates.Add(new TradeSettlementCostUpdate(disposal.DocId, settlementLine, result.CostIrr, result.ProfitIrr));
+            }
+            else if (disposal.DocKind == LedgerDocKind.CashTransaction)
+            {
+                cashTransactionCostUpdates.Add(new CashTransactionCostUpdate(disposal.DocId, result.CostIrr, result.ProfitIrr));
             }
             journals.Add(AdjustmentJournal(disposal, result.CostIrr, now));
         }
@@ -528,12 +686,14 @@ public static class LedgerPlanner
             Void: voidDraft,
             Trade: created.Trade,
             Opening: created.Opening,
+            CashTransaction: created.CashTransaction,
             Journals: journals,
             CashMovements: cash,
             Inventory: inventory,
             CostUpdates: costUpdates,
-            AuditDetails: BuildDetails(action, voidDraft, costUpdates.Count + settlementCostUpdates.Count),
-            SettlementCostUpdates: settlementCostUpdates);
+            AuditDetails: BuildDetails(action, voidDraft, costUpdates.Count + settlementCostUpdates.Count + cashTransactionCostUpdates.Count),
+            SettlementCostUpdates: settlementCostUpdates,
+            CashTransactionCostUpdates: cashTransactionCostUpdates);
     }
 
     /// <summary>
@@ -560,12 +720,16 @@ public static class LedgerPlanner
                 : new JournalLineDraft(kv.Key, 0m, -kv.Value))
             .ToList();
 
+        var isCashTransaction = sale.DocKind == LedgerDocKind.CashTransaction;
+        var description = isCashTransaction
+            ? $"تعدیل بهای تمام‌شده‌ی پرداخت ارزی شماره {sale.DocId} بر اثر تغییر تاریخچه‌ی موجودی"
+            : $"تعدیل بهای تمام‌شده‌ی معامله‌ی شماره {sale.DocId} بر اثر تغییر تاریخچه‌ی موجودی";
         return new JournalDraft(
-            $"تعدیل بهای تمام‌شده‌ی معامله‌ی شماره {sale.DocId} بر اثر تغییر تاریخچه‌ی موجودی",
+            description,
             now,
             lines,
-            SourceTypes.Adjust,
-            new DocRef(LedgerDocKind.Trade, sale.DocId));
+            isCashTransaction ? SourceTypes.CashAdjustment : SourceTypes.Adjust,
+            sale.Doc);
     }
 
     private static IEnumerable<CashMovementDraft> CashDrafts(BranchLedger ledger, LedgerEvent e, bool reverse, DateTime now)
@@ -656,6 +820,7 @@ public static class LedgerPlanner
     {
         LedgerDocKind.Trade => SourceTypes.Trade,
         LedgerDocKind.Opening => SourceTypes.Opening,
+        LedgerDocKind.CashTransaction => SourceTypes.CashTransaction,
         _ => SourceTypes.Manual,
     };
 
@@ -663,11 +828,16 @@ public static class LedgerPlanner
     {
         LedgerDocKind.Trade => e.IrrDelta < 0m ? "پرداخت ریال بابت خرید ارز" : "دریافت ریال بابت فروش ارز",
         LedgerDocKind.Opening => "موجودی افتتاحیه ریال",
+        LedgerDocKind.CashTransaction => e.IrrDelta < 0m ? "پرداخت ریال به مشتری" : "دریافت ریال از مشتری",
         _ => "سند دستی روی صندوق ریال",
     };
 
     private static string ForeignDescription(LedgerEvent e)
     {
+        if (e.DocKind == LedgerDocKind.CashTransaction)
+        {
+            return e.Kind == LedgerEventKind.Dispose ? "پرداخت ارز به مشتری" : "دریافت ارز از مشتری";
+        }
         if (e.Kind == LedgerEventKind.Dispose)
         {
             return "پرداخت ارز به مشتری";
@@ -679,6 +849,7 @@ public static class LedgerPlanner
     {
         LedgerDocKind.Trade => "معامله",
         LedgerDocKind.Opening => "سند افتتاحیه",
+        LedgerDocKind.CashTransaction => "دریافت/پرداخت",
         _ => "سند دستی",
     };
 
@@ -691,7 +862,7 @@ public static class LedgerPlanner
         }
         if (costChanges > 0)
         {
-            parts.Add($"تعدیل بهای تمام‌شده‌ی {costChanges} فروش");
+            parts.Add($"تعدیل بهای تمام‌شده‌ی {costChanges} خروج ارز");
         }
         return string.Join(" | ", parts);
     }

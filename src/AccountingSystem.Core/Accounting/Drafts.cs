@@ -25,8 +25,35 @@ public sealed record TradeInput(
     decimal? ValuationIrr = null,
     decimal CustomerOffsetIrr = 0m);
 
-/// <summary>یک سطر تسویه‌ی پولی که کاربر در فرم دریافت/پرداخت وارد می‌کند.</summary>
+/// <summary>یک سطر تسویه‌ی پولی که کاربر در فرم دریافت/پرداخت معامله وارد می‌کند.</summary>
 public sealed record TradeSettlementInput(string CurrencyCode, decimal Amount, decimal RateIrr = 1m);
+
+/// <summary>ورودی یک رسید یا پرداخت مستقل از معامله، به طرفیت حساب مشتری.</summary>
+public sealed record CashTransactionInput(
+    int BranchId,
+    CashTransactionDirection Direction,
+    int CustomerId,
+    string CurrencyCode,
+    decimal Amount,
+    TradeRateMode RateMode = TradeRateMode.Derived,
+    decimal? RateIrr = null,
+    string? Note = null);
+
+/// <summary>رسید/پرداخت آماده‌ی ثبت؛ نرخ و ارزش ریالی در سرویس تعیین شده‌اند.</summary>
+public sealed record CashTransactionDraft(
+    CashTransactionDirection Direction,
+    int CustomerId,
+    string CurrencyCode,
+    decimal Amount,
+    TradeRateMode RateMode,
+    decimal RateIrr,
+    decimal IrrAmount,
+    decimal CostIrr,
+    decimal ProfitIrr,
+    string? Note,
+    DateTime OccurredAt,
+    int UserId,
+    long? ReplacesId = null);
 
 /// <summary>وضعیت فعلی صندوق و موجودی یک ارز در یک شعبه (برای نمایش و آزمون‌های ساده).</summary>
 public sealed record TradeSnapshot(int BranchId, CurrencyInfo Currency, decimal IrrBalance, decimal ForeignBalance, decimal ForeignCostIrr);
@@ -148,6 +175,9 @@ public sealed record TradeCostUpdate(long TradeId, decimal CostIrr, decimal Prof
 /// <summary>به‌روزرسانی بهای پرداخت ارزی معامله پس از تغییر میانگین موزون تاریخی آن ارز.</summary>
 public sealed record TradeSettlementCostUpdate(long TradeId, int LineNumber, decimal CostIrr, decimal ProfitIrr);
 
+/// <summary>به‌روزرسانی بهای تمام‌شده‌ی پرداخت ارزی مستقل پس از بازپخش تاریخچه.</summary>
+public sealed record CashTransactionCostUpdate(long CashTransactionId, decimal CostIrr, decimal ProfitIrr);
+
 /// <summary>
 /// کل تغییرات یک رویداد در یک شعبه که باید در یک تراکنش دیتابیس ذخیره شود.
 /// ExpectedVersion نسخه‌ی دفتر شعبه هنگام بارگذاری است. Entity سندی است که این ثبت درباره‌ی آن است.
@@ -167,4 +197,6 @@ public sealed record PostingDraft(
     IReadOnlyList<InventoryDraft> Inventory,
     IReadOnlyList<TradeCostUpdate> CostUpdates,
     string AuditDetails,
-    IReadOnlyList<TradeSettlementCostUpdate>? SettlementCostUpdates = null);
+    IReadOnlyList<TradeSettlementCostUpdate>? SettlementCostUpdates = null,
+    CashTransactionDraft? CashTransaction = null,
+    IReadOnlyList<CashTransactionCostUpdate>? CashTransactionCostUpdates = null);

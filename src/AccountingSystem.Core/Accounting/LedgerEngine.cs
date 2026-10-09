@@ -10,6 +10,7 @@ public enum LedgerDocKind
     Trade,
     Opening,
     Manual,
+    CashTransaction,
 }
 
 /// <summary>
@@ -25,7 +26,7 @@ public enum LedgerEventKind
     /// <summary>خروج ارز از موجودی (فروش). بهای تمام‌شده با میانگین موزون همان لحظه محاسبه می‌شود.</summary>
     Dispose,
 
-    /// <summary>تغییر صرفاً صندوق ریال (موجودی افتتاحیه‌ی ریال یا سند دستی روی حساب 1001).</summary>
+    /// <summary>تغییر صرفاً صندوق ریال: افتتاحیه، سند دستی یا دریافت/پرداخت ریالی مستقل.</summary>
     CashOnly,
 }
 
@@ -203,6 +204,7 @@ public static class LedgerEngine
     {
         LedgerDocKind.Trade => doc.Id > 0 ? $"معامله‌ی شماره {doc.Id}" : "معامله‌ی جدید",
         LedgerDocKind.Opening => doc.Id > 0 ? $"موجودی افتتاحیه‌ی شماره {doc.Id}" : "موجودی افتتاحیه‌ی جدید",
+        LedgerDocKind.CashTransaction => doc.Id > 0 ? $"رسید/پرداخت شماره {doc.Id}" : "رسید/پرداخت جدید",
         _ => doc.Id > 0 ? $"سند دستی شماره {doc.Id}" : "سند دستی جدید",
     };
 }

@@ -160,7 +160,7 @@ public class PermissionRulesTests
     {
         var all = Enum.GetValues<Permission>();
 
-        Assert.Equal(10, all.Length);
+        Assert.Equal(13, all.Length);
         Assert.Equal(all.Length, all.Select(PermissionCodes.ToCode).Distinct().Count());
         Assert.Equal(all.Length, all.Select(PermissionCodes.DisplayName).Distinct().Count());
     }
@@ -171,13 +171,13 @@ public class PermissionRulesTests
         var presets = RolePresets.All.ToDictionary(p => p.Name);
 
         Assert.Equal(3, presets.Count);
-        Assert.Equal(10, presets[RolePresets.BranchManager].Permissions.Distinct().Count());
+        Assert.Equal(13, presets[RolePresets.BranchManager].Permissions.Distinct().Count());
         Assert.Equal(
-            new[] { Permission.TradeRecord },
+            new[] { Permission.TradeRecord, Permission.CashTransactionCreate },
             presets[RolePresets.Cashier].Permissions.ToArray());
 
         var accountant = presets[RolePresets.Accountant].Permissions.ToHashSet();
-        Assert.Equal(7, accountant.Count);
+        Assert.Equal(10, accountant.Count);
         Assert.DoesNotContain(Permission.TradeRecord, accountant);
         Assert.DoesNotContain(Permission.OpeningCreate, accountant);
         Assert.DoesNotContain(Permission.RateSet, accountant);

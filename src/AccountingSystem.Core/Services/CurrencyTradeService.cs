@@ -342,7 +342,7 @@ public sealed class CurrencyTradeService
         {
             throw new BusinessRuleException("برای تهاتر، مشتری را انتخاب کنید.");
         }
-        var balance = await _repository.GetCustomerAccountBalanceAsync(input.BranchId, customerId, occurredAt, excludeTradeId, ct);
+        var balance = await _repository.GetCustomerAccountBalanceAsync(input.BranchId, customerId, occurredAt, excludeTradeId, ct: ct);
         var due = type == TradeType.Buy ? valuationIrr - input.FeeIrr : valuationIrr + input.FeeIrr;
         var opposite = type == TradeType.Buy ? balance.ReceivableIrr : balance.PayableIrr;
         return MoneyMath.RoundIrr(Math.Min(Math.Max(0m, opposite), due));

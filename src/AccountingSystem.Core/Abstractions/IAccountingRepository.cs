@@ -27,7 +27,7 @@ public interface IAccountingRepository
     Task<TradeSnapshot?> GetTradeSnapshotAsync(int branchId, string currencyCode, CancellationToken ct = default);
 
     /// <summary>
-    /// دفتر کامل یک شعبه: همه‌ی معاملات، افتتاحیه‌ها و سندهای دستی فعال به‌همراه نسخه‌ی دفتر.
+    /// دفتر کامل یک شعبه: همه‌ی معاملات، دریافت/پرداخت‌های مستقل، افتتاحیه‌ها و سندهای دستی فعال به‌همراه نسخه‌ی دفتر.
     /// نسخه قبل از خواندن داده‌ها خوانده می‌شود تا ثبت همزمان باعث پذیرفته شدن داده‌ی ناسازگار نشود.
     /// </summary>
     Task<BranchLedger> GetBranchLedgerAsync(int branchId, CancellationToken ct = default);
@@ -65,8 +65,18 @@ public interface IAccountingRepository
 
     Task<TradeInfo?> GetTradeAsync(long tradeId, CancellationToken ct = default);
 
-    /// <summary>مانده‌ی دریافتنی و پرداختنی مشتری تا تاریخ معامله؛ excludeTradeId هنگام ویرایش همان معامله را کنار می‌گذارد.</summary>
-    Task<CustomerAccountBalance> GetCustomerAccountBalanceAsync(int branchId, int customerId, DateTime asOf, long? excludeTradeId = null, CancellationToken ct = default);
+    /// <summary>مانده‌ی دریافتنی و پرداختنی مشتری تا تاریخ سند؛ شناسه‌ی ویرایش را برای محاسبه‌ی مبلغ قبل از همان سند کنار می‌گذارد.</summary>
+    Task<CustomerAccountBalance> GetCustomerAccountBalanceAsync(
+        int branchId,
+        int customerId,
+        DateTime asOf,
+        long? excludeTradeId = null,
+        long? excludeCashTransactionId = null,
+        CancellationToken ct = default);
+
+    Task<IReadOnlyList<CashTransactionInfo>> GetCashTransactionsAsync(int? branchId, DateTime fromInclusive, DateTime toExclusive, CancellationToken ct = default);
+
+    Task<CashTransactionInfo?> GetCashTransactionAsync(long cashTransactionId, CancellationToken ct = default);
 
     /// <summary>مانده‌ی خالص اشخاص از دفتر حساب‌های تفصیلی مشتری، تا قبل از toExclusive.</summary>
     Task<IReadOnlyList<CustomerBalanceReportRow>> GetCustomerBalancesAsync(int? branchId, DateTime toExclusive, CancellationToken ct = default);

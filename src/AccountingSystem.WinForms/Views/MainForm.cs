@@ -36,6 +36,7 @@ internal sealed class MainForm : Form
 
         AddTab("داشبورد", new DashboardTab(services, user));
         AddTab("خرید و فروش ارز", new TradeTab(services, user));
+        AddTab("دریافت و پرداخت", new CashTransactionsTab(services, user));
         AddTab("مشتریان", new CustomersTab(services, user));
         AddTab("نرخ‌ها و افزودن ارز", new RatesTab(services, user));
         AddTab("صندوق‌ها", new CashTab(services, user));

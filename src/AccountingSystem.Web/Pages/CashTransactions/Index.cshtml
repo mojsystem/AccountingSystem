@@ -1,0 +1,258 @@
+@page
+@model IndexModel
+@{
+    ViewData["Title"] = "دریافت و پرداخت";
+}
+
+<h1>دریافت و پرداخت</h1>
+<p class="hint">این بخش مستقل از معامله است و برای تسویه‌ی مانده‌ی حساب مشتری استفاده می‌شود. هر رسید، مانده‌ی دریافتنی و هر پرداخت، مانده‌ی پرداختنی همان مشتری را کاهش می‌دهد.</p>
+
+@if (TempData["Success"] is string successMessage)
+{
+    <div class="alert ok">@successMessage</div>
+}
+@if (TempData["Error"] is string errorMessage)
+{
+    <div class="alert error">@errorMessage</div>
+}
+<div asp-validation-summary="All" class="alert error"></div>
+@if (Model.Notice is { } notice)
+{
+    <p class="alert error">@notice</p>
+}
+
+@if (Model.IsEditing && Model.EditingTransaction is { } editing)
+{
+    <p class="hint">در حال ویرایش سند شماره @editing.Id در شعبه‌ی @editing.BranchName.</p>
+}
+
+@if (Model.CanEditForm && (!Model.IsEditing || Model.EditingTransaction is { IsVoided: false }))
+{
+    <form method="post" class="panel" asp-route-from="@Model.From" asp-route-to="@Model.To" asp-route-branchFilter="@Model.BranchFilter">
+        @if (Model.EditId is > 0)
+        {
+            <input type="hidden" name="EditId" value="@Model.EditId" />
+            <input type="hidden" name="Input.BranchId" value="@Model.Input.BranchId" />
+        }
+        <div class="radio-row">
+            <label><input type="radio" name="Input.Direction" value="Receipt" checked="@(Model.Input.Direction == "Receipt")" /> دریافت از مشتری</label>
+            <label><input type="radio" name="Input.Direction" value="Payment" checked="@(Model.Input.Direction == "Payment")" /> پرداخت به مشتری</label>
+        </div>
+        <div class="form-grid">
+            @if (Model.EditId is null)
+            {
+                <label>شعبه
+                    <select name="Input.BranchId" required>
+                        <option value="">— انتخاب شعبه —</option>
+                        @foreach (var branch in Model.Branches)
+                        {
+                            <option value="@branch.Id" selected="@(branch.Id == Model.Input.BranchId)">@branch.Code - @branch.Name</option>
+                        }
+                    </select>
+                </label>
+            }
+            <label>مشتری
+                <select name="Input.CustomerId" required>
+                    <option value="">— انتخاب مشتری —</option>
+                    @foreach (var customer in Model.Customers)
+                    {
+                        <option value="@customer.Id" selected="@(customer.Id == Model.Input.CustomerId)">@customer.FullName · @customer.CustomerCode</option>
+                    }
+                </select>
+                <a class="link small" asp-page="/Customers/Index">مشتری تازه</a>
+            </label>
+            <label>ارز صندوق
+                <select id="currency" name="Input.CurrencyCode" required>
+                    @foreach (var currency in Model.Currencies)
+                    {
+                        <option value="@currency.Code" selected="@(currency.Code == Model.Input.CurrencyCode)">@currency.Code - @currency.Name</option>
+                    }
+                </select>
+            </label>
+            <label>مقدار
+                <input id="amount" name="Input.Amount" value="@Model.Input.Amount" dir="ltr" inputmode="decimal" required />
+            </label>
+            <label>روش نرخ
+                <select id="rateMode" name="Input.RateMode">
+                    <option value="DERIVED" selected="@(Model.Input.RateMode == "DERIVED")">نرخ روز شعبه</option>
+                    <option value="DIRECT" selected="@(Model.Input.RateMode == "DIRECT")">نرخ توافقی</option>
+                </select>
+            </label>
+            <label id="rateField">نرخ توافقی (ریال به‌ازای یک واحد ارز)
+                <input id="rateIrr" name="Input.RateIrr" value="@Model.Input.RateIrr" dir="ltr" inputmode="decimal" />
+            </label>
+            <label>تاریخ (شمسی، خالی = امروز)
+                <input name="Input.OccurredOn" value="@Model.Input.OccurredOn" dir="ltr" placeholder="۱۴۰۵/۰۷/۱۵" />
+            </label>
+            <label>توضیحات
+                <input name="Input.Note" value="@Model.Input.Note" maxlength="250" />
+            </label>
+        </div>
+        <p id="rateHint" class="hint">در نرخ روز، دریافت با نرخ خرید و پرداخت با نرخ فروش همان ارز و شعبه محاسبه می‌شود.</p>
+        <p id="valuePreview" class="hint"></p>
+        <p>
+            <button type="submit">@(Model.IsEditing ? "ذخیره‌ی ویرایش" : "ثبت دریافت/پرداخت")</button>
+            @if (Model.IsEditing)
+            {
+                <a class="btn" asp-page="/CashTransactions/Index" asp-route-from="@Model.From" asp-route-to="@Model.To" asp-route-branchFilter="@Model.BranchFilter">انصراف</a>
+            }
+        </p>
+    </form>
+}
+else if (Model.IsEditing)
+{
+    <div class="alert error">این سند باطل شده یا برای ویرایش آن در این شعبه دسترسی لازم را ندارید.</div>
+}
+else if (Model.Branches.Count == 0)
+{
+    <div class="alert error">برای ثبت دریافت/پرداخت، دسترسی «ثبت دریافت/پرداخت» را در شعبه از مدیر سیستم بگیرید.</div>
+}
+
+<form method="get" class="panel filters">
+    <label>از تاریخ (شمسی)<input name="From" value="@Model.From" dir="ltr" placeholder="۱۴۰۵/۰۷/۰۱" /></label>
+    <label>تا تاریخ (شمسی)<input name="To" value="@Model.To" dir="ltr" placeholder="۱۴۰۵/۰۷/۳۰" /></label>
+    @if (Model.ReadableBranches.Count > 1 || User.IsInRole("Admin"))
+    {
+        <label>شعبه
+            <select name="BranchFilter">
+                @if (User.IsInRole("Admin"))
+                {
+                    <option value="">همه‌ی شعبه‌ها</option>
+                }
+                @foreach (var branch in Model.ReadableBranches)
+                {
+                    <option value="@branch.Id" selected="@(Model.BranchFilter == branch.Id)">@branch.Code - @branch.Name</option>
+                }
+            </select>
+        </label>
+    }
+    <div><button type="submit">نمایش</button></div>
+</form>
+@if (Model.RangeError is { } rangeError)
+{
+    <p class="alert error">@rangeError</p>
+}
+
+<div class="table-wrap">
+    <table class="table">
+        <thead>
+            <tr>
+                <th>شماره</th>
+                <th>تاریخ</th>
+                <th>شعبه</th>
+                <th>نوع</th>
+                <th>مشتری</th>
+                <th>ارز و مقدار</th>
+                <th>روش / نرخ</th>
+                <th>ارزش ریالی</th>
+                <th>ثبت‌کننده</th>
+                <th>وضعیت و عملیات</th>
+            </tr>
+        </thead>
+        <tbody>
+            @foreach (var transaction in Model.Transactions)
+            {
+                <tr class="@(transaction.IsVoided ? "voided" : string.Empty)">
+                    <td>@transaction.Id</td>
+                    <td>@ViewFormat.Date(transaction.OccurredAt)</td>
+                    <td>@transaction.BranchCode</td>
+                    <td>@(transaction.Direction == CashTransactionDirection.Receipt ? "دریافت" : "پرداخت")</td>
+                    <td>@transaction.CustomerName<br /><small>@transaction.CustomerCode</small></td>
+                    <td>@MoneyMath.FormatAmount(transaction.Amount, transaction.DecimalPlaces) @transaction.CurrencyCode</td>
+                    <td>
+                        @(transaction.RateMode == TradeRateMode.Derived ? "نرخ روز" : "توافقی")
+                        <br /><small>@MoneyMath.FormatRate(transaction.RateIrr)</small>
+                    </td>
+                    <td>@MoneyMath.FormatAmount(transaction.IrrAmount, 0) ریال</td>
+                    <td>@transaction.CreatedBy</td>
+                    <td>
+                        @if (transaction.IsVoided)
+                        {
+                            <span class="badge void">باطل شد</span>
+                            <div class="muted">@transaction.VoidReason</div>
+                        }
+                        else
+                        {
+                            <span class="badge ok">فعال</span>
+                            @if (Model.CanAt(Permission.CashTransactionEdit, transaction.BranchId))
+                            {
+                                <a class="link small" asp-page="/CashTransactions/Index" asp-route-editId="@transaction.Id" asp-route-from="@Model.From" asp-route-to="@Model.To" asp-route-branchFilter="@Model.BranchFilter">ویرایش</a>
+                            }
+                            @if (Model.CanAt(Permission.CashTransactionVoid, transaction.BranchId))
+                            {
+                                <form method="post" asp-page-handler="Void" asp-route-transactionId="@transaction.Id" asp-route-from="@Model.From" asp-route-to="@Model.To" asp-route-branchFilter="@Model.BranchFilter" class="inline-form cash-void-form" onsubmit="return confirm('این دریافت/پرداخت با سند معکوس باطل شود؟');">
+                                    <input name="voidReason" maxlength="200" placeholder="دلیل ابطال" required />
+                                    <button type="submit" class="danger">ابطال</button>
+                                </form>
+                            }
+                        }
+                    </td>
+                </tr>
+            }
+            @if (Model.Transactions.Count == 0)
+            {
+                <tr><td colspan="10" class="muted">در این بازه سندی ثبت نشده است.</td></tr>
+            }
+        </tbody>
+    </table>
+</div>
+
+<script>
+(() => {
+    const rates = @Html.Raw(Model.RatesJson);
+    const branch = document.querySelector('select[name="Input.BranchId"]');
+    const currency = document.getElementById('currency');
+    const directionInputs = document.querySelectorAll('input[name="Input.Direction"]');
+    const mode = document.getElementById('rateMode');
+    const rateField = document.getElementById('rateField');
+    const rateInput = document.getElementById('rateIrr');
+    const amount = document.getElementById('amount');
+    const hint = document.getElementById('rateHint');
+    const preview = document.getElementById('valuePreview');
+    const editingBranch = '@Model.Input.BranchId';
+
+    function selectedDirection() {
+        return document.querySelector('input[name="Input.Direction"]:checked')?.value || 'Receipt';
+    }
+    function selectedBranch() {
+        return branch?.value || editingBranch;
+    }
+    function update() {
+        if (!currency || !mode) return;
+        const isIrr = currency.value === 'IRR';
+        mode.disabled = isIrr;
+        if (isIrr) mode.value = 'DERIVED';
+        const direct = !isIrr && mode.value === 'DIRECT';
+        rateField.hidden = !direct;
+        rateInput.required = direct;
+        if (!direct && !isIrr) {
+            const quote = rates.find(r => String(r.branchId) === String(selectedBranch()) && r.code === currency.value);
+            const receipt = selectedDirection() === 'Receipt';
+            const derived = quote ? (receipt ? quote.buy : quote.sell) : null;
+            hint.textContent = derived == null
+                ? 'برای این ارز و شعبه هنوز نرخ روز ثبت نشده است.'
+                : `نرخ روز ${receipt ? 'خرید' : 'فروش'} این شعبه: ${Number(derived).toLocaleString('fa-IR')} ریال`;
+            showPreview(derived);
+        } else if (isIrr) {
+            hint.textContent = 'نرخ ریال ثابت و برابر یک است.';
+            showPreview(1);
+        } else {
+            hint.textContent = 'نرخ توافقی را دستی وارد کنید.';
+            showPreview(Number(rateInput.value.replaceAll(',', '')) || null);
+        }
+    }
+    function showPreview(rate) {
+        const rawAmount = Number((amount?.value || '').replaceAll(',', ''));
+        if (!preview || !Number.isFinite(rawAmount) || rawAmount <= 0 || !rate || !Number.isFinite(rate)) {
+            if (preview) preview.textContent = '';
+            return;
+        }
+        const value = Math.round(rawAmount * rate);
+        preview.textContent = `ارزش تقریبی این سند: ${value.toLocaleString('fa-IR')} ریال`;
+    }
+    [currency, mode, branch, rateInput, amount].filter(Boolean).forEach(el => el.addEventListener('input', update));
+    [currency, mode, branch].filter(Boolean).forEach(el => el.addEventListener('change', update));
+    directionInputs.forEach(el => el.addEventListener('change', update));
+    update();
+})();
+</script>
