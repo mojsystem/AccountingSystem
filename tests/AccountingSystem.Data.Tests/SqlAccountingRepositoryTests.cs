@@ -552,7 +552,10 @@ public class SqlAccountingRepositoryTests : IClassFixture<SqlServerFixture>
         foreach (var branchId in new[] { mainId, newId })
         {
             var roles = (await repo.GetRolesAsync(branchId)).ToDictionary(r => r.Name);
-            Assert.Equal(3, roles.Count);
+            // سه نقش پیش‌فرض باید باشند؛ تست‌های دیگر ممکن است نقش‌های سفارشی به همین شعبه اضافه کرده باشند.
+            Assert.True(roles.ContainsKey(RolePresets.Accountant));
+            Assert.True(roles.ContainsKey(RolePresets.BranchManager));
+            Assert.True(roles.ContainsKey(RolePresets.Cashier));
             Assert.Equal(7, roles[RolePresets.Accountant].Permissions.Count);
             Assert.DoesNotContain(Permission.TradeRecord, roles[RolePresets.Accountant].Permissions);
             Assert.Equal(10, roles[RolePresets.BranchManager].Permissions.Count);
