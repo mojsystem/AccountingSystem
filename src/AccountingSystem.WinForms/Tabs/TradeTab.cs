@@ -154,6 +154,7 @@ internal sealed class TradeTab : UserControl, IRefreshable
         return index >= 0 && index < _trades.Count ? _trades[index] : null;
     }
 
+    /// <summary>نرخ فرم را از نرخ روز ارز و شعبه‌ی انتخابی پر می‌کند؛ اگر نرخی نباشد، کادر خالی می‌شود تا نرخ ارز قبلی باقی نماند.</summary>
     private void FillRateFromSelection()
     {
         if (_filling || _currency.SelectedItem is not ComboItem item || UiHelpers.SelectedBranchId(_branch) is not { } branchId)
@@ -161,12 +162,9 @@ internal sealed class TradeTab : UserControl, IRefreshable
             return;
         }
         var rate = _rates.FirstOrDefault(r => r.BranchId == branchId && r.CurrencyCode == item.Value);
-        if (rate is null)
-        {
-            return;
-        }
-        var value = _sell.Checked ? rate.SellRateIrr : rate.BuyRateIrr;
-        _rate.Text = MoneyMath.FormatRate(value);
+        _rate.Text = rate is null
+            ? string.Empty
+            : MoneyMath.FormatRate(_sell.Checked ? rate.SellRateIrr : rate.BuyRateIrr);
     }
 
     private void UpdatePreview()
