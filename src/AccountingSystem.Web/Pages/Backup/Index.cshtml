@@ -1,0 +1,90 @@
+@page
+@model IndexModel
+@using AccountingSystem.Core.Common
+@{
+    ViewData["Title"] = "پشتیبان و بازیابی";
+}
+
+<h1>پشتیبان و بازیابی</h1>
+
+@if (TempData["Success"] is string successMessage)
+{
+    <div class="alert ok">@successMessage</div>
+}
+@if (TempData["Error"] is string errorMessage)
+{
+    <div class="alert error">@errorMessage</div>
+}
+
+<p class="hint">
+    پشتیبان کل پایگاه داده را در سرور SQL ذخیره می‌کند. پیش از هر ارتقای نسخه‌ی پایگاه داده، به‌صورت خودکار پشتیبان گرفته می‌شود.
+    بازیابی همه‌ی اطلاعات فعلی را با نسخه‌ی پشتیبان جایگزین می‌کند؛ پیش از آن یک پشتیبان از وضعیت فعلی گرفته می‌شود و همه‌ی کاربران قطع می‌شوند.
+</p>
+
+@if (Model.Status is { } status)
+{
+    <section class="panel">
+        <h2>وضعیت پایگاه داده</h2>
+        <p>
+            پایگاه داده: <strong>@status.DatabaseName</strong>
+            · نسخه‌ی پایگاه داده: <strong>@(status.DatabaseVersion?.ToString() ?? "نسخه‌بندی نشده")</strong>
+            · نسخه‌ی این برنامه: <strong>@status.ApplicationVersion</strong>
+        </p>
+        <p>پوشه‌ی پشتیبان روی سرور: <code dir="ltr">@status.BackupFolder</code></p>
+        <form method="post" asp-page-handler="Create">
+            <button type="submit">ساخت پشتیبان الان</button>
+        </form>
+    </section>
+
+    <section class="panel">
+        <h2>سابقه‌ی نسخه‌های پایگاه داده</h2>
+        <table>
+            <thead>
+                <tr><th>نسخه</th><th>نام</th><th>اجرا در (شمسی)</th><th>اجرا کننده</th></tr>
+            </thead>
+            <tbody>
+                @foreach (var h in status.History)
+                {
+                    <tr>
+                        <td>@h.Version</td>
+                        <td>@h.Name</td>
+                        <td>@PersianDate.FormatDateTime(h.AppliedAt)</td>
+                        <td>@h.AppliedBy</td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </section>
+}
+
+<section class="panel">
+    <h2>فهرست پشتیبان‌ها</h2>
+    @if (Model.Backups.Count == 0)
+    {
+        <p class="hint">هنوز پشتیبانی از این پایگاه داده در سرور ثبت نشده است.</p>
+    }
+    else
+    {
+        <table>
+            <thead>
+                <tr><th>زمان (شمسی)</th><th>فایل</th><th>حجم</th><th>عملیات</th></tr>
+            </thead>
+            <tbody>
+                @foreach (var b in Model.Backups)
+                {
+                    <tr>
+                        <td>@PersianDate.FormatDateTime(b.FinishedAt)</td>
+                        <td dir="ltr"><code>@b.FilePath</code></td>
+                        <td>@(b.SizeBytes > 0 ? (b.SizeBytes / 1048576.0).ToString("N1") + " MB" : "-")</td>
+                        <td>
+                            <form method="post" asp-page-handler="Restore" onsubmit="return confirm('بازیابی این پشتیبان همه‌ی اطلاعات فعلی را جایگزین می‌کند. ادامه می‌دهید؟');">
+                                <input type="hidden" name="RestorePath" value="@b.FilePath" />
+                                <button type="submit" class="danger">بازیابی</button>
+                            </form>
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    }
+</section>
