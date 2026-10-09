@@ -8,17 +8,23 @@ internal sealed class AppServices
 {
     public AppServices(IAccountingRepository repository)
     {
+        Branches = new BranchService(repository);
         Trades = new CurrencyTradeService(repository);
         Admin = new CurrencyAdminService(repository);
         Reports = new ReportService(repository);
+        Receipts = new ReceiptService(repository);
         Users = new UserService(repository);
     }
+
+    public BranchService Branches { get; }
 
     public CurrencyTradeService Trades { get; }
 
     public CurrencyAdminService Admin { get; }
 
     public ReportService Reports { get; }
+
+    public ReceiptService Receipts { get; }
 
     public UserService Users { get; }
 }

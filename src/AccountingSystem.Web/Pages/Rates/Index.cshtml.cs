@@ -9,10 +9,12 @@ namespace AccountingSystem.Web.Pages.Rates;
 public class IndexModel : PageModel
 {
     private readonly CurrencyAdminService _admin;
+    private readonly BranchService _branches;
 
-    public IndexModel(CurrencyAdminService admin)
+    public IndexModel(CurrencyAdminService admin, BranchService branches)
     {
         _admin = admin;
+        _branches = branches;
     }
 
     [BindProperty]
@@ -21,9 +23,16 @@ public class IndexModel : PageModel
     [BindProperty]
     public CurrencyForm CurrencyInput { get; set; } = new();
 
+    [BindProperty(SupportsGet = true)]
+    public int? BranchFilter { get; set; }
+
     public IReadOnlyList<CurrencyInfo> Currencies { get; private set; } = Array.Empty<CurrencyInfo>();
 
     public IReadOnlyList<RateInfo> RateList { get; private set; } = Array.Empty<RateInfo>();
+
+    public IReadOnlyList<BranchInfo> Branches { get; private set; } = Array.Empty<BranchInfo>();
+
+    public bool IsAdmin { get; private set; }
 
     public async Task OnGetAsync(CancellationToken ct)
     {
@@ -41,9 +50,9 @@ public class IndexModel : PageModel
 
         try
         {
-            await _admin.SetRateAsync(User.ToCurrentUser(), RateInput.CurrencyCode, buy, sell, DateTime.Now, ct);
+            await _admin.SetRateAsync(User.ToCurrentUser(), RateInput.BranchId, RateInput.CurrencyCode, buy, sell, DateTime.Now, ct);
             TempData["Success"] = "نرخ جدید ثبت شد.";
-            return RedirectToPage();
+            return RedirectToPage(new { branchFilter = RateInput.BranchId });
         }
         catch (BusinessRuleException ex)
         {
@@ -64,8 +73,8 @@ public class IndexModel : PageModel
                 CurrencyInput.DecimalPlaces,
                 DateTime.Now,
                 ct);
-            TempData["Success"] = "ارز جدید اضافه شد.";
-            return RedirectToPage();
+            TempData["Success"] = "ارز جدید برای همه‌ی شعبه‌ها اضافه شد.";
+            return RedirectToPage(new { branchFilter = BranchFilter });
         }
         catch (BusinessRuleException ex)
         {
@@ -76,14 +85,28 @@ public class IndexModel : PageModel
 
     private async Task LoadAsync(CancellationToken ct)
     {
+        var user = User.ToCurrentUser();
+        IsAdmin = user.Role == UserRole.Admin;
         var all = await _admin.GetCurrenciesAsync(ct);
         Currencies = all.Where(c => c.IsActive && c.Code != CurrencyCodes.Irr).ToList();
-        RateList = await _admin.GetLatestRatesAsync(ct);
+        Branches = await _branches.GetBranchesAsync(ct);
+        RateList = await _admin.GetLatestRatesAsync(user, user.ScopeFor(BranchFilter), ct);
+        // کاربر صندوق فقط برای شعبه‌ی خودش نرخ ثبت می‌کند؛ مدیر شعبه‌ی فیلتر یا اولین شعبه را پیش‌فرض دارد.
+        if (!IsAdmin)
+        {
+            RateInput.BranchId = user.BranchId ?? 0;
+        }
+        else if (RateInput.BranchId == 0)
+        {
+            RateInput.BranchId = BranchFilter ?? Branches.FirstOrDefault()?.Id ?? 0;
+        }
     }
 }
 
 public sealed class RateForm
 {
+    public int BranchId { get; set; }
+
     public string CurrencyCode { get; set; } = "USD";
 
     public string? BuyRate { get; set; }

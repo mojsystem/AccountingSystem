@@ -1,10 +1,10 @@
-﻿/*
-    AccountingSystem - اسکریپت ایجاد پایگاه داده
+/*
+    AccountingSystem - اسکریپت ایجاد پایگاه داده (نسخه‌ی چند شعبه، کارمزد و ابطال معامله)
     سازگار با SQL Server 2016 (سطح سازگاری 130)
 
-    اجرا (فقط یک‌بار):
+    اجرا (فقط روی یک پایگاه داده‌ی جدید؛ پایگاه داده‌ی نسخه‌ی قبلی با این اسکریپت ارتقا نمی‌یابد):
       - در SSMS با کاربری که دسترسی sysadmin دارد باز و Execute کنید، یا
-      - از خط فرمان:  sqlcmd -S localhost -E -f 65001 -i AccountingSystem.sql
+      - از خط فرمان:  sqlcmd -S localhost -E -b -f 65001 -i AccountingSystem.sql
 */
 SET NOCOUNT ON;
 GO
@@ -19,6 +19,22 @@ GO
 USE [AccountingSystem];
 GO
 
+IF OBJECT_ID(N'dbo.Currencies', N'U') IS NOT NULL
+    THROW 50000, N'پایگاه داده‌ی AccountingSystem قبلاً ساخته شده است. این اسکریپت فقط برای نصب تازه است.', 1;
+GO
+
+CREATE TABLE dbo.Branches
+(
+    Id        INT           NOT NULL IDENTITY(1,1),
+    Code      NVARCHAR(10)  NOT NULL,
+    Name      NVARCHAR(100) NOT NULL,
+    CreatedAt DATETIME2(0)  NOT NULL CONSTRAINT DF_Branches_CreatedAt DEFAULT (SYSDATETIME()),
+    CONSTRAINT PK_Branches PRIMARY KEY (Id),
+    CONSTRAINT UQ_Branches_Code UNIQUE (Code),
+    CONSTRAINT CK_Branches_Code CHECK (LEN(Code) BETWEEN 1 AND 10)
+);
+GO
+
 CREATE TABLE dbo.Currencies
 (
     Code          NCHAR(3)      NOT NULL,
@@ -31,6 +47,7 @@ CREATE TABLE dbo.Currencies
 );
 GO
 
+-- مدیر (Admin) به همه‌ی شعبه‌ها دسترسی دارد و BranchId آن NULL است؛ کاربر صندوق حتماً شعبه دارد.
 CREATE TABLE dbo.Users
 (
     Id           INT IDENTITY(1,1) NOT NULL,
@@ -38,11 +55,14 @@ CREATE TABLE dbo.Users
     FullName     NVARCHAR(100)     NOT NULL,
     PasswordHash NVARCHAR(300)     NOT NULL,
     Role         NVARCHAR(20)      NOT NULL,
+    BranchId     INT               NULL,
     IsActive     BIT               NOT NULL CONSTRAINT DF_Users_IsActive DEFAULT (1),
     CreatedAt    DATETIME2(0)      NOT NULL CONSTRAINT DF_Users_CreatedAt DEFAULT (SYSDATETIME()),
     CONSTRAINT PK_Users PRIMARY KEY (Id),
     CONSTRAINT UQ_Users_Username UNIQUE (Username),
-    CONSTRAINT CK_Users_Role CHECK (Role IN (N'Admin', N'Cashier'))
+    CONSTRAINT CK_Users_Role CHECK (Role IN (N'Admin', N'Cashier')),
+    CONSTRAINT FK_Users_Branches FOREIGN KEY (BranchId) REFERENCES dbo.Branches (Id),
+    CONSTRAINT CK_Users_Branch CHECK (Role = N'Admin' OR BranchId IS NOT NULL)
 );
 GO
 
@@ -57,15 +77,18 @@ CREATE TABLE dbo.Accounts
 );
 GO
 
+-- هر شعبه برای هر ارز یک صندوق جدا دارد.
 CREATE TABLE dbo.CashBoxes
 (
     Id           INT IDENTITY(1,1) NOT NULL,
+    BranchId     INT               NOT NULL,
     CurrencyCode NCHAR(3)          NOT NULL,
     Name         NVARCHAR(100)     NOT NULL,
     Balance      DECIMAL(19,4)     NOT NULL CONSTRAINT DF_CashBoxes_Balance DEFAULT (0),
     UpdatedAt    DATETIME2(0)      NOT NULL CONSTRAINT DF_CashBoxes_UpdatedAt DEFAULT (SYSDATETIME()),
     CONSTRAINT PK_CashBoxes PRIMARY KEY (Id),
-    CONSTRAINT UQ_CashBoxes_Currency UNIQUE (CurrencyCode),
+    CONSTRAINT UQ_CashBoxes_Branch_Currency UNIQUE (BranchId, CurrencyCode),
+    CONSTRAINT FK_CashBoxes_Branches FOREIGN KEY (BranchId) REFERENCES dbo.Branches (Id),
     CONSTRAINT FK_CashBoxes_Currencies FOREIGN KEY (CurrencyCode) REFERENCES dbo.Currencies (Code),
     CONSTRAINT CK_CashBoxes_Balance CHECK (Balance >= 0)
 );
@@ -86,42 +109,51 @@ CREATE TABLE dbo.CashMovements
     CONSTRAINT FK_CashMovements_CashBoxes FOREIGN KEY (CashBoxId) REFERENCES dbo.CashBoxes (Id),
     CONSTRAINT FK_CashMovements_Users FOREIGN KEY (CreatedBy) REFERENCES dbo.Users (Id),
     CONSTRAINT CK_CashMovements_Amount CHECK (Amount <> 0),
-    CONSTRAINT CK_CashMovements_RefType CHECK (RefType IN (N'TRADE', N'OPENING'))
+    CONSTRAINT CK_CashMovements_RefType CHECK (RefType IN (N'TRADE', N'OPENING', N'VOID'))
 );
 CREATE INDEX IX_CashMovements_CashBox_OccurredAt ON dbo.CashMovements (CashBoxId, OccurredAt);
+CREATE INDEX IX_CashMovements_CashBox_Id ON dbo.CashMovements (CashBoxId, Id) INCLUDE (RefType, RefId);
 GO
 
+-- بهای تمام‌شده‌ی موجودی هر ارز در هر شعبه. مقدار ارز همان موجودی صندوق ارز آن شعبه است.
 CREATE TABLE dbo.CurrencyInventory
 (
+    BranchId     INT           NOT NULL,
     CurrencyCode NCHAR(3)      NOT NULL,
     TotalCostIrr DECIMAL(19,4) NOT NULL CONSTRAINT DF_CurrencyInventory_Cost DEFAULT (0),
     UpdatedAt    DATETIME2(0)  NOT NULL CONSTRAINT DF_CurrencyInventory_UpdatedAt DEFAULT (SYSDATETIME()),
-    CONSTRAINT PK_CurrencyInventory PRIMARY KEY (CurrencyCode),
+    CONSTRAINT PK_CurrencyInventory PRIMARY KEY (BranchId, CurrencyCode),
+    CONSTRAINT FK_CurrencyInventory_Branches FOREIGN KEY (BranchId) REFERENCES dbo.Branches (Id),
     CONSTRAINT FK_CurrencyInventory_Currencies FOREIGN KEY (CurrencyCode) REFERENCES dbo.Currencies (Code),
     CONSTRAINT CK_CurrencyInventory_Cost CHECK (TotalCostIrr >= 0)
 );
 GO
 
+-- نرخ‌ها برای هر شعبه جدا هستند؛ آخرین نرخ هر شعبه و ارز معتبر است.
 CREATE TABLE dbo.ExchangeRates
 (
     Id           BIGINT IDENTITY(1,1) NOT NULL,
+    BranchId     INT                  NOT NULL,
     CurrencyCode NCHAR(3)             NOT NULL,
     BuyRateIrr   DECIMAL(19,4)        NOT NULL,
     SellRateIrr  DECIMAL(19,4)        NOT NULL,
     CreatedAt    DATETIME2(0)         NOT NULL,
     CreatedBy    INT                  NOT NULL,
     CONSTRAINT PK_ExchangeRates PRIMARY KEY (Id),
+    CONSTRAINT FK_ExchangeRates_Branches FOREIGN KEY (BranchId) REFERENCES dbo.Branches (Id),
     CONSTRAINT FK_ExchangeRates_Currencies FOREIGN KEY (CurrencyCode) REFERENCES dbo.Currencies (Code),
     CONSTRAINT FK_ExchangeRates_Users FOREIGN KEY (CreatedBy) REFERENCES dbo.Users (Id),
     CONSTRAINT CK_ExchangeRates_Buy CHECK (BuyRateIrr > 0),
     CONSTRAINT CK_ExchangeRates_Spread CHECK (SellRateIrr >= BuyRateIrr)
 );
-CREATE INDEX IX_ExchangeRates_Currency_Id ON dbo.ExchangeRates (CurrencyCode, Id);
+CREATE INDEX IX_ExchangeRates_Branch_Currency_Id ON dbo.ExchangeRates (BranchId, CurrencyCode, Id);
 GO
 
+-- معاملات. کارمزد (FeeIrr) جدا از مبلغ ریالی ثبت می‌شود. ابطال با ستون‌های IsVoided و ... ثبت می‌شود و سطر حذف نمی‌شود.
 CREATE TABLE dbo.CurrencyTransactions
 (
     Id           BIGINT IDENTITY(1,1) NOT NULL,
+    BranchId     INT                  NOT NULL,
     TradeType    NVARCHAR(10)         NOT NULL,
     CurrencyCode NCHAR(3)             NOT NULL,
     Amount       DECIMAL(19,4)        NOT NULL,
@@ -129,25 +161,37 @@ CREATE TABLE dbo.CurrencyTransactions
     IrrAmount    DECIMAL(19,4)        NOT NULL,
     CostIrr      DECIMAL(19,4)        NOT NULL,
     ProfitIrr    DECIMAL(19,4)        NOT NULL,
+    FeeIrr       DECIMAL(19,4)        NOT NULL CONSTRAINT DF_CurrencyTransactions_Fee DEFAULT (0),
     CustomerName NVARCHAR(100)        NULL,
     NationalCode NVARCHAR(20)         NULL,
     Note         NVARCHAR(250)        NULL,
     OccurredAt   DATETIME2(0)         NOT NULL,
     CreatedBy    INT                  NOT NULL,
+    IsVoided     BIT                  NOT NULL CONSTRAINT DF_CurrencyTransactions_IsVoided DEFAULT (0),
+    VoidedAt     DATETIME2(0)         NULL,
+    VoidedBy     INT                  NULL,
+    VoidReason   NVARCHAR(250)        NULL,
     CONSTRAINT PK_CurrencyTransactions PRIMARY KEY (Id),
+    CONSTRAINT FK_CurrencyTransactions_Branches FOREIGN KEY (BranchId) REFERENCES dbo.Branches (Id),
     CONSTRAINT FK_CurrencyTransactions_Currencies FOREIGN KEY (CurrencyCode) REFERENCES dbo.Currencies (Code),
     CONSTRAINT FK_CurrencyTransactions_Users FOREIGN KEY (CreatedBy) REFERENCES dbo.Users (Id),
+    CONSTRAINT FK_CurrencyTransactions_VoidedBy FOREIGN KEY (VoidedBy) REFERENCES dbo.Users (Id),
     CONSTRAINT CK_CurrencyTransactions_Type CHECK (TradeType IN (N'BUY', N'SELL')),
     CONSTRAINT CK_CurrencyTransactions_Amount CHECK (Amount > 0),
     CONSTRAINT CK_CurrencyTransactions_Rate CHECK (Rate > 0),
-    CONSTRAINT CK_CurrencyTransactions_Irr CHECK (IrrAmount > 0 AND CostIrr >= 0)
+    CONSTRAINT CK_CurrencyTransactions_Irr CHECK (IrrAmount > 0 AND CostIrr >= 0),
+    CONSTRAINT CK_CurrencyTransactions_Fee CHECK (FeeIrr >= 0 AND (TradeType = N'SELL' OR FeeIrr < IrrAmount)),
+    CONSTRAINT CK_CurrencyTransactions_Void CHECK (
+        (IsVoided = 0 AND VoidedAt IS NULL AND VoidedBy IS NULL AND VoidReason IS NULL)
+        OR (IsVoided = 1 AND VoidedAt IS NOT NULL AND VoidedBy IS NOT NULL AND VoidReason IS NOT NULL))
 );
-CREATE INDEX IX_CurrencyTransactions_OccurredAt ON dbo.CurrencyTransactions (OccurredAt);
+CREATE INDEX IX_CurrencyTransactions_Branch_OccurredAt ON dbo.CurrencyTransactions (BranchId, OccurredAt);
 GO
 
 CREATE TABLE dbo.JournalEntries
 (
     Id          BIGINT IDENTITY(1,1) NOT NULL,
+    BranchId    INT                  NOT NULL,
     OccurredAt  DATETIME2(0)         NOT NULL,
     Description NVARCHAR(250)        NOT NULL,
     SourceType  NVARCHAR(20)         NOT NULL,
@@ -155,10 +199,11 @@ CREATE TABLE dbo.JournalEntries
     CreatedBy   INT                  NOT NULL,
     CreatedAt   DATETIME2(0)         NOT NULL CONSTRAINT DF_JournalEntries_CreatedAt DEFAULT (SYSDATETIME()),
     CONSTRAINT PK_JournalEntries PRIMARY KEY (Id),
+    CONSTRAINT FK_JournalEntries_Branches FOREIGN KEY (BranchId) REFERENCES dbo.Branches (Id),
     CONSTRAINT FK_JournalEntries_Users FOREIGN KEY (CreatedBy) REFERENCES dbo.Users (Id),
-    CONSTRAINT CK_JournalEntries_Source CHECK (SourceType IN (N'TRADE', N'OPENING'))
+    CONSTRAINT CK_JournalEntries_Source CHECK (SourceType IN (N'TRADE', N'OPENING', N'VOID'))
 );
-CREATE INDEX IX_JournalEntries_OccurredAt ON dbo.JournalEntries (OccurredAt);
+CREATE INDEX IX_JournalEntries_Branch_OccurredAt ON dbo.JournalEntries (BranchId, OccurredAt);
 GO
 
 CREATE TABLE dbo.JournalLines
@@ -178,6 +223,9 @@ CREATE TABLE dbo.JournalLines
 GO
 
 -- داده‌های اولیه
+INSERT INTO dbo.Branches (Code, Name) VALUES (N'MAIN', N'شعبه‌ی مرکزی');
+GO
+
 INSERT INTO dbo.Currencies (Code, Name, DecimalPlaces) VALUES
 (N'IRR', N'ریال ایران', 0),
 (N'USD', N'دلار آمریکا', 2),
@@ -196,17 +244,14 @@ INSERT INTO dbo.Accounts (Code, Name, AccountType) VALUES
 (N'1101-TRY', N'موجودی ارز - لیر ترکیه', N'Asset'),
 (N'3001', N'سرمایه افتتاحیه', N'Equity'),
 (N'4001', N'سود معاملات ارزی', N'Revenue'),
+(N'4101', N'درآمد کارمزد معاملات', N'Revenue'),
 (N'5001', N'زیان معاملات ارزی', N'Expense');
 GO
 
-INSERT INTO dbo.CashBoxes (CurrencyCode, Name) VALUES
-(N'IRR', N'صندوق ریال'),
-(N'USD', N'صندوق دلار'),
-(N'EUR', N'صندوق یورو'),
-(N'GBP', N'صندوق پوند'),
-(N'AED', N'صندوق درهم'),
-(N'TRY', N'صندوق لیر');
+INSERT INTO dbo.CashBoxes (BranchId, CurrencyCode, Name)
+SELECT b.Id, c.Code, N'صندوق ' + c.Name FROM dbo.Branches b CROSS JOIN dbo.Currencies c;
 GO
 
-INSERT INTO dbo.CurrencyInventory (CurrencyCode) VALUES (N'USD'), (N'EUR'), (N'GBP'), (N'AED'), (N'TRY');
+INSERT INTO dbo.CurrencyInventory (BranchId, CurrencyCode)
+SELECT b.Id, c.Code FROM dbo.Branches b CROSS JOIN dbo.Currencies c WHERE c.Code <> N'IRR';
 GO

@@ -10,19 +10,21 @@ internal sealed class MainForm : Form
 
     public MainForm(AppServices services, CurrentUser user)
     {
-        Text = $"سیستم حسابداری صرافی - {user.FullName} ({RoleText(user.Role)})";
+        var branchText = string.IsNullOrEmpty(user.BranchName) ? string.Empty : " - شعبه: " + user.BranchName;
+        Text = $"سیستم حسابداری صرافی - {user.FullName} ({RoleText(user.Role)}){branchText}";
         ClientSize = new Size(1200, 760);
         MinimumSize = new Size(960, 600);
         StartPosition = FormStartPosition.CenterScreen;
         Font = new Font("Tahoma", 9f);
 
-        AddTab("داشبورد", new DashboardTab(services));
+        AddTab("داشبورد", new DashboardTab(services, user));
         AddTab("خرید و فروش ارز", new TradeTab(services, user));
         AddTab("نرخ و ارزها", new RatesTab(services, user));
         AddTab("صندوق‌ها", new CashTab(services, user));
-        AddTab("اسناد حسابداری", new JournalTab(services));
+        AddTab("اسناد حسابداری", new JournalTab(services, user));
         if (user.Role == UserRole.Admin)
         {
+            AddTab("شعبه‌ها", new BranchesTab(services, user));
             AddTab("کاربران", new UsersTab(services, user));
         }
 

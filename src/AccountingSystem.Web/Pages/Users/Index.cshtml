@@ -18,6 +18,7 @@
             <th>نام کاربری</th>
             <th>نام و نام خانوادگی</th>
             <th>نقش</th>
+            <th>شعبه</th>
             <th>وضعیت</th>
             <th>تاریخ ثبت</th>
         </tr>
@@ -29,6 +30,7 @@
                 <td>@u.Username</td>
                 <td>@u.FullName</td>
                 <td>@ViewFormat.RoleText(u.Role)</td>
+                <td>@(u.BranchName ?? "همه‌ی شعبه‌ها")</td>
                 <td>@(u.IsActive ? "فعال" : "غیرفعال")</td>
                 <td>@ViewFormat.Date(u.CreatedAt)</td>
             </tr>
@@ -45,6 +47,15 @@
         <select name="Input.Role">
             <option value="Cashier">کاربر صندوق</option>
             <option value="Admin">مدیر</option>
+        </select>
+    </label>
+    <label>شعبه (برای کاربر صندوق الزامی است)
+        <select name="Input.BranchId">
+            <option value="">-- انتخاب شعبه --</option>
+            @foreach (var b in Model.Branches)
+            {
+                <option value="@b.Id">@b.Code - @b.Name</option>
+            }
         </select>
     </label>
     <div><button type="submit">ثبت کاربر</button></div>

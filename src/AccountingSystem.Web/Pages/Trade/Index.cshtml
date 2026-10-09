@@ -10,14 +10,34 @@
 {
     <div class="alert ok">@successMessage</div>
 }
+@if (TempData["Error"] is string errorMessage)
+{
+    <div class="alert error">@errorMessage</div>
+}
 <div asp-validation-summary="All" class="alert error"></div>
 
-<form method="post" class="panel">
+<form method="post" class="panel" asp-route-from="@Model.From" asp-route-to="@Model.To" asp-route-branchFilter="@Model.BranchFilter">
     <div class="radio-row">
         <label><input type="radio" name="Input.TradeType" value="BUY" checked="@(Model.Input.TradeType != "SELL")" /> خرید ارز از مشتری (پرداخت ریال)</label>
         <label><input type="radio" name="Input.TradeType" value="SELL" checked="@(Model.Input.TradeType == "SELL")" /> فروش ارز به مشتری (دریافت ریال)</label>
     </div>
     <div class="form-grid">
+        @if (Model.IsAdmin)
+        {
+            <label>شعبه
+                <select id="branch" name="Input.BranchId">
+                    <option value="0">-- انتخاب شعبه --</option>
+                    @foreach (var b in Model.Branches)
+                    {
+                        <option value="@b.Id" selected="@(b.Id == Model.Input.BranchId)">@b.Code - @b.Name</option>
+                    }
+                </select>
+            </label>
+        }
+        else
+        {
+            <input type="hidden" id="branch" name="Input.BranchId" value="@(User.FindFirst("BranchId")?.Value)" />
+        }
         <label>ارز
             <select id="currency" name="Input.CurrencyCode">
                 @foreach (var c in Model.Currencies)
@@ -28,43 +48,99 @@
         </label>
         <label>مقدار ارز<input name="Input.Amount" value="@Model.Input.Amount" dir="ltr" inputmode="decimal" /></label>
         <label>نرخ (ریال به ازای یک واحد)<input id="rate" name="Input.Rate" value="@Model.Input.Rate" dir="ltr" inputmode="decimal" /></label>
+        <label>کارمزد (ریال، اختیاری)<input name="Input.Fee" value="@Model.Input.Fee" dir="ltr" inputmode="numeric" /></label>
         <label>نام مشتری<input name="Input.CustomerName" value="@Model.Input.CustomerName" /></label>
         <label>کد ملی / شناسه<input name="Input.NationalCode" value="@Model.Input.NationalCode" dir="ltr" /></label>
         <label>توضیحات<input name="Input.Note" value="@Model.Input.Note" /></label>
     </div>
+    <p class="hint">ساعت معامله، ساعت ثبت در سیستم است و قابل تغییر نیست.</p>
     <p><button type="submit">ثبت معامله</button></p>
 </form>
 
-<h2>معاملات امروز</h2>
+<h2>معاملات</h2>
+<form method="get" class="panel filters">
+    <label>از تاریخ (شمسی)<input name="From" value="@Model.From" dir="ltr" placeholder="۱۴۰۵/۰۷/۰۱" /></label>
+    <label>تا تاریخ (شمسی)<input name="To" value="@Model.To" dir="ltr" placeholder="۱۴۰۵/۰۷/۳۰" /></label>
+    @if (Model.IsAdmin)
+    {
+        <label>شعبه
+            <select name="BranchFilter">
+                <option value="">همه‌ی شعبه‌ها</option>
+                @foreach (var b in Model.Branches)
+                {
+                    <option value="@b.Id" selected="@(Model.BranchFilter == b.Id)">@b.Code - @b.Name</option>
+                }
+            </select>
+        </label>
+    }
+    <div><button type="submit">نمایش</button></div>
+    <div><a class="link-button" asp-page-handler="Excel" asp-route-from="@Model.From" asp-route-to="@Model.To" asp-route-branchFilter="@Model.BranchFilter">خروجی Excel</a></div>
+</form>
+@if (Model.RangeError is { } rangeError)
+{
+    <div class="alert error">@rangeError</div>
+}
+
 <table>
     <thead>
         <tr>
             <th>شماره</th>
             <th>زمان</th>
+            <th>شعبه</th>
             <th>نوع</th>
             <th>ارز</th>
             <th>مقدار</th>
             <th>نرخ</th>
             <th>مبلغ ریالی</th>
+            <th>کارمزد</th>
             <th>سود (ریال)</th>
             <th>مشتری</th>
             <th>ثبت‌کننده</th>
+            <th>وضعیت</th>
+            <th>عملیات</th>
         </tr>
     </thead>
     <tbody>
-        @foreach (var t in Model.TodayTrades)
+        @foreach (var t in Model.Trades)
         {
-            <tr>
+            <tr class="@(t.IsVoided ? "row-void" : string.Empty)">
                 <td>@t.Id</td>
                 <td>@ViewFormat.Date(t.OccurredAt)</td>
+                <td>@t.BranchCode</td>
                 <td>@ViewFormat.TradeText(t.Type)</td>
                 <td>@t.CurrencyCode</td>
                 <td>@ViewFormat.Quantity(t.Amount)</td>
                 <td>@ViewFormat.Rate(t.Rate)</td>
                 <td>@ViewFormat.Money(t.IrrAmount)</td>
+                <td>@ViewFormat.Money(t.FeeIrr)</td>
                 <td>@ViewFormat.Money(t.ProfitIrr)</td>
                 <td>@t.CustomerName</td>
                 <td>@t.CreatedBy</td>
+                <td>
+                    @if (t.IsVoided)
+                    {
+                        <span class="badge void">باطل شد</span>
+                        <div class="muted">@t.VoidReason</div>
+                    }
+                    else
+                    {
+                        <span class="badge">فعال</span>
+                    }
+                </td>
+                <td>
+                    <div class="inline-form">
+                        <a class="link-button" href="/Trade/Receipt/@t.Id" target="_blank" rel="noopener">رسید</a>
+                        @if (Model.IsAdmin && !t.IsVoided)
+                        {
+                            <form method="post" asp-page-handler="Void" asp-route-from="@Model.From" asp-route-to="@Model.To" asp-route-branchFilter="@Model.BranchFilter"
+                                  onsubmit="return confirm('این معامله باطل شود؟ سند معکوس ثبت خواهد شد.');">
+                                <input type="hidden" name="voidTradeId" value="@t.Id" />
+                                <input name="voidReason" placeholder="دلیل ابطال" maxlength="200" required />
+                                <button type="submit" class="danger">ابطال</button>
+                            </form>
+                        }
+                    </div>
+                </td>
             </tr>
         }
     </tbody>
@@ -75,16 +151,19 @@
     var rates = @Html.Raw(Model.RatesJson);
     var currency = document.getElementById('currency');
     var rate = document.getElementById('rate');
+    var branch = document.getElementById('branch');
     var radios = document.querySelectorAll('input[name="Input.TradeType"]');
 
     function fillRate() {
-        var item = rates.find(function (r) { return r.code === currency.value; });
+        var list = rates[branch.value] || [];
+        var item = list.find(function (r) { return r.code === currency.value; });
         if (!item) { return; }
         var isSell = document.querySelector('input[name="Input.TradeType"][value="SELL"]').checked;
         rate.value = isSell ? item.sell : item.buy;
     }
 
     currency.addEventListener('change', fillRate);
+    branch.addEventListener('change', fillRate);
     radios.forEach(function (r) { r.addEventListener('change', fillRate); });
 })();
 </script>

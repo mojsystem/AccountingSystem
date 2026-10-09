@@ -12,10 +12,27 @@
 }
 <div asp-validation-summary="All" class="alert error"></div>
 
+@if (Model.IsAdmin)
+{
+    <form method="get" class="panel filters">
+        <label>شعبه
+            <select name="BranchFilter">
+                <option value="">همه‌ی شعبه‌ها</option>
+                @foreach (var b in Model.Branches)
+                {
+                    <option value="@b.Id" selected="@(Model.BranchFilter == b.Id)">@b.Code - @b.Name</option>
+                }
+            </select>
+        </label>
+        <div><button type="submit">نمایش</button></div>
+    </form>
+}
+
 <h2>آخرین نرخ‌ها</h2>
 <table>
     <thead>
         <tr>
+            <th>شعبه</th>
             <th>ارز</th>
             <th>نرخ خرید از مشتری (ریال)</th>
             <th>نرخ فروش به مشتری (ریال)</th>
@@ -26,6 +43,7 @@
         @foreach (var r in Model.RateList)
         {
             <tr>
+                <td>@r.BranchName</td>
                 <td>@r.CurrencyCode - @r.CurrencyName</td>
                 <td>@ViewFormat.Rate(r.BuyRateIrr)</td>
                 <td>@ViewFormat.Rate(r.SellRateIrr)</td>
@@ -37,6 +55,21 @@
 
 <h2>ثبت نرخ جدید</h2>
 <form method="post" asp-page-handler="SetRate" class="panel form-grid">
+    @if (Model.IsAdmin)
+    {
+        <label>شعبه
+            <select name="RateInput.BranchId">
+                @foreach (var b in Model.Branches)
+                {
+                    <option value="@b.Id" selected="@(b.Id == Model.RateInput.BranchId)">@b.Code - @b.Name</option>
+                }
+            </select>
+        </label>
+    }
+    else
+    {
+        <input type="hidden" name="RateInput.BranchId" value="@Model.RateInput.BranchId" />
+    }
     <label>ارز
         <select name="RateInput.CurrencyCode">
             @foreach (var c in Model.Currencies)
@@ -50,7 +83,7 @@
     <div><button type="submit">ثبت نرخ</button></div>
 </form>
 
-@if (User.IsInRole("Admin"))
+@if (Model.IsAdmin)
 {
     <h2>افزودن ارز جدید</h2>
     <form method="post" asp-page-handler="AddCurrency" class="panel form-grid">
@@ -59,4 +92,5 @@
         <label>تعداد ارقام اعشار<input name="CurrencyInput.DecimalPlaces" value="2" dir="ltr" type="number" min="0" max="4" /></label>
         <div><button type="submit">افزودن ارز</button></div>
     </form>
+    <p class="hint">ارز جدید برای همه‌ی شعبه‌ها ساخته می‌شود و هر شعبه نرخ مخصوص خود را ثبت می‌کند.</p>
 }

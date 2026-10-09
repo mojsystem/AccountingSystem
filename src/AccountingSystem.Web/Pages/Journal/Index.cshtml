@@ -6,11 +6,29 @@
 
 <h1>اسناد حسابداری</h1>
 
-<form method="get" class="panel form-grid">
-    <label>از تاریخ (میلادی)<input type="date" name="From" value="@Model.From" /></label>
-    <label>تا تاریخ (میلادی)<input type="date" name="To" value="@Model.To" /></label>
+<form method="get" class="panel filters">
+    <label>از تاریخ (شمسی)<input name="From" value="@Model.From" dir="ltr" placeholder="۱۴۰۵/۰۷/۰۱" /></label>
+    <label>تا تاریخ (شمسی)<input name="To" value="@Model.To" dir="ltr" placeholder="۱۴۰۵/۰۷/۳۰" /></label>
+    @if (Model.IsAdmin)
+    {
+        <label>شعبه
+            <select name="BranchFilter">
+                <option value="">همه‌ی شعبه‌ها</option>
+                @foreach (var b in Model.Branches)
+                {
+                    <option value="@b.Id" selected="@(Model.BranchFilter == b.Id)">@b.Code - @b.Name</option>
+                }
+            </select>
+        </label>
+    }
     <div><button type="submit">نمایش</button></div>
+    <div><a class="link-button" asp-page-handler="Excel" asp-route-from="@Model.From" asp-route-to="@Model.To" asp-route-branchFilter="@Model.BranchFilter">خروجی Excel</a></div>
 </form>
+
+@if (Model.RangeError is { } rangeError)
+{
+    <div class="alert error">@rangeError</div>
+}
 
 @if (Model.Entries.Count == 0)
 {
@@ -20,7 +38,7 @@
 @foreach (var entry in Model.Entries)
 {
     <div class="entry">
-        <h3>سند شماره @entry.Id - @ViewFormat.Date(entry.OccurredAt) - @entry.Description</h3>
+        <h3>سند شماره @entry.Id - @ViewFormat.Date(entry.OccurredAt) - @entry.BranchName - @entry.Description</h3>
         <table>
             <thead>
                 <tr>

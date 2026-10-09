@@ -5,7 +5,7 @@ using AccountingSystem.Core.Security;
 
 namespace AccountingSystem.Core.Services;
 
-/// <summary>ورود، ایجاد کاربر و مدیریت کاربران.</summary>
+/// <summary>ورود، ایجاد کاربر و مدیریت کاربران. کاربر صندوق باید به یک شعبه تعلق داشته باشد.</summary>
 public sealed class UserService
 {
     private const int MinPasswordLength = 6;
@@ -27,7 +27,7 @@ public sealed class UserService
             return null;
         }
         return PasswordHashing.Verify(password ?? string.Empty, account.PasswordHash)
-            ? new CurrentUser(account.Id, account.Username, account.FullName, account.Role)
+            ? new CurrentUser(account.Id, account.Username, account.FullName, account.Role, account.BranchId, account.BranchName)
             : null;
     }
 
@@ -38,14 +38,31 @@ public sealed class UserService
         {
             throw new BusinessRuleException("کاربری قبلاً ثبت شده است.");
         }
-        var id = await CreateUserCoreAsync(username, fullName, UserRole.Admin, password, now, ct);
-        return new CurrentUser(id, (username ?? string.Empty).Trim(), (fullName ?? string.Empty).Trim(), UserRole.Admin);
+        var id = await CreateUserCoreAsync(username, fullName, UserRole.Admin, null, password, now, ct);
+        return new CurrentUser(id, (username ?? string.Empty).Trim(), (fullName ?? string.Empty).Trim(), UserRole.Admin, null, null);
     }
 
-    public async Task CreateUserAsync(CurrentUser actor, string username, string fullName, string password, UserRole role, DateTime now, CancellationToken ct = default)
+    /// <summary>
+    /// ایجاد کاربر (فقط مدیر). برای کاربر صندوق شعبه الزامی است؛ مدیر به همه‌ی شعبه‌ها دسترسی دارد و شعبه برایش ذخیره نمی‌شود.
+    /// </summary>
+    public async Task CreateUserAsync(CurrentUser actor, string username, string fullName, string password, UserRole role, int? branchId, DateTime now, CancellationToken ct = default)
     {
         RoleGuard.RequireAdmin(actor);
-        await CreateUserCoreAsync(username, fullName, role, password, now, ct);
+        int? storedBranch = null;
+        if (role == UserRole.Cashier)
+        {
+            if (branchId is not { } selected || selected <= 0)
+            {
+                throw new BusinessRuleException("برای کاربر صندوق، شعبه را انتخاب کنید.");
+            }
+            var branches = await _repository.GetBranchesAsync(ct);
+            if (branches.All(b => b.Id != selected))
+            {
+                throw new BusinessRuleException("شعبه‌ی انتخابی یافت نشد.");
+            }
+            storedBranch = selected;
+        }
+        await CreateUserCoreAsync(username, fullName, role, storedBranch, password, now, ct);
     }
 
     public async Task<IReadOnlyList<UserInfo>> GetUsersAsync(CurrentUser actor, CancellationToken ct = default)
@@ -54,7 +71,7 @@ public sealed class UserService
         return await _repository.GetUsersAsync(ct);
     }
 
-    private async Task<int> CreateUserCoreAsync(string username, string fullName, UserRole role, string password, DateTime now, CancellationToken ct)
+    private async Task<int> CreateUserCoreAsync(string username, string fullName, UserRole role, int? branchId, string password, DateTime now, CancellationToken ct)
     {
         var cleanUser = (username ?? string.Empty).Trim();
         var cleanName = (fullName ?? string.Empty).Trim();
@@ -75,6 +92,6 @@ public sealed class UserService
         {
             throw new BusinessRuleException("این نام کاربری قبلاً ثبت شده است.");
         }
-        return await _repository.AddUserAsync(cleanUser, cleanName, role, PasswordHashing.Hash(cleanPassword), now, ct);
+        return await _repository.AddUserAsync(cleanUser, cleanName, role, branchId, PasswordHashing.Hash(cleanPassword), now, ct);
     }
 }

@@ -17,16 +17,10 @@ public static class InputParser
         }
 
         var builder = new StringBuilder(text.Length);
-        foreach (var ch in text.Trim())
+        foreach (var ch in NormalizeDigits(text.Trim()))
         {
             switch (ch)
             {
-                case >= '\u06F0' and <= '\u06F9':
-                    builder.Append((char)('0' + (ch - '\u06F0')));
-                    break;
-                case >= '\u0660' and <= '\u0669':
-                    builder.Append((char)('0' + (ch - '\u0660')));
-                    break;
                 case '\u066B':
                 case '.':
                     builder.Append('.');
@@ -46,5 +40,27 @@ public static class InputParser
             NumberStyles.AllowDecimalPoint | NumberStyles.AllowLeadingSign,
             CultureInfo.InvariantCulture,
             out value);
+    }
+
+    /// <summary>ارقام فارسی (۰-۹) و عربی (٠-٩) را به ارقام انگلیسی تبدیل می‌کند؛ بقیه‌ی متن بدون تغییر می‌ماند.</summary>
+    public static string NormalizeDigits(string text)
+    {
+        var builder = new StringBuilder(text.Length);
+        foreach (var ch in text)
+        {
+            switch (ch)
+            {
+                case >= '\u06F0' and <= '\u06F9':
+                    builder.Append((char)('0' + (ch - '\u06F0')));
+                    break;
+                case >= '\u0660' and <= '\u0669':
+                    builder.Append((char)('0' + (ch - '\u0660')));
+                    break;
+                default:
+                    builder.Append(ch);
+                    break;
+            }
+        }
+        return builder.ToString();
     }
 }

@@ -6,6 +6,22 @@
 
 <h1>داشبورد</h1>
 
+@if (Model.IsAdmin)
+{
+    <form method="get" class="panel filters">
+        <label>شعبه
+            <select name="BranchFilter">
+                <option value="">همه‌ی شعبه‌ها</option>
+                @foreach (var b in Model.Branches)
+                {
+                    <option value="@b.Id" selected="@(Model.BranchFilter == b.Id)">@b.Code - @b.Name</option>
+                }
+            </select>
+        </label>
+        <div><button type="submit">نمایش</button></div>
+    </form>
+}
+
 @if (Model.Dashboard is { } d)
 {
     <section class="cards">
@@ -14,12 +30,14 @@
         <div class="card"><span>خرید امروز</span><strong>@d.TodayBuyCount معامله - @ViewFormat.Money(d.TodayBuyIrr) ریال</strong></div>
         <div class="card"><span>فروش امروز</span><strong>@d.TodaySellCount معامله - @ViewFormat.Money(d.TodaySellIrr) ریال</strong></div>
         <div class="card"><span>سود تحقق‌یافته امروز</span><strong>@ViewFormat.Money(d.TodayProfitIrr) ریال</strong></div>
+        <div class="card"><span>درآمد کارمزد امروز</span><strong>@ViewFormat.Money(d.TodayFeeIrr) ریال</strong></div>
     </section>
 
     <h2>موجودی ارزی</h2>
     <table>
         <thead>
             <tr>
+                <th>شعبه</th>
                 <th>ارز</th>
                 <th>موجودی</th>
                 <th>بهای تمام‌شده (ریال)</th>
@@ -33,6 +51,7 @@
             @foreach (var p in d.Positions)
             {
                 <tr>
+                    <td>@p.BranchName</td>
                     <td>@p.CurrencyCode - @p.CurrencyName</td>
                     <td>@ViewFormat.Quantity(p.Quantity)</td>
                     <td>@ViewFormat.Money(p.CostIrr)</td>

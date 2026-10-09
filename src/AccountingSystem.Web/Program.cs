@@ -21,6 +21,7 @@ builder.Services.AddRazorPages(options =>
     options.Conventions.AllowAnonymousToPage("/Account/Setup");
     options.Conventions.AllowAnonymousToPage("/Error");
     options.Conventions.AuthorizeFolder("/Users", "AdminOnly");
+    options.Conventions.AuthorizeFolder("/Branches", "AdminOnly");
 });
 
 builder.Services
@@ -43,9 +44,11 @@ builder.Services.AddAuthorization(options =>
 });
 
 builder.Services.AddScoped<IAccountingRepository>(_ => new SqlAccountingRepository(connectionString));
+builder.Services.AddScoped<BranchService>();
 builder.Services.AddScoped<CurrencyTradeService>();
 builder.Services.AddScoped<CurrencyAdminService>();
 builder.Services.AddScoped<ReportService>();
+builder.Services.AddScoped<ReceiptService>();
 builder.Services.AddScoped<UserService>();
 
 var app = builder.Build();

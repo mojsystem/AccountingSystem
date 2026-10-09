@@ -1,5 +1,6 @@
 using AccountingSystem.Core.Common;
 using AccountingSystem.Core.Domain;
+using AccountingSystem.Core.Export;
 
 namespace AccountingSystem.WinForms.Tabs;
 
@@ -7,72 +8,103 @@ internal sealed class CashTab : UserControl, IRefreshable
 {
     private readonly AppServices _services;
     private readonly CurrentUser _user;
-    private readonly TextBox _irrAmount = new() { Width = 160 };
-    private readonly Button _irrButton = new() { Text = "ثبت موجودی افتتاحیه ریال", AutoSize = true };
-    private readonly ComboBox _fxCurrency = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 200 };
-    private readonly TextBox _fxQuantity = new() { Width = 120 };
-    private readonly TextBox _fxRate = new() { Width = 120 };
-    private readonly Button _fxButton = new() { Text = "ثبت موجودی افتتاحیه ارز", AutoSize = true };
+
+    private readonly ComboBox _filterBranch = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 200 };
+    private readonly Button _show = new() { Text = "نمایش", AutoSize = true };
+    private readonly Button _excel = new() { Text = "خروجی Excel", AutoSize = true };
+
     private readonly FlowLayoutPanel _openingPanel = UiHelpers.CreateInputPanel();
+    private readonly ComboBox _openBranch = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 200 };
+    private readonly TextBox _openIrr = new() { Width = 150 };
+    private readonly Button _saveOpeningIrr = new() { Text = "ثبت موجودی اولیه ریال", AutoSize = true };
+    private readonly ComboBox _openCurrency = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 170 };
+    private readonly TextBox _openQuantity = new() { Width = 120 };
+    private readonly TextBox _openUnitRate = new() { Width = 120 };
+    private readonly Button _saveOpeningForeign = new() { Text = "ثبت موجودی اولیه ارز", AutoSize = true };
+
     private readonly DataGridView _grid = UiHelpers.CreateGrid();
+    private IReadOnlyList<CashBoxInfo> _boxes = Array.Empty<CashBoxInfo>();
+    private IReadOnlyList<BranchInfo> _branches = Array.Empty<BranchInfo>();
+    private IReadOnlyDictionary<string, int> _decimals = new Dictionary<string, int>();
 
     public CashTab(AppServices services, CurrentUser user)
     {
         _services = services;
         _user = user;
 
+        var filters = UiHelpers.CreateInputPanel();
+        filters.Controls.AddRange(new Control[] { UiHelpers.MakeLabel("شعبه:"), _filterBranch, _show, _excel });
+
         _openingPanel.Controls.AddRange(new Control[]
         {
-            UiHelpers.MakeLabel("موجودی افتتاحیه ریال (ریال):"), _irrAmount, _irrButton,
-            UiHelpers.MakeLabel("ارز:"), _fxCurrency,
-            UiHelpers.MakeLabel("مقدار:"), _fxQuantity,
-            UiHelpers.MakeLabel("نرخ خرید واحد (ریال):"), _fxRate,
-            _fxButton,
+            UiHelpers.MakeLabel("شعبه:"), _openBranch,
+            UiHelpers.MakeLabel("موجودی اولیه ریال (ریال):"), _openIrr,
+            _saveOpeningIrr,
+            UiHelpers.MakeLabel("ارز:"), _openCurrency,
+            UiHelpers.MakeLabel("مقدار:"), _openQuantity,
+            UiHelpers.MakeLabel("نرخ هر واحد (ریال):"), _openUnitRate,
+            _saveOpeningForeign,
         });
         _openingPanel.Visible = user.Role == UserRole.Admin;
 
         Controls.Add(_grid);
         Controls.Add(_openingPanel);
+        Controls.Add(filters);
 
-        _irrButton.Click += async (_, _) => await OpeningIrrAsync();
-        _fxButton.Click += async (_, _) => await OpeningFxAsync();
+        _show.Click += async (_, _) => await SafeRefreshAsync();
+        _excel.Click += (_, _) => ExportExcel();
+        _saveOpeningIrr.Click += async (_, _) => await SaveOpeningIrrAsync();
+        _saveOpeningForeign.Click += async (_, _) => await SaveOpeningForeignAsync();
     }
 
     public async Task RefreshAsync()
     {
-        var boxes = await _services.Admin.GetCashBoxesAsync();
         var currencies = await _services.Admin.GetCurrenciesAsync();
+        _decimals = currencies.ToDictionary(c => c.Code, c => c.DecimalPlaces);
+        _branches = await _services.Branches.GetBranchesAsync();
+        _boxes = await _services.Admin.GetCashBoxesAsync(_user, UiHelpers.SelectedBranchId(_filterBranch));
 
-        var previous = (_fxCurrency.SelectedItem as ComboItem)?.Value;
-        _fxCurrency.Items.Clear();
-        foreach (var c in currencies.Where(x => x.IsActive && x.Code != CurrencyCodes.Irr))
+        var previousFilter = (_filterBranch.SelectedItem as ComboItem)?.Value;
+        UiHelpers.FillBranches(_filterBranch, _branches, _user, includeAll: true, selectedValue: previousFilter);
+
+        if (_user.Role == UserRole.Admin)
         {
-            _fxCurrency.Items.Add(new ComboItem(c.Code, $"{c.Code} - {c.Name}"));
+            var previousOpen = (_openBranch.SelectedItem as ComboItem)?.Value;
+            UiHelpers.FillBranches(_openBranch, _branches, _user, includeAll: false, selectedValue: previousOpen);
+
+            var previousCurrency = (_openCurrency.SelectedItem as ComboItem)?.Value;
+            _openCurrency.Items.Clear();
+            foreach (var c in currencies.Where(x => x.IsActive && x.Code != CurrencyCodes.Irr))
+            {
+                _openCurrency.Items.Add(new ComboItem(c.Code, $"{c.Code} - {c.Name}"));
+            }
+            UiHelpers.SelectByValue(_openCurrency, previousCurrency);
         }
-        UiHelpers.SelectByValue(_fxCurrency, previous);
 
-        var rows = boxes.Select(b => new[]
+        var rows = _boxes.Select(b => new[]
         {
+            b.BranchName,
             b.Name,
             b.CurrencyCode,
-            b.CurrencyCode == CurrencyCodes.Irr ? MoneyMath.FormatAmount(b.Balance, 0) : MoneyMath.FormatRate(b.Balance),
+            MoneyMath.FormatAmount(b.Balance, _decimals.GetValueOrDefault(b.CurrencyCode, 0)),
             PersianDate.FormatDateTime(b.UpdatedAt),
         });
-        UiHelpers.Fill(_grid, new[] { "صندوق", "ارز", "موجودی", "آخرین تغییر (شمسی)" }, rows);
+        UiHelpers.Fill(_grid, new[] { "شعبه", "نام صندوق", "ارز", "موجودی", "آخرین تغییر (شمسی)" }, rows);
     }
 
-    private async Task OpeningIrrAsync()
+    private async Task SaveOpeningIrrAsync()
     {
         try
         {
-            if (!InputParser.TryParseDecimal(_irrAmount.Text, out var amount))
+            var branchId = UiHelpers.RequiredBranchId(_openBranch);
+            if (!InputParser.TryParseDecimal(_openIrr.Text, out var amount))
             {
-                throw new BusinessRuleException("مبلغ را به‌درستی وارد کنید.");
+                throw new BusinessRuleException("مبلغ ریال را به‌درستی وارد کنید.");
             }
 
-            await _services.Admin.OpeningIrrAsync(_user, amount, DateTime.Now);
-            _irrAmount.Clear();
-            UiHelpers.ShowInfo(this, "موجودی افتتاحیه ریال ثبت شد.");
+            await _services.Admin.OpeningIrrAsync(_user, branchId, amount, DateTime.Now);
+            _openIrr.Clear();
+            UiHelpers.ShowInfo(this, "موجودی اولیه‌ی ریال ثبت شد.");
             await RefreshAsync();
         }
         catch (Exception ex)
@@ -81,23 +113,53 @@ internal sealed class CashTab : UserControl, IRefreshable
         }
     }
 
-    private async Task OpeningFxAsync()
+    private async Task SaveOpeningForeignAsync()
     {
         try
         {
-            if (_fxCurrency.SelectedItem is not ComboItem item)
+            var branchId = UiHelpers.RequiredBranchId(_openBranch);
+            if (_openCurrency.SelectedItem is not ComboItem item)
             {
                 throw new BusinessRuleException("ارز را انتخاب کنید.");
             }
-            if (!InputParser.TryParseDecimal(_fxQuantity.Text, out var quantity) || !InputParser.TryParseDecimal(_fxRate.Text, out var rate))
+            if (!InputParser.TryParseDecimal(_openQuantity.Text, out var quantity))
             {
-                throw new BusinessRuleException("مقدار و نرخ را به‌درستی وارد کنید.");
+                throw new BusinessRuleException("مقدار ارز را به‌درستی وارد کنید.");
+            }
+            if (!InputParser.TryParseDecimal(_openUnitRate.Text, out var unitRate))
+            {
+                throw new BusinessRuleException("نرخ هر واحد را به‌درستی وارد کنید.");
             }
 
-            await _services.Admin.OpeningForeignAsync(_user, item.Value, quantity, rate, DateTime.Now);
-            _fxQuantity.Clear();
-            _fxRate.Clear();
-            UiHelpers.ShowInfo(this, "موجودی افتتاحیه ارز ثبت شد.");
+            await _services.Admin.OpeningForeignAsync(_user, branchId, item.Value, quantity, unitRate, DateTime.Now);
+            _openQuantity.Clear();
+            _openUnitRate.Clear();
+            UiHelpers.ShowInfo(this, "موجودی اولیه‌ی ارز ثبت شد.");
+            await RefreshAsync();
+        }
+        catch (Exception ex)
+        {
+            UiHelpers.ShowError(this, ex);
+        }
+    }
+
+    private void ExportExcel()
+    {
+        try
+        {
+            var bytes = WorkbookBuilder.CashBoxes(_boxes);
+            UiHelpers.SaveExcel(this, bytes, $"cash-boxes-{PersianDate.FormatDate(DateTime.Now).Replace('/', '-')}.xlsx");
+        }
+        catch (Exception ex)
+        {
+            UiHelpers.ShowError(this, ex);
+        }
+    }
+
+    private async Task SafeRefreshAsync()
+    {
+        try
+        {
             await RefreshAsync();
         }
         catch (Exception ex)

@@ -12,9 +12,28 @@
 }
 <div asp-validation-summary="All" class="alert error"></div>
 
+@if (Model.IsAdmin)
+{
+    <form method="get" class="panel filters">
+        <label>شعبه
+            <select name="BranchFilter">
+                <option value="">همه‌ی شعبه‌ها</option>
+                @foreach (var b in Model.Branches)
+                {
+                    <option value="@b.Id" selected="@(Model.BranchFilter == b.Id)">@b.Code - @b.Name</option>
+                }
+            </select>
+        </label>
+        <div><button type="submit">نمایش</button></div>
+    </form>
+}
+
+<div class="tools"><a class="link-button" asp-page-handler="Excel" asp-route-branchFilter="@Model.BranchFilter">خروجی Excel صندوق‌ها</a></div>
+
 <table>
     <thead>
         <tr>
+            <th>شعبه</th>
             <th>صندوق</th>
             <th>ارز</th>
             <th>موجودی</th>
@@ -25,6 +44,7 @@
         @foreach (var b in Model.Boxes)
         {
             <tr>
+                <td>@b.BranchName</td>
                 <td>@b.Name</td>
                 <td>@b.CurrencyCode</td>
                 <td>@(b.CurrencyCode == "IRR" ? ViewFormat.Money(b.Balance) : ViewFormat.Quantity(b.Balance))</td>
@@ -34,16 +54,32 @@
     </tbody>
 </table>
 
-@if (User.IsInRole("Admin"))
+@if (Model.IsAdmin)
 {
     <h2>موجودی افتتاحیه ریال</h2>
     <form method="post" asp-page-handler="OpeningIrr" class="panel form-grid">
+        <label>شعبه
+            <select name="IrrInput.BranchId">
+                @foreach (var b in Model.Branches)
+                {
+                    <option value="@b.Id">@b.Code - @b.Name</option>
+                }
+            </select>
+        </label>
         <label>مبلغ (ریال، عدد صحیح)<input name="IrrInput.Amount" dir="ltr" inputmode="numeric" /></label>
         <div><button type="submit">ثبت موجودی افتتاحیه ریال</button></div>
     </form>
 
     <h2>موجودی افتتاحیه ارز</h2>
     <form method="post" asp-page-handler="OpeningFx" class="panel form-grid">
+        <label>شعبه
+            <select name="FxInput.BranchId">
+                @foreach (var b in Model.Branches)
+                {
+                    <option value="@b.Id">@b.Code - @b.Name</option>
+                }
+            </select>
+        </label>
         <label>ارز
             <select name="FxInput.CurrencyCode">
                 @foreach (var c in Model.Currencies)

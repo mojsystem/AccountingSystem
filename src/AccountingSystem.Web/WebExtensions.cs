@@ -17,12 +17,27 @@ public static class WebExtensions
         var username = principal.Identity?.Name ?? string.Empty;
         var fullName = principal.FindFirst("FullName")?.Value ?? username;
         var roleText = principal.FindFirst(ClaimTypes.Role)?.Value ?? nameof(UserRole.Cashier);
+
+        int? branchId = null;
+        if (int.TryParse(principal.FindFirst("BranchId")?.Value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsedBranch))
+        {
+            branchId = parsedBranch;
+        }
+
         return new CurrentUser(
             int.Parse(idText, CultureInfo.InvariantCulture),
             username,
             fullName,
-            Enum.Parse<UserRole>(roleText));
+            Enum.Parse<UserRole>(roleText),
+            branchId,
+            principal.FindFirst("BranchName")?.Value);
     }
+
+    /// <summary>
+    /// شعبه‌ای که صفحه باید نشان دهد: مدیر همان مقدار انتخاب‌شده (null = همه‌ی شعبه‌ها)، کاربر صندوق شعبه‌ی خودش.
+    /// </summary>
+    public static int? ScopeFor(this CurrentUser user, int? requestedBranchId) =>
+        user.Role == UserRole.Admin ? requestedBranchId : user.BranchId;
 
     public static Task SignInUserAsync(this HttpContext httpContext, CurrentUser user, bool persistent)
     {
@@ -33,6 +48,15 @@ public static class WebExtensions
             new Claim("FullName", user.FullName),
             new Claim(ClaimTypes.Role, user.Role.ToString()),
         };
+        if (user.BranchId is { } branch)
+        {
+            claims.Add(new Claim("BranchId", branch.ToString(CultureInfo.InvariantCulture)));
+        }
+        if (!string.IsNullOrEmpty(user.BranchName))
+        {
+            claims.Add(new Claim("BranchName", user.BranchName));
+        }
+
         var identity = new ClaimsIdentity(claims, CookieAuthenticationDefaults.AuthenticationScheme);
         return httpContext.SignInAsync(
             CookieAuthenticationDefaults.AuthenticationScheme,

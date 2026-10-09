@@ -18,11 +18,18 @@
                 <a asp-page="/Journal/Index">اسناد حسابداری</a>
                 @if (User.IsInRole("Admin"))
                 {
+                    <a asp-page="/Branches/Index">شعبه‌ها</a>
                     <a asp-page="/Users/Index">کاربران</a>
                 }
             </nav>
             <form method="post" asp-page="/Account/Logout">
-                <span>@User.Identity.Name</span>
+                <span>
+                    @User.Identity.Name
+                    @if (User.FindFirst("BranchName")?.Value is { Length: > 0 } branchName)
+                    {
+                        <text>(@branchName)</text>
+                    }
+                </span>
                 <button type="submit">خروج</button>
             </form>
         </header>

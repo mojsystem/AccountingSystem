@@ -5,7 +5,7 @@ using AccountingSystem.Core.Domain;
 
 namespace AccountingSystem.Core.Services;
 
-/// <summary>مدیریت ارزها، نرخ‌ها، صندوق‌ها و موجودی‌های افتتاحیه.</summary>
+/// <summary>مدیریت ارزها، نرخ‌ها، صندوق‌ها و موجودی‌های افتتاحیه‌ی هر شعبه.</summary>
 public sealed class CurrencyAdminService
 {
     private readonly IAccountingRepository _repository;
@@ -18,11 +18,11 @@ public sealed class CurrencyAdminService
     public Task<IReadOnlyList<CurrencyInfo>> GetCurrenciesAsync(CancellationToken ct = default) =>
         _repository.GetCurrenciesAsync(ct);
 
-    public Task<IReadOnlyList<RateInfo>> GetLatestRatesAsync(CancellationToken ct = default) =>
-        _repository.GetLatestRatesAsync(ct);
+    public Task<IReadOnlyList<RateInfo>> GetLatestRatesAsync(CurrentUser actor, int? branchId, CancellationToken ct = default) =>
+        _repository.GetLatestRatesAsync(BranchScope.ResolveForReport(actor, branchId), ct);
 
-    public Task<IReadOnlyList<CashBoxInfo>> GetCashBoxesAsync(CancellationToken ct = default) =>
-        _repository.GetCashBoxesAsync(ct);
+    public Task<IReadOnlyList<CashBoxInfo>> GetCashBoxesAsync(CurrentUser actor, int? branchId, CancellationToken ct = default) =>
+        _repository.GetCashBoxesAsync(BranchScope.ResolveForReport(actor, branchId), ct);
 
     public async Task AddCurrencyAsync(CurrentUser actor, string code, string name, int decimalPlaces, DateTime now, CancellationToken ct = default)
     {
@@ -49,12 +49,18 @@ public sealed class CurrencyAdminService
         await _repository.AddCurrencyAsync(new CurrencyInfo(normalizedCode, cleanName, decimalPlaces, true), actor.Id, now, ct);
     }
 
-    public async Task SetRateAsync(CurrentUser actor, string currencyCode, decimal buyRateIrr, decimal sellRateIrr, DateTime now, CancellationToken ct = default)
+    public async Task SetRateAsync(CurrentUser actor, int branchId, string currencyCode, decimal buyRateIrr, decimal sellRateIrr, DateTime now, CancellationToken ct = default)
     {
+        var scopedBranch = BranchScope.RequireBranch(actor, branchId);
         var code = (currencyCode ?? string.Empty).Trim().ToUpperInvariant();
         if (code == CurrencyCodes.Irr)
         {
             throw new BusinessRuleException("برای ریال نرخ تعریف نمی‌شود.");
+        }
+        var branches = await _repository.GetBranchesAsync(ct);
+        if (branches.All(b => b.Id != scopedBranch))
+        {
+            throw new BusinessRuleException("شعبه‌ی انتخابی یافت نشد.");
         }
         var currencies = await _repository.GetCurrenciesAsync(ct);
         var currency = currencies.FirstOrDefault(c => c.Code == code)
@@ -70,25 +76,25 @@ public sealed class CurrencyAdminService
             throw new BusinessRuleException("نرخ فروش نمی‌تواند کمتر از نرخ خرید باشد.");
         }
 
-        await _repository.AddRateAsync(code, buyRateIrr, sellRateIrr, actor.Id, now, ct);
+        await _repository.AddRateAsync(scopedBranch, code, buyRateIrr, sellRateIrr, actor.Id, now, ct);
     }
 
-    public async Task OpeningIrrAsync(CurrentUser actor, decimal amountIrr, DateTime now, CancellationToken ct = default)
+    public async Task OpeningIrrAsync(CurrentUser actor, int branchId, decimal amountIrr, DateTime now, CancellationToken ct = default)
     {
         RoleGuard.RequireAdmin(actor);
-        var boxes = await _repository.GetCashBoxesAsync(ct);
+        var boxes = await _repository.GetCashBoxesAsync(branchId, ct);
         var irrBox = boxes.FirstOrDefault(b => b.CurrencyCode == CurrencyCodes.Irr)
-            ?? throw new BusinessRuleException("صندوق ریال یافت نشد.");
-        var posting = TradePlanner.PlanOpeningIrr(amountIrr, irrBox.Balance, actor.Id, now);
+            ?? throw new BusinessRuleException("صندوق ریال شعبه‌ی انتخابی یافت نشد.");
+        var posting = TradePlanner.PlanOpeningIrr(branchId, amountIrr, irrBox.Balance, actor.Id, now);
         await _repository.PostAsync(posting, ct);
     }
 
-    public async Task OpeningForeignAsync(CurrentUser actor, string currencyCode, decimal quantity, decimal unitRateIrr, DateTime now, CancellationToken ct = default)
+    public async Task OpeningForeignAsync(CurrentUser actor, int branchId, string currencyCode, decimal quantity, decimal unitRateIrr, DateTime now, CancellationToken ct = default)
     {
         RoleGuard.RequireAdmin(actor);
         var code = (currencyCode ?? string.Empty).Trim().ToUpperInvariant();
-        var snapshot = await _repository.GetTradeSnapshotAsync(code, ct)
-            ?? throw new BusinessRuleException("ارز انتخابی یافت نشد.");
+        var snapshot = await _repository.GetTradeSnapshotAsync(branchId, code, ct)
+            ?? throw new BusinessRuleException("ارز یا شعبه‌ی انتخابی یافت نشد.");
         var posting = TradePlanner.PlanOpeningForeign(snapshot.Currency, quantity, unitRateIrr, snapshot, actor.Id, now);
         await _repository.PostAsync(posting, ct);
     }

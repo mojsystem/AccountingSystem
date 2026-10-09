@@ -1,5 +1,6 @@
 using AccountingSystem.Core.Common;
 using AccountingSystem.Core.Domain;
+using AccountingSystem.Core.Export;
 using AccountingSystem.Core.Services;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;
@@ -8,11 +9,15 @@ namespace AccountingSystem.Web.Pages.Cash;
 
 public class IndexModel : PageModel
 {
-    private readonly CurrencyAdminService _admin;
+    private const string ExcelContentType = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
 
-    public IndexModel(CurrencyAdminService admin)
+    private readonly CurrencyAdminService _admin;
+    private readonly BranchService _branches;
+
+    public IndexModel(CurrencyAdminService admin, BranchService branches)
     {
         _admin = admin;
+        _branches = branches;
     }
 
     [BindProperty]
@@ -21,9 +26,16 @@ public class IndexModel : PageModel
     [BindProperty]
     public FxOpeningForm FxInput { get; set; } = new();
 
+    [BindProperty(SupportsGet = true)]
+    public int? BranchFilter { get; set; }
+
     public IReadOnlyList<CashBoxInfo> Boxes { get; private set; } = Array.Empty<CashBoxInfo>();
 
     public IReadOnlyList<CurrencyInfo> Currencies { get; private set; } = Array.Empty<CurrencyInfo>();
+
+    public IReadOnlyList<BranchInfo> Branches { get; private set; } = Array.Empty<BranchInfo>();
+
+    public bool IsAdmin { get; private set; }
 
     public async Task OnGetAsync(CancellationToken ct)
     {
@@ -41,9 +53,9 @@ public class IndexModel : PageModel
 
         try
         {
-            await _admin.OpeningIrrAsync(User.ToCurrentUser(), amount, DateTime.Now, ct);
+            await _admin.OpeningIrrAsync(User.ToCurrentUser(), IrrInput.BranchId, amount, DateTime.Now, ct);
             TempData["Success"] = "موجودی افتتاحیه ریال ثبت شد.";
-            return RedirectToPage();
+            return RedirectToPage(new { branchFilter = BranchFilter });
         }
         catch (BusinessRuleException ex)
         {
@@ -63,9 +75,9 @@ public class IndexModel : PageModel
 
         try
         {
-            await _admin.OpeningForeignAsync(User.ToCurrentUser(), FxInput.CurrencyCode, quantity, rate, DateTime.Now, ct);
+            await _admin.OpeningForeignAsync(User.ToCurrentUser(), FxInput.BranchId, FxInput.CurrencyCode, quantity, rate, DateTime.Now, ct);
             TempData["Success"] = "موجودی افتتاحیه ارز ثبت شد.";
-            return RedirectToPage();
+            return RedirectToPage(new { branchFilter = BranchFilter });
         }
         catch (BusinessRuleException ex)
         {
@@ -74,9 +86,19 @@ public class IndexModel : PageModel
         }
     }
 
+    public async Task<IActionResult> OnGetExcelAsync(CancellationToken ct)
+    {
+        var user = User.ToCurrentUser();
+        var boxes = await _admin.GetCashBoxesAsync(user, user.ScopeFor(BranchFilter), ct);
+        return File(WorkbookBuilder.CashBoxes(boxes), ExcelContentType, $"cash-boxes-{DateTime.Now:yyyyMMdd}.xlsx");
+    }
+
     private async Task LoadAsync(CancellationToken ct)
     {
-        Boxes = await _admin.GetCashBoxesAsync(ct);
+        var user = User.ToCurrentUser();
+        IsAdmin = user.Role == UserRole.Admin;
+        Boxes = await _admin.GetCashBoxesAsync(user, user.ScopeFor(BranchFilter), ct);
+        Branches = await _branches.GetBranchesAsync(ct);
         var all = await _admin.GetCurrenciesAsync(ct);
         Currencies = all.Where(c => c.IsActive && c.Code != CurrencyCodes.Irr).ToList();
     }
@@ -84,11 +106,15 @@ public class IndexModel : PageModel
 
 public sealed class IrrOpeningForm
 {
+    public int BranchId { get; set; }
+
     public string? Amount { get; set; }
 }
 
 public sealed class FxOpeningForm
 {
+    public int BranchId { get; set; }
+
     public string CurrencyCode { get; set; } = "USD";
 
     public string? Quantity { get; set; }

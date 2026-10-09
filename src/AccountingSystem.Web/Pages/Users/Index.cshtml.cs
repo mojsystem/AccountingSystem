@@ -9,10 +9,12 @@ namespace AccountingSystem.Web.Pages.Users;
 public class IndexModel : PageModel
 {
     private readonly UserService _users;
+    private readonly BranchService _branches;
 
-    public IndexModel(UserService users)
+    public IndexModel(UserService users, BranchService branches)
     {
         _users = users;
+        _branches = branches;
     }
 
     [BindProperty]
@@ -20,9 +22,11 @@ public class IndexModel : PageModel
 
     public IReadOnlyList<UserInfo> UserList { get; private set; } = Array.Empty<UserInfo>();
 
+    public IReadOnlyList<BranchInfo> Branches { get; private set; } = Array.Empty<BranchInfo>();
+
     public async Task OnGetAsync(CancellationToken ct)
     {
-        UserList = await _users.GetUsersAsync(User.ToCurrentUser(), ct);
+        await LoadAsync(ct);
     }
 
     public async Task<IActionResult> OnPostAsync(CancellationToken ct)
@@ -36,6 +40,7 @@ public class IndexModel : PageModel
                 Input.FullName ?? string.Empty,
                 Input.Password ?? string.Empty,
                 role,
+                Input.BranchId,
                 DateTime.Now,
                 ct);
             TempData["Success"] = "کاربر جدید ثبت شد.";
@@ -44,9 +49,16 @@ public class IndexModel : PageModel
         catch (BusinessRuleException ex)
         {
             ModelState.AddModelError(string.Empty, ex.Message);
-            UserList = await _users.GetUsersAsync(User.ToCurrentUser(), ct);
+            await LoadAsync(ct);
             return Page();
         }
+    }
+
+    private async Task LoadAsync(CancellationToken ct)
+    {
+        var user = User.ToCurrentUser();
+        UserList = await _users.GetUsersAsync(user, ct);
+        Branches = await _branches.GetBranchesAsync(ct);
     }
 }
 
@@ -59,4 +71,7 @@ public sealed class NewUserForm
     public string? Password { get; set; }
 
     public string Role { get; set; } = "Cashier";
+
+    /// <summary>شعبه‌ی کاربر صندوق. برای مدیر نادیده گرفته می‌شود.</summary>
+    public int? BranchId { get; set; }
 }

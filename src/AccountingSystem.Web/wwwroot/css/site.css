@@ -128,3 +128,25 @@ th { background: #eef2f7; font-weight: 600; }
 
 .entry { background: #fff; border-radius: 8px; padding: 10px 14px; margin: 12px 0; }
 .entry h3 { font-size: 14px; margin: 6px 0; }
+
+.muted { color: var(--muted); }
+.filters { display: flex; gap: 12px; flex-wrap: wrap; align-items: flex-end; }
+.filters label { min-width: 170px; }
+.inline-form { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin: 0; }
+.inline-form input { padding: 4px 6px; width: 150px; }
+.row-void td { color: var(--muted); background: #fafafa; }
+.badge { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 12px; background: #eef2f7; }
+.badge.void { background: var(--err-bg); color: var(--err-text); }
+.link-button { color: var(--primary); text-decoration: none; font-weight: 600; }
+.link-button:hover { text-decoration: underline; }
+button.danger {
+  background: #b42318;
+  color: #fff;
+  border: 0;
+  border-radius: 6px;
+  padding: 5px 12px;
+  cursor: pointer;
+  font: inherit;
+}
+.tools { display: flex; gap: 16px; align-items: center; flex-wrap: wrap; margin: 6px 0; }
+.hint { color: var(--muted); font-size: 12px; margin: 4px 0 0; }

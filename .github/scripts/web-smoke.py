@@ -6,7 +6,8 @@ Checks that:
   * anonymous requests to protected pages are redirected to the login page,
   * an account can sign in,
   * static files (the stylesheet) are served,
-  * the main pages render for the signed-in account, including the Admin-only page.
+  * the main pages render for the signed-in account, including the Admin-only pages,
+  * the Excel exports return an .xlsx package (a zip file, which starts with "PK").
 
 Usage:
   SMOKE_USERNAME=... SMOKE_PASSWORD=... python3 .github/scripts/web-smoke.py <base-url> [log-file]
@@ -21,7 +22,8 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-PROTECTED_PAGES = ["/", "/Trade", "/Rates", "/Cash", "/Journal", "/Users"]
+PROTECTED_PAGES = ["/", "/Trade", "/Rates", "/Cash", "/Journal", "/Users", "/Branches"]
+EXCEL_EXPORTS = ["/Trade?handler=Excel", "/Journal?handler=Excel"]
 STYLESHEET = "/css/site.css"
 STARTUP_TIMEOUT_SECONDS = 120
 TOKEN_INPUT = re.compile(r'<input[^>]*name="__RequestVerificationToken"[^>]*>')
@@ -114,6 +116,10 @@ def main() -> int:
         for page_path in PROTECTED_PAGES:
             status, path, _ = client.request(page_path)
             check(status == 200 and path == page_path, f"signed-in GET {page_path} renders (HTTP {status})")
+
+        for export_path in EXCEL_EXPORTS:
+            status, _, body = client.request(export_path)
+            check(status == 200 and body.startswith("PK"), f"signed-in GET {export_path} returns an .xlsx file (HTTP {status})")
     except RuntimeError as error:
         failures.append(str(error))
         print(f"FAIL: {error}")
