@@ -18,6 +18,12 @@ public interface IAccountingRepository
 
     Task<IReadOnlyList<AccountInfo>> GetAccountsAsync(CancellationToken ct = default);
 
+    Task AddAccountAsync(AccountRecord account, int actorId, DateTime now, CancellationToken ct = default);
+
+    Task UpdateAccountAsync(string originalCode, AccountRecord account, int actorId, DateTime now, CancellationToken ct = default);
+
+    Task DeleteAccountAsync(string code, int actorId, DateTime now, CancellationToken ct = default);
+
     Task<TradeSnapshot?> GetTradeSnapshotAsync(int branchId, string currencyCode, CancellationToken ct = default);
 
     /// <summary>

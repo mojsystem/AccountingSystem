@@ -77,9 +77,15 @@ CREATE TABLE dbo.Accounts
     Code        NVARCHAR(20)  NOT NULL,
     Name        NVARCHAR(100) NOT NULL,
     AccountType NVARCHAR(20)  NOT NULL,
+    Level       TINYINT       NOT NULL,
+    ParentCode  NVARCHAR(20)  NULL,
+    IsSystem    BIT           NOT NULL CONSTRAINT DF_Accounts_IsSystem DEFAULT (0),
     IsActive    BIT           NOT NULL CONSTRAINT DF_Accounts_IsActive DEFAULT (1),
     CONSTRAINT PK_Accounts PRIMARY KEY (Code),
-    CONSTRAINT CK_Accounts_Type CHECK (AccountType IN (N'Asset', N'Liability', N'Equity', N'Revenue', N'Expense'))
+    CONSTRAINT FK_Accounts_Parent FOREIGN KEY (ParentCode) REFERENCES dbo.Accounts (Code),
+    CONSTRAINT CK_Accounts_Type CHECK (AccountType IN (N'Asset', N'Liability', N'Equity', N'Revenue', N'Expense')),
+    CONSTRAINT CK_Accounts_Level CHECK (Level BETWEEN 1 AND 4),
+    CONSTRAINT CK_Accounts_Parent CHECK ((Level = 1 AND ParentCode IS NULL) OR (Level > 1 AND ParentCode IS NOT NULL))
 );
 GO
 
@@ -371,20 +377,35 @@ INSERT INTO dbo.Currencies (Code, Name, DecimalPlaces) VALUES
 (N'TRY', N'لیر ترکیه', 2);
 GO
 
-INSERT INTO dbo.Accounts (Code, Name, AccountType) VALUES
-(N'1001', N'صندوق ریال', N'Asset'),
-(N'1101-USD', N'موجودی ارز - دلار آمریکا', N'Asset'),
-(N'1101-EUR', N'موجودی ارز - یورو', N'Asset'),
-(N'1101-GBP', N'موجودی ارز - پوند استرلینگ', N'Asset'),
-(N'1101-AED', N'موجودی ارز - درهم امارات', N'Asset'),
-(N'1101-TRY', N'موجودی ارز - لیر ترکیه', N'Asset'),
-(N'3001', N'سرمایه افتتاحیه', N'Equity'),
-(N'4001', N'سود معاملات ارزی', N'Revenue'),
-(N'4101', N'درآمد کارمزد معاملات', N'Revenue'),
-(N'5001', N'زیان معاملات ارزی', N'Expense'),
-(N'6001', N'هزینه‌های اداری و جاری', N'Expense'),
-(N'6002', N'هزینه‌ی اجاره', N'Expense'),
-(N'6003', N'سایر هزینه‌ها', N'Expense');
+-- سرفصل چهارسطحی: گروه (۱) ← کل (۲) ← معین (۳) ← تفصیلی (۴). نوع حساب از گروه به زیرمجموعه‌ها به ارث می‌رسد.
+-- حساب‌های IsSystem=1 پایه‌ی موتور معاملات و سندهای خودکارند: کد، پدر، نوع و وضعیت آن‌ها قابل تغییر نیست؛ فقط نام قابل ویرایش است.
+INSERT INTO dbo.Accounts (Code, Name, AccountType, Level, ParentCode, IsSystem) VALUES
+(N'1',          N'دارایی‌ها',                       N'Asset',   1, NULL,     0),
+(N'10',         N'دارایی‌های نقدی',                 N'Asset',   2, N'1',     0),
+(N'1001',       N'صندوق ریال',                      N'Asset',   3, N'10',    1),
+(N'11',         N'دارایی‌های ارزی',                 N'Asset',   2, N'1',     0),
+(N'1101',       N'موجودی ارز به تفکیک ارز',         N'Asset',   3, N'11',    0),
+(N'1101-USD',   N'موجودی ارز - دلار آمریکا',        N'Asset',   4, N'1101',  1),
+(N'1101-EUR',   N'موجودی ارز - یورو',               N'Asset',   4, N'1101',  1),
+(N'1101-GBP',   N'موجودی ارز - پوند استرلینگ',      N'Asset',   4, N'1101',  1),
+(N'1101-AED',   N'موجودی ارز - درهم امارات',        N'Asset',   4, N'1101',  1),
+(N'1101-TRY',   N'موجودی ارز - لیر ترکیه',          N'Asset',   4, N'1101',  1),
+(N'3',          N'سرمایه',                          N'Equity',  1, NULL,     0),
+(N'30',         N'سرمایه‌ی پایه',                    N'Equity',  2, N'3',     0),
+(N'3001',       N'سرمایه افتتاحیه',                 N'Equity',  3, N'30',    1),
+(N'4',          N'درآمدها',                         N'Revenue', 1, NULL,     0),
+(N'40',         N'درآمد معاملات ارزی',              N'Revenue', 2, N'4',     0),
+(N'4001',       N'سود معاملات ارزی',                N'Revenue', 3, N'40',    1),
+(N'41',         N'درآمد کارمزد',                    N'Revenue', 2, N'4',     0),
+(N'4101',       N'درآمد کارمزد معاملات',            N'Revenue', 3, N'41',    1),
+(N'5',          N'زیان‌ها',                         N'Expense', 1, NULL,     0),
+(N'50',         N'زیان‌های معاملات ارزی',           N'Expense', 2, N'5',     0),
+(N'5001',       N'زیان معاملات ارزی',               N'Expense', 3, N'50',    1),
+(N'6',          N'هزینه‌های عملیاتی',               N'Expense', 1, NULL,     0),
+(N'60',         N'هزینه‌های جاری',                  N'Expense', 2, N'6',     0),
+(N'6001',       N'هزینه‌های اداری و جاری',          N'Expense', 3, N'60',    0),
+(N'6002',       N'هزینه‌ی اجاره',                   N'Expense', 3, N'60',    0),
+(N'6003',       N'سایر هزینه‌ها',                   N'Expense', 3, N'60',    0);
 GO
 
 INSERT INTO dbo.CashBoxes (BranchId, CurrencyCode, Name)

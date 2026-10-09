@@ -113,6 +113,100 @@ LEFT JOIN dbo.Users vu ON vu.Id = t.VoidedBy";
         return result;
     }
 
+    public async Task AddAccountAsync(AccountRecord account, int actorId, DateTime now, CancellationToken ct = default)
+    {
+        try
+        {
+            await WithTransactionAsync<bool>(async (conn, tx) =>
+            {
+                await ExecuteAsync(conn, tx, ct,
+                    "INSERT INTO dbo.Accounts (Code, Name, AccountType, Level, ParentCode, IsSystem, IsActive) VALUES (@code, @name, @type, @level, @parent, 0, @active);",
+                    AccountParameters(account, null));
+                await InsertAuditAsync(conn, tx, actorId, now, "ACCOUNT_CREATE", "ACCOUNT", null,
+                    $"حساب {account.Code} «{account.Name}» ({AccountRules.LevelName(account.Level)}) ایجاد شد", ct);
+                return true;
+            }, ct);
+        }
+        catch (SqlException ex) when (ex.Number is DuplicateKeyError or UniqueIndexError)
+        {
+            throw new BusinessRuleException($"حسابی با کد «{account.Code}» از قبل وجود دارد.");
+        }
+        catch (SqlException ex) when (ex.Number == ForeignKeyError)
+        {
+            throw new BusinessRuleException("حساب پدر معتبر نیست.");
+        }
+    }
+
+    public async Task UpdateAccountAsync(string originalCode, AccountRecord account, int actorId, DateTime now, CancellationToken ct = default)
+    {
+        try
+        {
+            await WithTransactionAsync<bool>(async (conn, tx) =>
+            {
+                var rows = await ExecuteAsync(conn, tx, ct,
+                    "UPDATE dbo.Accounts SET Code = @code, Name = @name, AccountType = @type, Level = @level, ParentCode = @parent, IsActive = @active WHERE Code = @original;",
+                    AccountParameters(account, originalCode));
+                if (rows != 1)
+                {
+                    throw new BusinessRuleException("حساب مورد نظر پیدا نشد.");
+                }
+                var status = account.IsActive ? "فعال" : "غیرفعال";
+                await InsertAuditAsync(conn, tx, actorId, now, "ACCOUNT_UPDATE", "ACCOUNT", null,
+                    $"حساب {originalCode} ویرایش شد: کد {account.Code}، «{account.Name}»، {status}", ct);
+                return true;
+            }, ct);
+        }
+        catch (SqlException ex) when (ex.Number is DuplicateKeyError or UniqueIndexError)
+        {
+            throw new BusinessRuleException($"حسابی با کد «{account.Code}» از قبل وجود دارد.");
+        }
+        catch (SqlException ex) when (ex.Number == ForeignKeyError)
+        {
+            throw new BusinessRuleException("حساب پدر معتبر نیست.");
+        }
+    }
+
+    public async Task DeleteAccountAsync(string code, int actorId, DateTime now, CancellationToken ct = default)
+    {
+        try
+        {
+            await WithTransactionAsync<bool>(async (conn, tx) =>
+            {
+                var rows = await ExecuteAsync(conn, tx, ct,
+                    "DELETE FROM dbo.Accounts WHERE Code = @code AND IsSystem = 0;",
+                    new SqlParameter("@code", code));
+                if (rows != 1)
+                {
+                    throw new BusinessRuleException("حساب مورد نظر پیدا نشد یا حساب پایه‌ی موتور حسابداری است.");
+                }
+                await InsertAuditAsync(conn, tx, actorId, now, "ACCOUNT_DELETE", "ACCOUNT", null, $"حساب {code} حذف شد", ct);
+                return true;
+            }, ct);
+        }
+        catch (SqlException ex) when (ex.Number == ForeignKeyError)
+        {
+            throw new BusinessRuleException("این حساب در سند استفاده شده یا زیرمجموعه دارد و حذف نمی‌شود؛ به‌جای آن غیرفعال کنید.");
+        }
+    }
+
+    private static SqlParameter[] AccountParameters(AccountRecord account, string? originalCode)
+    {
+        var parameters = new List<SqlParameter>
+        {
+            new SqlParameter("@code", account.Code),
+            new SqlParameter("@name", account.Name),
+            new SqlParameter("@type", account.AccountType),
+            new SqlParameter("@level", account.Level),
+            new SqlParameter("@parent", (object?)account.ParentCode ?? DBNull.Value),
+            new SqlParameter("@active", account.IsActive),
+        };
+        if (originalCode is not null)
+        {
+            parameters.Add(new SqlParameter("@original", originalCode));
+        }
+        return parameters.ToArray();
+    }
+
     public async Task AddCurrencyAsync(CurrencyInfo currency, int userId, DateTime now, CancellationToken ct = default)
     {
         try
@@ -139,7 +233,7 @@ LEFT JOIN dbo.Users vu ON vu.Id = t.VoidedBy";
                     new SqlParameter("@now", now));
 
                 await ExecuteAsync(conn, tx, ct,
-                    "INSERT INTO dbo.Accounts (Code, Name, AccountType, IsActive) VALUES (@accountCode, @accountName, N'Asset', 1);",
+                    "INSERT INTO dbo.Accounts (Code, Name, AccountType, Level, ParentCode, IsSystem, IsActive) VALUES (@accountCode, @accountName, N'Asset', 4, N'1101', 1, 1);",
                     new SqlParameter("@accountCode", AccountCodes.ForeignCash(currency.Code)),
                     new SqlParameter("@accountName", "موجودی ارز - " + currency.Name));
 
@@ -250,14 +344,28 @@ ORDER BY br.Id, CASE WHEN b.CurrencyCode = N'IRR' THEN 0 ELSE 1 END, b.CurrencyC
 
     public async Task<IReadOnlyList<AccountInfo>> GetAccountsAsync(CancellationToken ct = default)
     {
-        const string sql = "SELECT Code, Name, AccountType, IsActive FROM dbo.Accounts ORDER BY Code;";
+        const string sql = @"
+SELECT a.Code, a.Name, a.AccountType, a.Level, a.ParentCode, a.IsSystem, a.IsActive,
+       CASE WHEN EXISTS (SELECT 1 FROM dbo.Accounts c WHERE c.ParentCode = a.Code) THEN 1 ELSE 0 END,
+       CASE WHEN EXISTS (SELECT 1 FROM dbo.JournalLines l WHERE l.AccountCode = a.Code) THEN 1 ELSE 0 END
+FROM dbo.Accounts a
+ORDER BY a.Code;";
         var result = new List<AccountInfo>();
         await using var conn = await OpenAsync(ct);
         await using var cmd = new SqlCommand(sql, conn);
         await using var reader = await cmd.ExecuteReaderAsync(ct);
         while (await reader.ReadAsync(ct))
         {
-            result.Add(new AccountInfo(reader.GetString(0).Trim(), reader.GetString(1), reader.GetString(2), reader.GetBoolean(3)));
+            result.Add(new AccountInfo(
+                reader.GetString(0).Trim(),
+                reader.GetString(1),
+                reader.GetString(2),
+                reader.GetByte(3),
+                reader.IsDBNull(4) ? null : reader.GetString(4).Trim(),
+                reader.GetBoolean(5),
+                reader.GetBoolean(6),
+                reader.GetInt32(7) == 1,
+                reader.GetInt32(8) == 1));
         }
         return result;
     }

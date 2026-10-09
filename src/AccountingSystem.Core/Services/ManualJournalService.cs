@@ -58,8 +58,12 @@ public sealed class ManualJournalService
         return await _repository.PostAsync(posting, ct);
     }
 
-    public Task<IReadOnlyList<AccountInfo>> GetAccountsAsync(CancellationToken ct = default) =>
-        _repository.GetAccountsAsync(ct);
+    /// <summary>فقط حساب‌های قابل سند (فعال و بدون زیرمجموعه) برای فرم سند دستی.</summary>
+    public async Task<IReadOnlyList<AccountInfo>> GetAccountsAsync(CancellationToken ct = default)
+    {
+        var accounts = await _repository.GetAccountsAsync(ct);
+        return accounts.Where(a => a.IsPostable).ToList();
+    }
 
     /// <summary>یک سند حسابداری با سطرهایش؛ کاربر صندوق فقط سندهای شعبه‌ی خودش را می‌بیند.</summary>
     public async Task<JournalEntryInfo?> GetAsync(CurrentUser actor, long entryId, CancellationToken ct = default)

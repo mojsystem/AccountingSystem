@@ -53,6 +53,7 @@ builder.Services.AddScoped<ReportService>();
 builder.Services.AddScoped<ReceiptService>();
 builder.Services.AddScoped<UserService>();
 builder.Services.AddScoped<PermissionService>();
+builder.Services.AddScoped<AccountService>();
 
 var app = builder.Build();
 

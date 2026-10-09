@@ -221,11 +221,11 @@ public class TradePlannerTests
 
     private static IReadOnlyDictionary<string, AccountInfo> Accounts() => new Dictionary<string, AccountInfo>
     {
-        [AccountCodes.IrrCash] = new(AccountCodes.IrrCash, "صندوق ریال", "Asset", true),
-        [AccountCodes.ForeignCash("USD")] = new(AccountCodes.ForeignCash("USD"), "موجودی ارز", "Asset", true),
-        [AccountCodes.OpeningCapital] = new(AccountCodes.OpeningCapital, "سرمایه", "Equity", true),
-        ["6001"] = new("6001", "هزینه‌های اداری", "Expense", true),
-        ["6999"] = new("6999", "حساب غیرفعال", "Expense", false),
+        [AccountCodes.IrrCash] = new(AccountCodes.IrrCash, "صندوق ریال", "Asset", 3, "10", true, true, false, false),
+        [AccountCodes.ForeignCash("USD")] = new(AccountCodes.ForeignCash("USD"), "موجودی ارز", "Asset", 4, "1101", true, true, false, false),
+        [AccountCodes.OpeningCapital] = new(AccountCodes.OpeningCapital, "سرمایه", "Equity", 3, "30", true, true, false, false),
+        ["6001"] = new("6001", "هزینه‌های اداری", "Expense", 3, "60", false, true, false, false),
+        ["6999"] = new("6999", "حساب غیرفعال", "Expense", 3, "69", false, false, false, false),
     };
 
     [Fact]

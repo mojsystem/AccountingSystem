@@ -764,6 +764,80 @@ public class SqlAccountingRepositoryTests : IClassFixture<SqlServerFixture>
         await Assert.ThrowsAsync<BusinessRuleException>(() => admin.RecordOpeningAsync(cashier, mainId, code, 1m, 1_000_000m, now));
     }
 
+    [Fact]
+    public async Task Chart_is_a_consistent_four_level_tree_and_flags_match_the_data()
+    {
+        if (!_fixture.IsEnabled)
+        {
+            return;
+        }
+
+        var repo = new SqlAccountingRepository(_fixture.ConnectionString!);
+        var accounts = await repo.GetAccountsAsync();
+        var byCode = accounts.ToDictionary(a => a.Code);
+
+        foreach (var account in accounts)
+        {
+            if (account.Level == 1)
+            {
+                Assert.Null(account.ParentCode);
+                Assert.Equal(1, account.Code.Length);
+            }
+            else
+            {
+                Assert.NotNull(account.ParentCode);
+                var parent = byCode[account.ParentCode!];
+                Assert.Equal(parent.Level + 1, account.Level);
+                Assert.StartsWith(parent.Code, account.Code, StringComparison.Ordinal);
+                Assert.Equal(parent.AccountType, account.AccountType);
+            }
+            Assert.Equal(accounts.Any(c => c.ParentCode == account.Code), account.HasChildren);
+        }
+        Assert.True(byCode["1001"].IsSystem);
+        Assert.False(byCode["6"].IsPostable);
+        Assert.True(byCode["6001"].IsPostable);
+    }
+
+    [Fact]
+    public async Task Admin_builds_the_chart_and_the_guards_hold()
+    {
+        if (!_fixture.IsEnabled)
+        {
+            return;
+        }
+
+        var repo = new SqlAccountingRepository(_fixture.ConnectionString!);
+        var chart = new AccountService(repo);
+        var manual = new ManualJournalService(repo);
+        var now = DateTime.Now;
+        var admin = await EnsureAdminAsync(repo, now);
+        var branchId = await MainBranchIdAsync(repo);
+        var code = "60" + Random.Shared.Next(100000, 999999).ToString(CultureInfo.InvariantCulture);
+        var detail = code + "-1";
+
+        await chart.CreateAsync(admin, code, "هزینه‌ی آزمایشی", "60", "Expense", now);
+        await chart.CreateAsync(admin, detail, "تفصیلی آزمایشی", code, "Expense", now);
+        var created = (await repo.GetAccountsAsync()).Single(a => a.Code == detail);
+        Assert.Equal(4, created.Level);
+        Assert.Equal("Expense", created.AccountType);
+
+        await Assert.ThrowsAsync<BusinessRuleException>(() => chart.CreateAsync(admin, code + "-2", "زیر تفصیلی", detail, "Expense", now));
+        await Assert.ThrowsAsync<BusinessRuleException>(() => chart.CreateAsync(admin, "1001-9", "زیر صندوق", "1001", "Asset", now));
+        await Assert.ThrowsAsync<BusinessRuleException>(() => chart.UpdateAsync(admin, "1001", "1002", "صندوق ریال", "10", "Asset", true, now));
+        await Assert.ThrowsAsync<BusinessRuleException>(() => chart.UpdateAsync(admin, "1001", "1001", "صندوق ریال", "10", "Asset", false, now));
+        await Assert.ThrowsAsync<BusinessRuleException>(() => chart.UpdateAsync(admin, code, code, "هزینه", "60", "Expense", false, now));
+        await Assert.ThrowsAsync<BusinessRuleException>(() => chart.DeleteAsync(admin, code, now));
+        await Assert.ThrowsAsync<BusinessRuleException>(() => chart.DeleteAsync(admin, "1001", now));
+
+        var postToGroup = new[] { new JournalLineDraft("6", 100m, 0m), new JournalLineDraft("1001", 0m, 100m) };
+        await Assert.ThrowsAsync<BusinessRuleException>(() => manual.CreateAsync(admin, branchId, "سند روی گروه", null, postToGroup, now));
+
+        await chart.UpdateAsync(admin, "1001", "1001", "صندوق ریال", "10", "Asset", true, now);
+        await chart.DeleteAsync(admin, detail, now);
+        await chart.DeleteAsync(admin, code, now);
+        Assert.DoesNotContain(await repo.GetAccountsAsync(), a => a.Code == code);
+    }
+
     private static async Task AssertLedgerConsistentAsync(string connectionString, int branchId, string currencyCode)
     {
         await using var conn = new SqlConnection(connectionString);

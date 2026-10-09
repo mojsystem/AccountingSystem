@@ -109,8 +109,27 @@ public sealed record JournalEntryInfo(
     long? SourceId = null,
     bool IsVoided = false);
 
-/// <summary>حساب دفتر کل. فقط حساب‌های فعال در سندهای دستی پذیرفته می‌شوند.</summary>
-public sealed record AccountInfo(string Code, string Name, string AccountType, bool IsActive);
+/// <summary>
+/// حساب دفتر کل با سطح (۱ گروه، ۲ کل، ۳ معین، ۴ تفصیلی) و حساب پدر.
+/// فقط حساب «قابل سند» (فعال و بی‌زیرمجموعه) در سند دستی پذیرفته می‌شود.
+/// </summary>
+public sealed record AccountInfo(
+    string Code,
+    string Name,
+    string AccountType,
+    int Level,
+    string? ParentCode,
+    bool IsSystem,
+    bool IsActive,
+    bool HasChildren,
+    bool HasPostings)
+{
+    /// <summary>حساب فعال و بدون زیرمجموعه؛ فقط چنین حسابی سند می‌گیرد.</summary>
+    public bool IsPostable => IsActive && !HasChildren;
+}
+
+/// <summary>داده‌ی ذخیره‌ی یک حساب (ساخت یا ویرایش). سطح را سرویس از روی حساب پدر محاسبه می‌کند.</summary>
+public sealed record AccountRecord(string Code, string Name, int Level, string? ParentCode, string AccountType, bool IsActive);
 
 /// <summary>
 /// موجودی افتتاحیه‌ی یک شعبه. برای ریال، Quantity همان مبلغ ریال و RateIrr خالی است.

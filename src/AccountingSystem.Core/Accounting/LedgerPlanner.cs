@@ -181,9 +181,9 @@ public static class LedgerPlanner
         }
         foreach (var line in lines)
         {
-            if (!accounts.TryGetValue(line.AccountCode, out var account) || !account.IsActive)
+            if (!accounts.TryGetValue(line.AccountCode, out var account) || !account.IsPostable)
             {
-                throw new BusinessRuleException($"حساب {line.AccountCode} وجود ندارد یا غیرفعال است.");
+                throw new BusinessRuleException($"حساب {line.AccountCode} وجود ندارد یا سند نمی‌گیرد (غیرفعال است یا زیرمجموعه دارد).");
             }
             if (line.AccountCode.StartsWith(ForeignInventoryPrefix, StringComparison.Ordinal))
             {
