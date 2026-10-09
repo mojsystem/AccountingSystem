@@ -25,6 +25,9 @@ public static class AccountRules
         ["Expense"] = "هزینه",
     };
 
+    /// <summary>همه‌ی نوع‌های حساب به ترتیب نمایش (برای فهرست‌ها).</summary>
+    public static IReadOnlyCollection<string> AccountTypes => TypeNames.Keys.ToList();
+
     /// <summary>نام فارسی نوع حساب (برای نمایش).</summary>
     public static string TypeName(string accountType) =>
         TypeNames.TryGetValue(accountType, out var name) ? name : accountType;

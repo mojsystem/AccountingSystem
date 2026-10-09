@@ -82,13 +82,13 @@ public sealed class AccountService
             ?? throw new BusinessRuleException("حساب پدر پیدا نشد.");
     }
 
-    /// <summary>زیرمجموعه نوع را از پدر می‌گیرد؛ گروه باید نوع خودش را داشته باشد.</summary>
+    /// <summary>نوع زیرمجموعه همیشه از پدر به ارث می‌رسد؛ نوع گروه را کاربر تعیین می‌کند.</summary>
     private static string ResolveType(AccountInfo? parent, string? accountType)
     {
-        if (parent is null || !string.IsNullOrWhiteSpace(accountType))
+        if (parent is not null)
         {
-            return AccountRules.CleanType(accountType);
+            return parent.AccountType;
         }
-        return parent.AccountType;
+        return AccountRules.CleanType(accountType);
     }
 }
