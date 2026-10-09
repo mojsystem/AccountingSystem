@@ -49,6 +49,10 @@ internal sealed class MainForm : Form
             AddTab("پشتیبان و بازیابی", new BackupTab(services, user));
         }
 
+        // تب‌ها از چپ به راست معکوس اضافه می‌شوند تا «داشبورد» در راست‌ترین جای نوار باشد.
+        // چون هر دو فهرست با هم درج می‌شوند، index تب و IRefreshable همیشه هم‌خوان می‌مانند.
+        _tabs.SelectedIndex = _tabs.TabPages.Count - 1;
+
         // کنترل پرشونده باید آخر اضافه شود تا نوار وضعیت پایین پنجره جا باشد.
         Controls.Add(_tabs);
         _tabs.SelectedIndexChanged += async (_, _) => await RefreshSelectedAsync();
@@ -61,8 +65,8 @@ internal sealed class MainForm : Form
         var page = new TabPage(title) { Padding = new Padding(8) };
         tab.Dock = DockStyle.Fill;
         page.Controls.Add(tab);
-        _tabs.TabPages.Add(page);
-        _refreshers.Add((IRefreshable)tab);
+        _tabs.TabPages.Insert(0, page);
+        _refreshers.Insert(0, (IRefreshable)tab);
     }
 
     private async Task RefreshSelectedAsync()
