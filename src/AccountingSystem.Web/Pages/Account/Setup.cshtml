@@ -6,6 +6,10 @@
 
 <div class="auth-box">
     <h1>راه‌اندازی اولیه</h1>
+    @if (TempData["SqlSetupSuccess"] is string sqlSetupSuccess)
+    {
+        <div class="alert ok">@sqlSetupSuccess</div>
+    }
     <p>هنوز کاربری ثبت نشده است. اولین کاربر، مدیر سیستم خواهد بود.</p>
     <div asp-validation-summary="All" class="alert error"></div>
     <form method="post">

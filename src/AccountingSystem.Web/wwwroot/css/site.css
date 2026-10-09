@@ -897,3 +897,37 @@ main:focus {
         border: 1px solid #ccc;
     }
 }
+
+/* راه‌اندازی اتصال SQL Server */
+.sql-setup {
+    width: min(100%, 620px);
+    margin: clamp(20px, 7vh, 70px) auto;
+}
+
+.sql-setup p {
+    line-height: 1.9;
+}
+
+.sql-setup form {
+    display: grid;
+    gap: 12px;
+    margin-block: 18px;
+}
+
+.sql-setup input {
+    width: 100%;
+    min-height: 42px;
+    margin-top: 5px;
+}
+
+.setup-mark {
+    display: grid;
+    place-items: center;
+    width: 52px;
+    height: 52px;
+    border-radius: 15px;
+    background: var(--primary-soft);
+    color: var(--primary);
+    font-weight: 700;
+    letter-spacing: 0.04em;
+}

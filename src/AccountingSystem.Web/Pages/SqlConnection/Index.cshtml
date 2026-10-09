@@ -1,0 +1,51 @@
+@page "/SqlConnection"
+@model IndexModel
+@{
+    ViewData["Title"] = "تنظیم اتصال SQL Server";
+}
+
+<div class="auth-box sql-setup">
+    <div class="setup-mark" aria-hidden="true">SQL</div>
+    <h1>تنظیم اتصال پایگاه داده</h1>
+    <p>
+        برنامه نتوانست با تنظیم فعلی به SQL Server وصل شود. یک موتور SQL Server را انتخاب کنید یا آدرس آن را دستی بنویسید،
+        سپس نام کاربری و رمز SQL را وارد کنید. برنامه اتصال را آزمایش می‌کند، بانک موجود را پیدا می‌کند یا بانک تازه می‌سازد.
+    </p>
+    <p class="hint">در Windows نمونه‌های نصب‌شده‌ی محلی و سرورهای معرفی‌شده توسط SQL Server Browser جست‌وجو می‌شوند؛ روی سیستم‌عامل‌های دیگر آدرس را دستی وارد کنید. اگر Browser خاموش یا UDP/1434 بسته باشد نیز آدرس دستی لازم است؛ مانند <code dir="ltr">localhost\SQLEXPRESS</code> یا <code dir="ltr">server,1433</code>. SQL Server باید حالت Mixed Mode (SQL Authentication) را فعال کرده باشد.</p>
+
+    @if (!string.IsNullOrWhiteSpace(Model.ConnectionError))
+    {
+        <div class="alert error">@Model.ConnectionError</div>
+    }
+    <div asp-validation-summary="All" class="alert error"></div>
+
+    <form method="post" autocomplete="on">
+        <label asp-for="Input.Server">SQL Server یا نمونه
+            <input asp-for="Input.Server" list="sql-servers" autocomplete="url" dir="ltr" placeholder="localhost\SQLEXPRESS" />
+            <datalist id="sql-servers">
+                @foreach (var server in Model.DiscoveredServers)
+                {
+                    <option value="@server"></option>
+                }
+            </datalist>
+        </label>
+        <span asp-validation-for="Input.Server" class="error"></span>
+
+        <label asp-for="Input.UserName">نام کاربری SQL
+            <input asp-for="Input.UserName" autocomplete="username" dir="ltr" />
+        </label>
+        <span asp-validation-for="Input.UserName" class="error"></span>
+
+        <label asp-for="Input.Password">رمز SQL
+            <input asp-for="Input.Password" type="password" autocomplete="current-password" dir="ltr" />
+        </label>
+        <span asp-validation-for="Input.Password" class="error"></span>
+
+        <button type="submit">آزمایش اتصال و آماده‌سازی پایگاه داده</button>
+    </form>
+
+    <small class="hint">
+        حساب SQL باید اجازه‌ی ایجاد پایگاه داده داشته باشد. اگر بانک ساخته شود، فایل‌های آن در پوشه‌ی <code dir="ltr">database</code> کنار فایل برنامه قرار می‌گیرند؛
+        سرویس SQL Server نیز باید به آن پوشه دسترسی داشته باشد. ورود از رایانه‌ی دیگر فقط روی HTTPS مجاز است.
+    </small>
+</div>

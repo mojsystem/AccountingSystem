@@ -7,7 +7,10 @@ namespace AccountingSystem.Data.Schema;
 
 /// <param name="BackupBeforeUpgrade">اگر true باشد و نسخه‌ای قرار است اجرا شود، پیش از آن پشتیبان گرفته می‌شود.</param>
 /// <param name="BackupFolder">پوشه‌ی پشتیبان روی سرور SQL. خالی یعنی پوشه‌ی پیش‌فرض نمونه‌ی SQL Server.</param>
-public sealed record SchemaUpgradeOptions(bool BackupBeforeUpgrade = true, string? BackupFolder = null);
+public sealed record SchemaUpgradeOptions(
+    bool BackupBeforeUpgrade = true,
+    string? BackupFolder = null,
+    string? DatabaseFilesFolder = null);
 
 public sealed record SchemaUpgradeResult(
     UpgradeKind Kind,
@@ -36,7 +39,7 @@ public static class SchemaUpgrader
         var migrations = MigrationCatalog.Load();
         var available = migrations.Select(m => m.ToInfo()).ToList();
 
-        await EnsureDatabaseExistsAsync(target, log, ct);
+        await EnsureDatabaseExistsAsync(target, options, log, ct);
 
         await using var conn = await OpenAsync(target.DatabaseConnectionString, ct);
         await AcquireLockAsync(conn, ct);
@@ -208,7 +211,11 @@ public static class SchemaUpgrader
 
     internal static string Lit(string value) => "N'" + value.Replace("'", "''", StringComparison.Ordinal) + "'";
 
-    private static async Task EnsureDatabaseExistsAsync(SqlConnectionTarget target, Action<string>? log, CancellationToken ct)
+    private static async Task EnsureDatabaseExistsAsync(
+        SqlConnectionTarget target,
+        SchemaUpgradeOptions options,
+        Action<string>? log,
+        CancellationToken ct)
     {
         await using var master = await OpenAsync(target.MasterConnectionString, ct);
         var exists = Convert.ToInt32(await ScalarAsync(master,
@@ -219,7 +226,22 @@ public static class SchemaUpgrader
         }
 
         log?.Invoke($"پایگاه داده‌ی {target.DatabaseName} ساخته می‌شود...");
-        await ExecuteAsync(master, $"CREATE DATABASE {Quote(target.DatabaseName)};", ct);
+        if (string.IsNullOrWhiteSpace(options.DatabaseFilesFolder))
+        {
+            await ExecuteAsync(master, $"CREATE DATABASE {Quote(target.DatabaseName)};", ct);
+        }
+        else
+        {
+            var folder = Path.GetFullPath(options.DatabaseFilesFolder.Trim());
+            Directory.CreateDirectory(folder);
+            var dataPath = Path.Combine(folder, target.DatabaseName + ".mdf");
+            var logPath = Path.Combine(folder, target.DatabaseName + "_log.ldf");
+            var create = $"CREATE DATABASE {Quote(target.DatabaseName)} " +
+                         $"ON PRIMARY (NAME = {Lit(target.DatabaseName + "_data")}, FILENAME = {Lit(dataPath)}, SIZE = 32MB, FILEGROWTH = 64MB) " +
+                         $"LOG ON (NAME = {Lit(target.DatabaseName + "_log")}, FILENAME = {Lit(logPath)}, SIZE = 16MB, FILEGROWTH = 64MB);";
+            await ExecuteAsync(master, create, ct);
+        }
+
         await ExecuteAsync(master, $"ALTER DATABASE {Quote(target.DatabaseName)} SET COMPATIBILITY_LEVEL = 150;", ct);
     }
 

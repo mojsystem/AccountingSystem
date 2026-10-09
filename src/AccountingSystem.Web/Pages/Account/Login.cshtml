@@ -6,6 +6,10 @@
 
 <div class="auth-box">
     <h1>ورود به سیستم</h1>
+    @if (TempData["SqlSetupSuccess"] is string sqlSetupSuccess)
+    {
+        <div class="alert ok">@sqlSetupSuccess</div>
+    }
     <div asp-validation-summary="All" class="alert error"></div>
     <form method="post" asp-route-returnUrl="@Model.ReturnUrl">
         <label>نام کاربری<input asp-for="Input.Username" dir="ltr" autocomplete="username" /></label>
