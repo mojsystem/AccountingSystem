@@ -398,8 +398,8 @@ internal sealed class CashTransactionsTab : UserControl, IRefreshable
             }
             else
             {
-                var id = await _services.CashTransactions.RecordAsync(_user, input, DateTime.Now, occurredOn);
-                UiHelpers.ShowInfo(this, $"دریافت/پرداخت شماره {id} ثبت شد.");
+                var transactionId = await _services.CashTransactions.RecordAsync(_user, input, DateTime.Now, occurredOn);
+                UiHelpers.ShowInfo(this, $"دریافت/پرداخت شماره {transactionId} ثبت شد.");
                 _amount.Clear();
                 _rate.Clear();
                 _occurredOn.Clear();

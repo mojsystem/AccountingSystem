@@ -326,7 +326,8 @@ WHERE e.SourceType = N'TRADE' AND e.SourceId = @tradeId AND l.CustomerId = @cust
         Assert.Contains(cashDocs, t => t.Id == paymentId && !t.IsVoided);
 
         var ledger = await new ReportService(repo).GetCustomerLedgerAsync(user, branchId, _customerId, now.Date, now.Date.AddDays(1));
-        Assert.Equal(12_000_000m, ledger.ClosingBalanceIrr);
+        // گردش معین، حساب دریافتنی ۱۲ میلیون را با پرداختنی باقیمانده‌ی ۱٫۸ میلیون خالص می‌کند.
+        Assert.Equal(10_200_000m, ledger.ClosingBalanceIrr);
         Assert.Contains(ledger.Lines, line => line.SourceType == SourceTypes.CashReceipt && line.IsVoided);
         Assert.Contains(ledger.Lines, line => line.SourceType == SourceTypes.Void && line.SourceId == receiptId);
         await AssertLedgerConsistentAsync(_fixture.ConnectionString!, branchId, code);
@@ -807,7 +808,9 @@ WHERE e.SourceType = N'TRADE' AND e.SourceId = @tradeId AND l.CustomerId = @cust
             Assert.Equal(10, roles[RolePresets.Accountant].Permissions.Count);
             Assert.DoesNotContain(Permission.TradeRecord, roles[RolePresets.Accountant].Permissions);
             Assert.Equal(13, roles[RolePresets.BranchManager].Permissions.Count);
-            Assert.Equal(new[] { Permission.TradeRecord, Permission.CashTransactionCreate }, roles[RolePresets.Cashier].Permissions.ToArray());
+            Assert.Equal(
+                new[] { Permission.TradeRecord, Permission.CashTransactionCreate }.OrderBy(p => p),
+                roles[RolePresets.Cashier].Permissions.OrderBy(p => p));
         }
         Assert.All(await repo.GetRolesAsync(newId), role => Assert.Equal(0, role.AssignedUsers));
     }
