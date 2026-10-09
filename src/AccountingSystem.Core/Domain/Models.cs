@@ -52,7 +52,7 @@ public sealed record CurrencyInfo(string Code, string Name, int DecimalPlaces, b
 public sealed record CustomerInfo(int Id, string CustomerCode, string FullName, string? NationalCode, string? Phone, string? Mobile, string? Address, string? City, string? Sheba1, string? Sheba2, string? CardNumber1, string? CardNumber2, string? Note, DateTime UpdatedAt);
 
 /// <summary>داده‌ی ثبت یا ویرایش مشتری، پیش از اعتبارسنجی.</summary>
-public sealed record CustomerInput(string? FullName, string? NationalCode, string? Phone, string? Address, string? Note, string? Mobile = null, string? City = null, string? Sheba1 = null, string? Sheba2 = null, string? CardNumber1 = null, string? CardNumber2 = null);
+public sealed record CustomerInput(string? FullName = null, string? NationalCode = null, string? Phone = null, string? Address = null, string? Note = null, string? Mobile = null, string? City = null, string? Sheba1 = null, string? Sheba2 = null, string? CardNumber1 = null, string? CardNumber2 = null);
 
 public sealed record RateInfo(
     int BranchId,

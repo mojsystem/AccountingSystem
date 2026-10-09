@@ -117,7 +117,7 @@ internal sealed class AccountsTab : UserControl, IRefreshable
                 LoadAccount(account);
             }
         };
-        _parent.SelectedIndexChanged += (_, _) => ParentChanged();
+        _parent.SelectedIndexChanged += (_, _) => ParentSelectionChanged();
         _newChild.Click += (_, _) =>
         {
             var parent = SelectedAccount();
@@ -294,7 +294,7 @@ internal sealed class AccountsTab : UserControl, IRefreshable
         UiHelpers.SelectByValue(_parent, previous ?? string.Empty);
     }
 
-    private void ParentChanged()
+    private void ParentSelectionChanged()
     {
         if (_loading)
         {
