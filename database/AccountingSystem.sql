@@ -1,5 +1,5 @@
 /*
-    AccountingSystem - اسکریپت ایجاد پایگاه داده (نسخه‌ی چند شعبه، کارمزد و ابطال معامله)
+    AccountingSystem - اسکریپت ایجاد پایگاه داده (نسخه‌ی چند شعبه، کارمزد، ابطال و ویرایش اسناد)
     برای SQL Server 2019 (سطح سازگاری 150)
 
     اجرا (فقط روی یک پایگاه داده‌ی جدید؛ پایگاه داده‌ی نسخه‌ی قبلی با این اسکریپت ارتقا نمی‌یابد):
@@ -23,12 +23,18 @@ IF OBJECT_ID(N'dbo.Currencies', N'U') IS NOT NULL
     THROW 50000, N'پایگاه داده‌ی AccountingSystem قبلاً ساخته شده است. این اسکریپت فقط برای نصب تازه است.', 1;
 GO
 
+-- ترتیب ثابت همه‌ی اسناد با زمان یکسان. با هر سند جدید مقدار بعدی گرفته می‌شود.
+CREATE SEQUENCE dbo.LedgerSeq AS BIGINT START WITH 1 INCREMENT BY 1;
+GO
+
 CREATE TABLE dbo.Branches
 (
-    Id        INT           NOT NULL IDENTITY(1,1),
-    Code      NVARCHAR(10)  NOT NULL,
-    Name      NVARCHAR(100) NOT NULL,
-    CreatedAt DATETIME2(0)  NOT NULL CONSTRAINT DF_Branches_CreatedAt DEFAULT (SYSDATETIME()),
+    Id            INT           NOT NULL IDENTITY(1,1),
+    Code          NVARCHAR(10)  NOT NULL,
+    Name          NVARCHAR(100) NOT NULL,
+    CreatedAt     DATETIME2(0)  NOT NULL CONSTRAINT DF_Branches_CreatedAt DEFAULT (SYSDATETIME()),
+    -- شمارنده‌ی تغییرات دفتر شعبه؛ هر ثبت یا ابطال آن را یک واحد بالا می‌برد (کنترل همزمانی).
+    LedgerVersion BIGINT        NOT NULL CONSTRAINT DF_Branches_LedgerVersion DEFAULT (0),
     CONSTRAINT PK_Branches PRIMARY KEY (Id),
     CONSTRAINT UQ_Branches_Code UNIQUE (Code),
     CONSTRAINT CK_Branches_Code CHECK (LEN(Code) BETWEEN 1 AND 10)
@@ -109,7 +115,7 @@ CREATE TABLE dbo.CashMovements
     CONSTRAINT FK_CashMovements_CashBoxes FOREIGN KEY (CashBoxId) REFERENCES dbo.CashBoxes (Id),
     CONSTRAINT FK_CashMovements_Users FOREIGN KEY (CreatedBy) REFERENCES dbo.Users (Id),
     CONSTRAINT CK_CashMovements_Amount CHECK (Amount <> 0),
-    CONSTRAINT CK_CashMovements_RefType CHECK (RefType IN (N'TRADE', N'OPENING', N'VOID'))
+    CONSTRAINT CK_CashMovements_RefType CHECK (RefType IN (N'TRADE', N'OPENING', N'VOID', N'MANUAL'))
 );
 CREATE INDEX IX_CashMovements_CashBox_OccurredAt ON dbo.CashMovements (CashBoxId, OccurredAt);
 CREATE INDEX IX_CashMovements_CashBox_Id ON dbo.CashMovements (CashBoxId, Id) INCLUDE (RefType, RefId);
@@ -171,7 +177,11 @@ CREATE TABLE dbo.CurrencyTransactions
     VoidedAt     DATETIME2(0)         NULL,
     VoidedBy     INT                  NULL,
     VoidReason   NVARCHAR(250)        NULL,
+    Seq          BIGINT               NOT NULL CONSTRAINT DF_CurrencyTransactions_Seq DEFAULT (NEXT VALUE FOR dbo.LedgerSeq),
+    -- معامله‌ای که این معامله نسخه‌ی اصلاحی آن است (ویرایش مالی با ابطال نسخه‌ی قبلی انجام می‌شود).
+    ReplacesId   BIGINT               NULL,
     CONSTRAINT PK_CurrencyTransactions PRIMARY KEY (Id),
+    CONSTRAINT FK_CurrencyTransactions_Replaces FOREIGN KEY (ReplacesId) REFERENCES dbo.CurrencyTransactions (Id),
     CONSTRAINT FK_CurrencyTransactions_Branches FOREIGN KEY (BranchId) REFERENCES dbo.Branches (Id),
     CONSTRAINT FK_CurrencyTransactions_Currencies FOREIGN KEY (CurrencyCode) REFERENCES dbo.Currencies (Code),
     CONSTRAINT FK_CurrencyTransactions_Users FOREIGN KEY (CreatedBy) REFERENCES dbo.Users (Id),
@@ -188,6 +198,39 @@ CREATE TABLE dbo.CurrencyTransactions
 CREATE INDEX IX_CurrencyTransactions_Branch_OccurredAt ON dbo.CurrencyTransactions (BranchId, OccurredAt);
 GO
 
+-- موجودی افتتاحیه‌ی ریال یا ارز هر شعبه. ابطال و ویرایش مثل معاملات با بازمحاسبه‌ی تاریخچه انجام می‌شود.
+CREATE TABLE dbo.OpeningBalances
+(
+    Id           BIGINT IDENTITY(1,1) NOT NULL,
+    BranchId     INT                  NOT NULL,
+    CurrencyCode NCHAR(3)             NOT NULL,
+    Quantity     DECIMAL(19,4)        NOT NULL,
+    RateIrr      DECIMAL(19,4)        NULL,
+    CostIrr      DECIMAL(19,4)        NOT NULL,
+    OccurredAt   DATETIME2(0)         NOT NULL,
+    Seq          BIGINT               NOT NULL CONSTRAINT DF_OpeningBalances_Seq DEFAULT (NEXT VALUE FOR dbo.LedgerSeq),
+    CreatedBy    INT                  NOT NULL,
+    CreatedAt    DATETIME2(0)         NOT NULL CONSTRAINT DF_OpeningBalances_CreatedAt DEFAULT (SYSDATETIME()),
+    IsVoided     BIT                  NOT NULL CONSTRAINT DF_OpeningBalances_IsVoided DEFAULT (0),
+    VoidedAt     DATETIME2(0)         NULL,
+    VoidedBy     INT                  NULL,
+    VoidReason   NVARCHAR(250)        NULL,
+    ReplacesId   BIGINT               NULL,
+    CONSTRAINT PK_OpeningBalances PRIMARY KEY (Id),
+    CONSTRAINT FK_OpeningBalances_Branches FOREIGN KEY (BranchId) REFERENCES dbo.Branches (Id),
+    CONSTRAINT FK_OpeningBalances_Currencies FOREIGN KEY (CurrencyCode) REFERENCES dbo.Currencies (Code),
+    CONSTRAINT FK_OpeningBalances_CreatedBy FOREIGN KEY (CreatedBy) REFERENCES dbo.Users (Id),
+    CONSTRAINT FK_OpeningBalances_VoidedBy FOREIGN KEY (VoidedBy) REFERENCES dbo.Users (Id),
+    CONSTRAINT FK_OpeningBalances_Replaces FOREIGN KEY (ReplacesId) REFERENCES dbo.OpeningBalances (Id),
+    CONSTRAINT CK_OpeningBalances_Quantity CHECK (Quantity > 0),
+    CONSTRAINT CK_OpeningBalances_Cost CHECK (CostIrr > 0),
+    CONSTRAINT CK_OpeningBalances_Void CHECK (
+        (IsVoided = 0 AND VoidedAt IS NULL AND VoidedBy IS NULL AND VoidReason IS NULL)
+        OR (IsVoided = 1 AND VoidedAt IS NOT NULL AND VoidedBy IS NOT NULL AND VoidReason IS NOT NULL))
+);
+CREATE INDEX IX_OpeningBalances_Branch_OccurredAt ON dbo.OpeningBalances (BranchId, OccurredAt);
+GO
+
 CREATE TABLE dbo.JournalEntries
 (
     Id          BIGINT IDENTITY(1,1) NOT NULL,
@@ -198,12 +241,33 @@ CREATE TABLE dbo.JournalEntries
     SourceId    BIGINT               NULL,
     CreatedBy   INT                  NOT NULL,
     CreatedAt   DATETIME2(0)         NOT NULL CONSTRAINT DF_JournalEntries_CreatedAt DEFAULT (SYSDATETIME()),
+    Seq         BIGINT               NOT NULL CONSTRAINT DF_JournalEntries_Seq DEFAULT (NEXT VALUE FOR dbo.LedgerSeq),
+    -- سندی که باطل شده است (معامله، افتتاحیه یا سند دستی) یا سندی که این سند جایگزین آن است.
+    IsVoided    BIT                  NOT NULL CONSTRAINT DF_JournalEntries_IsVoided DEFAULT (0),
+    ReplacesId  BIGINT               NULL,
     CONSTRAINT PK_JournalEntries PRIMARY KEY (Id),
     CONSTRAINT FK_JournalEntries_Branches FOREIGN KEY (BranchId) REFERENCES dbo.Branches (Id),
     CONSTRAINT FK_JournalEntries_Users FOREIGN KEY (CreatedBy) REFERENCES dbo.Users (Id),
-    CONSTRAINT CK_JournalEntries_Source CHECK (SourceType IN (N'TRADE', N'OPENING', N'VOID'))
+    CONSTRAINT FK_JournalEntries_Replaces FOREIGN KEY (ReplacesId) REFERENCES dbo.JournalEntries (Id),
+    CONSTRAINT CK_JournalEntries_Source CHECK (SourceType IN (N'TRADE', N'OPENING', N'VOID', N'ADJUST', N'MANUAL'))
 );
 CREATE INDEX IX_JournalEntries_Branch_OccurredAt ON dbo.JournalEntries (BranchId, OccurredAt);
+GO
+
+-- سابقه‌ی همه‌ی ثبت‌ها، ابطال‌ها و ویرایش‌ها (چه کسی، چه زمانی، چه تغییری).
+CREATE TABLE dbo.AuditLog
+(
+    Id         BIGINT IDENTITY(1,1) NOT NULL,
+    OccurredAt DATETIME2(0)         NOT NULL,
+    UserId     INT                  NOT NULL,
+    Action     NVARCHAR(50)         NOT NULL,
+    EntityType NVARCHAR(20)         NOT NULL,
+    EntityId   BIGINT               NULL,
+    Details    NVARCHAR(MAX)        NULL,
+    CONSTRAINT PK_AuditLog PRIMARY KEY (Id),
+    CONSTRAINT FK_AuditLog_Users FOREIGN KEY (UserId) REFERENCES dbo.Users (Id)
+);
+CREATE INDEX IX_AuditLog_Entity ON dbo.AuditLog (EntityType, EntityId);
 GO
 
 CREATE TABLE dbo.JournalLines
@@ -245,7 +309,10 @@ INSERT INTO dbo.Accounts (Code, Name, AccountType) VALUES
 (N'3001', N'سرمایه افتتاحیه', N'Equity'),
 (N'4001', N'سود معاملات ارزی', N'Revenue'),
 (N'4101', N'درآمد کارمزد معاملات', N'Revenue'),
-(N'5001', N'زیان معاملات ارزی', N'Expense');
+(N'5001', N'زیان معاملات ارزی', N'Expense'),
+(N'6001', N'هزینه‌های اداری و جاری', N'Expense'),
+(N'6002', N'هزینه‌ی اجاره', N'Expense'),
+(N'6003', N'سایر هزینه‌ها', N'Expense');
 GO
 
 INSERT INTO dbo.CashBoxes (BranchId, CurrencyCode, Name)

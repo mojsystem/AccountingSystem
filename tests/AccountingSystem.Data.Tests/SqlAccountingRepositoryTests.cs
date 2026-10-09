@@ -1,3 +1,4 @@
+using System.Globalization;
 using AccountingSystem.Core.Abstractions;
 using AccountingSystem.Core.Accounting;
 using AccountingSystem.Core.Common;
@@ -194,62 +195,6 @@ public class SqlAccountingRepositoryTests : IClassFixture<SqlServerFixture>
     }
 
     [Fact]
-    public async Task Voiding_only_the_latest_movement_restores_stock_cash_and_cost()
-    {
-        if (!_fixture.IsEnabled)
-        {
-            return;
-        }
-
-        var repo = new SqlAccountingRepository(_fixture.ConnectionString!);
-        var admin = new CurrencyAdminService(repo);
-        var tradeService = new CurrencyTradeService(repo);
-        var reports = new ReportService(repo);
-        var now = DateTime.Now;
-        var user = await EnsureAdminAsync(repo, now);
-        var branchId = await MainBranchIdAsync(repo);
-        var code = await NewCurrencyCodeAsync(repo);
-
-        await admin.AddCurrencyAsync(user, code, "ارز ابطال", 2, now);
-        await admin.OpeningIrrAsync(user, branchId, 100_000_000m, now);
-        await admin.OpeningForeignAsync(user, branchId, code, 50m, 1_000_000m, now);
-        var irrStart = (await repo.GetTradeSnapshotAsync(branchId, code))!.IrrBalance;
-
-        var sellId = await tradeService.SellToCustomerAsync(new TradeInput(branchId, code, 10m, 1_200_000m, null, null, null), user, now);
-        var buyId = await tradeService.BuyFromCustomerAsync(new TradeInput(branchId, code, 5m, 1_000_000m, null, null, null), user, now);
-
-        // معامله‌ی قدیمی‌تر تا وقتی معامله‌ی جدیدتر همین ارز باطل نشده، قابل ابطال نیست.
-        var notLatest = await Assert.ThrowsAsync<BusinessRuleException>(() => tradeService.VoidTradeAsync(user, sellId, "دلیل", now));
-        Assert.Contains("آخرین", notLatest.Message);
-
-        await tradeService.VoidTradeAsync(user, buyId, "خطا در مقدار", now);
-        var afterBuyVoid = await repo.GetTradeSnapshotAsync(branchId, code);
-        Assert.Equal(40m, afterBuyVoid!.ForeignBalance);
-        Assert.Equal(40_000_000m, afterBuyVoid.ForeignCostIrr);
-
-        await tradeService.VoidTradeAsync(user, sellId, "مشتری انصراف داد", now);
-        var afterSellVoid = await repo.GetTradeSnapshotAsync(branchId, code);
-        Assert.Equal(50m, afterSellVoid!.ForeignBalance);
-        Assert.Equal(50_000_000m, afterSellVoid.ForeignCostIrr);
-        Assert.Equal(irrStart, afterSellVoid.IrrBalance);
-
-        await Assert.ThrowsAsync<BusinessRuleException>(() => tradeService.VoidTradeAsync(user, sellId, "دوباره", now));
-
-        var day = now.Date;
-        var trades = await reports.GetTradesAsync(user, branchId, day, day.AddDays(1));
-        var voided = trades.Single(t => t.Id == sellId);
-        Assert.True(voided.IsVoided);
-        Assert.Equal("مشتری انصراف داد", voided.VoidReason);
-        Assert.Equal(user.Username, voided.VoidedBy);
-
-        var journal = await reports.GetJournalAsync(user, branchId, day, day.AddDays(1));
-        Assert.Contains(journal, e => e.SourceType == SourceTypes.Void && e.Description.Contains("مشتری انصراف داد", StringComparison.Ordinal));
-
-        var dashboard = await reports.GetDashboardAsync(user, branchId, now);
-        Assert.Equal(50m, dashboard.Positions.Single(p => p.CurrencyCode == code).Quantity);
-    }
-
-    [Fact]
     public async Task Branches_keep_separate_stock_cash_and_rates()
     {
         if (!_fixture.IsEnabled)
@@ -374,6 +319,274 @@ public class SqlAccountingRepositoryTests : IClassFixture<SqlServerFixture>
         await using var cmd = new SqlCommand("SELECT compatibility_level FROM sys.databases WHERE database_id = DB_ID();", conn);
         var level = Convert.ToInt32(await cmd.ExecuteScalarAsync());
         Assert.Equal(150, level);
+    }
+
+    [Fact]
+    public async Task Voiding_an_older_trade_is_blocked_only_while_a_later_sale_depends_on_it()
+    {
+        if (!_fixture.IsEnabled)
+        {
+            return;
+        }
+
+        var repo = new SqlAccountingRepository(_fixture.ConnectionString!);
+        var admin = new CurrencyAdminService(repo);
+        var tradeService = new CurrencyTradeService(repo);
+        var now = DateTime.Now;
+        var user = await EnsureAdminAsync(repo, now);
+        var branchId = await MainBranchIdAsync(repo);
+        var code = await NewCurrencyCodeAsync(repo);
+
+        await admin.AddCurrencyAsync(user, code, "ارز ابطال میانی", 2, now);
+        await admin.RecordOpeningAsync(user, branchId, CurrencyCodes.Irr, 500_000_000m, null, now, now.Date.AddDays(-5));
+        await admin.RecordOpeningAsync(user, branchId, code, 100m, 1_000_000m, now, now.Date.AddDays(-5));
+        var buyId = await tradeService.RecordTradeAsync(new TradeInput(branchId, code, 50m, 1_000_000m, null, null, null), TradeType.Buy, user, now, now.Date.AddDays(-4));
+        var saleId = await tradeService.RecordTradeAsync(new TradeInput(branchId, code, 120m, 1_200_000m, null, null, null), TradeType.Sell, user, now, now.Date.AddDays(-3));
+
+        // بدون خرید، ۱۰۰ واحد باقی می‌ماند و فروش ۱۲۰ واحدی با موجودی کافی انجام نمی‌شد.
+        var blocked = await Assert.ThrowsAsync<BusinessRuleException>(() => tradeService.VoidTradeAsync(user, buyId, "خطا در مقدار", now));
+        Assert.Contains("کافی نیست", blocked.Message);
+
+        // فروش جدیدتر باطل شود؛ سپس خرید قدیمی‌تر دیگر وابستگی ندارد و قابل ابطال است.
+        await tradeService.VoidTradeAsync(user, saleId, "مشتری انصراف داد", now);
+        await tradeService.VoidTradeAsync(user, buyId, "خطا در مقدار", now);
+
+        var snapshot = await repo.GetTradeSnapshotAsync(branchId, code);
+        Assert.Equal(100m, snapshot!.ForeignBalance);
+        Assert.Equal(100_000_000m, snapshot.ForeignCostIrr);
+        await AssertLedgerConsistentAsync(_fixture.ConnectionString!, branchId, code);
+
+        var voided = await repo.GetTradeAsync(saleId);
+        Assert.True(voided!.IsVoided);
+        Assert.Equal("مشتری انصراف داد", voided.VoidReason);
+        Assert.Equal(user.Username, voided.VoidedBy);
+    }
+
+    [Fact]
+    public async Task Backdated_trade_recalculates_the_later_sale_and_keeps_the_books_balanced()
+    {
+        if (!_fixture.IsEnabled)
+        {
+            return;
+        }
+
+        var repo = new SqlAccountingRepository(_fixture.ConnectionString!);
+        var admin = new CurrencyAdminService(repo);
+        var tradeService = new CurrencyTradeService(repo);
+        var now = DateTime.Now;
+        var user = await EnsureAdminAsync(repo, now);
+        var branchId = await MainBranchIdAsync(repo);
+        var code = await NewCurrencyCodeAsync(repo);
+
+        await admin.AddCurrencyAsync(user, code, "ارز پس‌نگر", 2, now);
+        await admin.RecordOpeningAsync(user, branchId, CurrencyCodes.Irr, 500_000_000m, null, now, now.Date.AddDays(-5));
+        await admin.RecordOpeningAsync(user, branchId, code, 100m, 1_000_000m, now, now.Date.AddDays(-5));
+        var saleId = await tradeService.RecordTradeAsync(new TradeInput(branchId, code, 50m, 1_200_000m, null, null, null), TradeType.Sell, user, now, now.Date.AddDays(-2));
+        var before = await repo.GetTradeAsync(saleId);
+        Assert.Equal(50_000_000m, before!.CostIrr);
+
+        // خرید ۱۰۰ واحدی با تاریخ سه روز قبل: بهای میانگین فروش دو روز قبل باید بازمحاسبه شود.
+        await tradeService.RecordTradeAsync(new TradeInput(branchId, code, 100m, 1_500_000m, null, null, null), TradeType.Buy, user, now, now.Date.AddDays(-3));
+
+        var after = await repo.GetTradeAsync(saleId);
+        Assert.Equal(62_500_000m, after!.CostIrr);
+        Assert.Equal(-2_500_000m, after.ProfitIrr);
+
+        var snapshot = await repo.GetTradeSnapshotAsync(branchId, code);
+        Assert.Equal(150m, snapshot!.ForeignBalance);
+        Assert.Equal(187_500_000m, snapshot.ForeignCostIrr);
+        await AssertLedgerConsistentAsync(_fixture.ConnectionString!, branchId, code);
+    }
+
+    [Fact]
+    public async Task Trade_can_be_edited_and_keeps_the_old_version_voided()
+    {
+        if (!_fixture.IsEnabled)
+        {
+            return;
+        }
+
+        var repo = new SqlAccountingRepository(_fixture.ConnectionString!);
+        var admin = new CurrencyAdminService(repo);
+        var tradeService = new CurrencyTradeService(repo);
+        var now = DateTime.Now;
+        var user = await EnsureAdminAsync(repo, now);
+        var branchId = await MainBranchIdAsync(repo);
+        var code = await NewCurrencyCodeAsync(repo);
+
+        await admin.AddCurrencyAsync(user, code, "ارز ویرایش", 2, now);
+        await admin.OpeningIrrAsync(user, branchId, 100_000_000m, now);
+        await admin.OpeningForeignAsync(user, branchId, code, 50m, 1_000_000m, now);
+        var buyId = await tradeService.BuyFromCustomerAsync(new TradeInput(branchId, code, 10m, 1_000_000m, null, null, null), user, now);
+
+        // تغییر اطلاعات توصیفی: همان سند به‌روز می‌شود و نسخه‌ی جدید ساخته نمی‌شود.
+        var metadataOnly = await tradeService.EditTradeAsync(user, buyId, new TradeInput(branchId, code, 10m, 1_000_000m, "علی رضایی", "0012345678", "یادداشت"),
+            TradeType.Buy, null, now);
+        Assert.Null(metadataOnly);
+        var same = await repo.GetTradeAsync(buyId);
+        Assert.Equal("علی رضایی", same!.CustomerName);
+        Assert.False(same.IsVoided);
+
+        // تغییر مبلغ: نسخه‌ی قبلی باطل می‌شود و نسخه‌ی اصلاحی جای آن را می‌گیرد.
+        var newId = await tradeService.EditTradeAsync(user, buyId, new TradeInput(branchId, code, 12m, 1_000_000m, "علی رضایی", null, null),
+            TradeType.Buy, null, now);
+        Assert.NotNull(newId);
+        var old = await repo.GetTradeAsync(buyId);
+        Assert.True(old!.IsVoided);
+        Assert.Equal(CurrencyTradeService.ReplacementReason, old.VoidReason);
+
+        var snapshot = await repo.GetTradeSnapshotAsync(branchId, code);
+        Assert.Equal(62m, snapshot!.ForeignBalance);
+        Assert.Equal(62_000_000m, snapshot.ForeignCostIrr);
+        await AssertLedgerConsistentAsync(_fixture.ConnectionString!, branchId, code);
+
+        await using var conn = new SqlConnection(_fixture.ConnectionString!);
+        await conn.OpenAsync();
+        var audits = Convert.ToInt32(await ScalarAsync(conn, "SELECT COUNT(*) FROM dbo.AuditLog WHERE EntityType = N'TRADE' AND Action = N'TRADE_REPLACE';"), CultureInfo.InvariantCulture);
+        Assert.True(audits >= 1);
+    }
+
+    [Fact]
+    public async Task Opening_balance_can_be_edited_and_voided_when_no_trade_depends_on_it()
+    {
+        if (!_fixture.IsEnabled)
+        {
+            return;
+        }
+
+        var repo = new SqlAccountingRepository(_fixture.ConnectionString!);
+        var admin = new CurrencyAdminService(repo);
+        var now = DateTime.Now;
+        var user = await EnsureAdminAsync(repo, now);
+        var branchId = await MainBranchIdAsync(repo);
+        var code = await NewCurrencyCodeAsync(repo);
+
+        await admin.AddCurrencyAsync(user, code, "ارز افتتاحیه", 2, now);
+        await admin.OpeningIrrAsync(user, branchId, 100_000_000m, now);
+        var openingId = await admin.RecordOpeningAsync(user, branchId, code, 10m, 1_000_000m, now);
+        Assert.NotNull(openingId);
+
+        var replacedId = await admin.EditOpeningAsync(user, openingId!.Value, 20m, 1_000_000m, null, now);
+        Assert.NotNull(replacedId);
+        Assert.True((await repo.GetOpeningAsync(openingId.Value))!.IsVoided);
+        Assert.Equal(20m, (await repo.GetTradeSnapshotAsync(branchId, code))!.ForeignBalance);
+
+        await admin.VoidOpeningAsync(user, replacedId!.Value, "ورود اشتباه", now);
+        var snapshot = await repo.GetTradeSnapshotAsync(branchId, code);
+        Assert.Equal(0m, snapshot!.ForeignBalance);
+        Assert.Equal(0m, snapshot.ForeignCostIrr);
+        await AssertLedgerConsistentAsync(_fixture.ConnectionString!, branchId, code);
+    }
+
+    [Fact]
+    public async Task Manual_expense_moves_cash_and_can_be_edited_and_voided()
+    {
+        if (!_fixture.IsEnabled)
+        {
+            return;
+        }
+
+        var repo = new SqlAccountingRepository(_fixture.ConnectionString!);
+        var admin = new CurrencyAdminService(repo);
+        var manual = new ManualJournalService(repo);
+        var now = DateTime.Now;
+        var user = await EnsureAdminAsync(repo, now);
+        var branchId = await MainBranchIdAsync(repo);
+
+        await admin.OpeningIrrAsync(user, branchId, 100_000_000m, now);
+        var irrBefore = await IrrBalanceAsync(repo, branchId);
+
+        var lines = new[] { new JournalLineDraft("6001", 10_000_000m, 0m), new JournalLineDraft(AccountCodes.IrrCash, 0m, 10_000_000m) };
+        var entryId = await manual.CreateAsync(user, branchId, "هزینه‌ی برق", null, lines, now);
+        Assert.NotNull(entryId);
+        Assert.Equal(irrBefore - 10_000_000m, await IrrBalanceAsync(repo, branchId));
+
+        var edited = new[] { new JournalLineDraft("6001", 15_000_000m, 0m), new JournalLineDraft(AccountCodes.IrrCash, 0m, 15_000_000m) };
+        var replacedId = await manual.EditAsync(user, entryId!.Value, "هزینه‌ی برق و آب", null, edited, now);
+        Assert.NotNull(replacedId);
+        Assert.Equal(irrBefore - 15_000_000m, await IrrBalanceAsync(repo, branchId));
+
+        await manual.VoidAsync(user, replacedId!.Value, "ثبت اشتباه", now);
+        Assert.Equal(irrBefore, await IrrBalanceAsync(repo, branchId));
+        Assert.True((await repo.GetJournalEntryAsync(entryId.Value))!.IsVoided);
+        await AssertLedgerConsistentAsync(_fixture.ConnectionString!, branchId, CurrencyCodes.Irr);
+    }
+
+    [Fact]
+    public async Task Backdating_beyond_thirty_days_is_rejected()
+    {
+        if (!_fixture.IsEnabled)
+        {
+            return;
+        }
+
+        var repo = new SqlAccountingRepository(_fixture.ConnectionString!);
+        var tradeService = new CurrencyTradeService(repo);
+        var now = DateTime.Now;
+        var user = await EnsureAdminAsync(repo, now);
+        var branchId = await MainBranchIdAsync(repo);
+
+        await Assert.ThrowsAsync<BusinessRuleException>(() => tradeService.RecordTradeAsync(
+            new TradeInput(branchId, "USD", 1m, 1_000_000m, null, null, null), TradeType.Buy, user, now, now.Date.AddDays(-31)));
+    }
+
+    /// <summary>
+    /// کنترل سازگاری دفتر یک شعبه و ارز: هر سند متوازن است، مانده‌ی هر صندوق با حرکت‌هایش برابر است،
+    /// آخرین موجودی تراکمی با مانده برابر است و بهای موجودی در دفتر کل با جدول موجودی برابر است.
+    /// </summary>
+    private static async Task AssertLedgerConsistentAsync(string connectionString, int branchId, string currencyCode)
+    {
+        await using var conn = new SqlConnection(connectionString);
+        await conn.OpenAsync();
+
+        var unbalanced = Convert.ToInt32(await ScalarAsync(conn, @"
+SELECT COUNT(*) FROM (SELECT JournalEntryId FROM dbo.JournalLines GROUP BY JournalEntryId HAVING SUM(Debit) <> SUM(Credit)) x;"), CultureInfo.InvariantCulture);
+        Assert.Equal(0, unbalanced);
+
+        var boxMismatch = Convert.ToInt32(await ScalarAsync(conn, @"
+SELECT COUNT(*) FROM dbo.CashBoxes b
+WHERE b.BranchId = @branchId AND b.Balance <> (SELECT COALESCE(SUM(m.Amount), 0) FROM dbo.CashMovements m WHERE m.CashBoxId = b.Id);",
+            new SqlParameter("@branchId", branchId)), CultureInfo.InvariantCulture);
+        Assert.Equal(0, boxMismatch);
+
+        var runningMismatch = Convert.ToInt32(await ScalarAsync(conn, @"
+SELECT COUNT(*) FROM dbo.CashBoxes b
+CROSS APPLY (SELECT TOP (1) m.BalanceAfter FROM dbo.CashMovements m WHERE m.CashBoxId = b.Id ORDER BY m.OccurredAt DESC, m.Id DESC) last
+WHERE b.BranchId = @branchId AND last.BalanceAfter <> b.Balance;",
+            new SqlParameter("@branchId", branchId)), CultureInfo.InvariantCulture);
+        Assert.Equal(0, runningMismatch);
+
+        var irrInJournal = Convert.ToDecimal(await ScalarAsync(conn, @"
+SELECT COALESCE(SUM(l.Debit - l.Credit), 0) FROM dbo.JournalLines l
+INNER JOIN dbo.JournalEntries e ON e.Id = l.JournalEntryId
+WHERE e.BranchId = @branchId AND l.AccountCode = N'1001';",
+            new SqlParameter("@branchId", branchId)), CultureInfo.InvariantCulture);
+        var irrInBox = Convert.ToDecimal(await ScalarAsync(conn,
+            "SELECT Balance FROM dbo.CashBoxes WHERE BranchId = @branchId AND CurrencyCode = N'IRR';",
+            new SqlParameter("@branchId", branchId)), CultureInfo.InvariantCulture);
+        Assert.Equal(irrInBox, irrInJournal);
+
+        if (currencyCode != CurrencyCodes.Irr)
+        {
+            var costInJournal = Convert.ToDecimal(await ScalarAsync(conn, @"
+SELECT COALESCE(SUM(l.Debit - l.Credit), 0) FROM dbo.JournalLines l
+INNER JOIN dbo.JournalEntries e ON e.Id = l.JournalEntryId
+WHERE e.BranchId = @branchId AND l.AccountCode = @account;",
+                new SqlParameter("@branchId", branchId),
+                new SqlParameter("@account", AccountCodes.ForeignCash(currencyCode))), CultureInfo.InvariantCulture);
+            var costInInventory = Convert.ToDecimal(await ScalarAsync(conn,
+                "SELECT TotalCostIrr FROM dbo.CurrencyInventory WHERE BranchId = @branchId AND CurrencyCode = @code;",
+                new SqlParameter("@branchId", branchId),
+                new SqlParameter("@code", currencyCode)), CultureInfo.InvariantCulture);
+            Assert.Equal(costInInventory, costInJournal);
+        }
+    }
+
+    private static async Task<object?> ScalarAsync(SqlConnection conn, string sql, params SqlParameter[] parameters)
+    {
+        await using var cmd = new SqlCommand(sql, conn);
+        cmd.Parameters.AddRange(parameters);
+        return await cmd.ExecuteScalarAsync();
     }
 
     private static async Task<CurrentUser> EnsureAdminAsync(IAccountingRepository repo, DateTime now)

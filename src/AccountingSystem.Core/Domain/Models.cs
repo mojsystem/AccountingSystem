@@ -35,6 +35,10 @@ public static class SourceTypes
     public const string Trade = "TRADE";
     public const string Opening = "OPENING";
     public const string Void = "VOID";
+    /// <summary>تعدیل بهای تمام‌شده‌ی معامله‌ی فروش که در اثر تغییر تاریخچه‌ی موجودی لازم شده است.</summary>
+    public const string Adjust = "ADJUST";
+    /// <summary>سند حسابداری دستی (مثلاً هزینه یا تعدیل توسط مدیر).</summary>
+    public const string Manual = "MANUAL";
 }
 
 /// <summary>کاربر جاری. BranchId برای کاربر صندوق الزامی است؛ مدیر BranchId ندارد و به همه‌ی شعبه‌ها دسترسی دارد.</summary>
@@ -90,6 +94,10 @@ public sealed record TradeInfo(
 
 public sealed record JournalLineInfo(int LineNo, string AccountCode, string AccountName, decimal Debit, decimal Credit);
 
+/// <summary>
+/// سند حسابداری. SourceId شناسه‌ی سندی است که این سطرها از آن ساخته شده‌اند (معامله، افتتاحیه یا خود سند دستی).
+/// IsVoided یعنی سند (یا سطرهای آن) با سند معکوس باطل شده است.
+/// </summary>
 public sealed record JournalEntryInfo(
     long Id,
     DateTime OccurredAt,
@@ -97,7 +105,28 @@ public sealed record JournalEntryInfo(
     string SourceType,
     int BranchId,
     string BranchName,
-    IReadOnlyList<JournalLineInfo> Lines);
+    IReadOnlyList<JournalLineInfo> Lines,
+    long? SourceId = null,
+    bool IsVoided = false);
+
+/// <summary>حساب دفتر کل. فقط حساب‌های فعال در سندهای دستی پذیرفته می‌شوند.</summary>
+public sealed record AccountInfo(string Code, string Name, string AccountType, bool IsActive);
+
+/// <summary>
+/// موجودی افتتاحیه‌ی یک شعبه. برای ریال، Quantity همان مبلغ ریال و RateIrr خالی است.
+/// </summary>
+public sealed record OpeningInfo(
+    long Id,
+    int BranchId,
+    string BranchName,
+    string CurrencyCode,
+    decimal Quantity,
+    decimal? RateIrr,
+    decimal CostIrr,
+    DateTime OccurredAt,
+    string CreatedBy,
+    bool IsVoided,
+    string? VoidReason);
 
 public sealed record UserInfo(
     int Id,

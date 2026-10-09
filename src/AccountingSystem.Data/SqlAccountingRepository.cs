@@ -10,15 +10,27 @@ namespace AccountingSystem.Data;
 
 /// <summary>
 /// پیاده‌سازی IAccountingRepository با ADO.NET و SQL Server (هدف: SQL Server 2019).
-/// همه‌ی ثبت‌ها داخل یک تراکنش انجام می‌شوند. به‌روزرسانی موجودی‌ها با «مقایسه‌ی مقدار قبلی»
-/// انجام می‌شود تا تغییر همزمان داده باعث موجودی منفی یا ثبت نادرست نشود.
-/// ترتیب قفل: ابتدا صندوق ریال شعبه، سپس صندوق ارز و در آخر بهای تمام‌شده (در همه‌ی ثبت‌ها یکسان است).
+/// هر ثبت داخل یک تراکنش انجام می‌شود. ابتدا نسخه‌ی دفتر شعبه یک واحد بالا می‌رود؛ این کار شعبه را قفل می‌کند
+/// و ثبت همزمان دیگر را با ConcurrencyConflictException رد می‌کند. سپس سندها، صندوق‌ها و موجودی‌ها
+/// با «مقایسه‌ی مقدار قبلی» به‌روز می‌شوند. در پایان، موجودی تراکمی هر حرکت صندوق (BalanceAfter) از نو محاسبه می‌شود.
 /// </summary>
 public sealed class SqlAccountingRepository : IAccountingRepository
 {
     private const int DuplicateKeyError = 2627;
     private const int UniqueIndexError = 2601;
-    private const string LatestMovementDescription = "فقط آخرین معامله‌ی همین ارز در این شعبه را می‌توان باطل کرد. ابتدا معاملات جدیدتر همین ارز را باطل کنید.";
+
+    private const string OpeningSelect = @"
+SELECT o.Id, o.BranchId, br.Name, o.CurrencyCode, o.Quantity, o.RateIrr, o.CostIrr, o.OccurredAt, u.Username, o.IsVoided, o.VoidReason
+FROM dbo.OpeningBalances o
+INNER JOIN dbo.Branches br ON br.Id = o.BranchId
+INNER JOIN dbo.Users u ON u.Id = o.CreatedBy";
+
+    private const string JournalSelect = @"
+SELECT e.Id, e.OccurredAt, e.Description, e.SourceType, e.SourceId, e.IsVoided, e.BranchId, br.Name, l.LineNumber, l.AccountCode, a.Name, l.Debit, l.Credit
+FROM dbo.JournalEntries e
+INNER JOIN dbo.Branches br ON br.Id = e.BranchId
+INNER JOIN dbo.JournalLines l ON l.JournalEntryId = e.Id
+INNER JOIN dbo.Accounts a ON a.Code = l.AccountCode";
 
     private const string TradeSelect = @"
 SELECT t.Id, t.BranchId, br.Code, br.Name, t.TradeType, t.CurrencyCode, t.Amount, t.Rate, t.IrrAmount, t.CostIrr, t.ProfitIrr, t.FeeIrr,
@@ -230,36 +242,643 @@ ORDER BY br.Id, CASE WHEN b.CurrencyCode = N'IRR' THEN 0 ELSE 1 END, b.CurrencyC
         return result;
     }
 
+    public async Task<IReadOnlyList<AccountInfo>> GetAccountsAsync(CancellationToken ct = default)
+    {
+        const string sql = "SELECT Code, Name, AccountType, IsActive FROM dbo.Accounts ORDER BY Code;";
+        var result = new List<AccountInfo>();
+        await using var conn = await OpenAsync(ct);
+        await using var cmd = new SqlCommand(sql, conn);
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+        {
+            result.Add(new AccountInfo(reader.GetString(0).Trim(), reader.GetString(1), reader.GetString(2), reader.GetBoolean(3)));
+        }
+        return result;
+    }
+
+    public async Task<BranchLedger> GetBranchLedgerAsync(int branchId, CancellationToken ct = default)
+    {
+        await using var conn = await OpenAsync(ct);
+
+        // نسخه‌ی دفتر اول خوانده می‌شود. اگر ثبتی بین خواندن‌ها انجام شود، ثبت بعدی با نسخه‌ی قدیمی رد می‌شود.
+        var versionValue = await ScalarAsync(conn, null, ct,
+            "SELECT LedgerVersion FROM dbo.Branches WHERE Id = @branchId;",
+            new SqlParameter("@branchId", branchId));
+        if (versionValue is null or DBNull)
+        {
+            throw new BusinessRuleException("شعبه‌ی انتخابی یافت نشد.");
+        }
+        var version = Convert.ToInt64(versionValue, CultureInfo.InvariantCulture);
+
+        var events = new List<LedgerEvent>();
+        var active = new HashSet<DocRef>();
+        await ReadTradeEventsAsync(conn, branchId, events, active, ct);
+        await ReadOpeningEventsAsync(conn, branchId, events, active, ct);
+        await ReadManualEventsAsync(conn, branchId, events, active, ct);
+
+        var irrBalance = 0m;
+        var pools = new Dictionary<string, PoolBalance>(StringComparer.Ordinal);
+        const string balanceSql = @"
+SELECT b.CurrencyCode, b.Balance, i.TotalCostIrr
+FROM dbo.CashBoxes b
+LEFT JOIN dbo.CurrencyInventory i ON i.BranchId = b.BranchId AND i.CurrencyCode = b.CurrencyCode
+WHERE b.BranchId = @branchId;";
+        await using (var cmd = new SqlCommand(balanceSql, conn))
+        {
+            cmd.Parameters.Add(new SqlParameter("@branchId", branchId));
+            await using var reader = await cmd.ExecuteReaderAsync(ct);
+            while (await reader.ReadAsync(ct))
+            {
+                var code = reader.GetString(0).Trim();
+                var balance = reader.GetDecimal(1);
+                var cost = reader.IsDBNull(2) ? 0m : reader.GetDecimal(2);
+                if (code == CurrencyCodes.Irr)
+                {
+                    irrBalance = balance;
+                }
+                else
+                {
+                    pools[code] = new PoolBalance(balance, cost);
+                }
+            }
+        }
+
+        return new BranchLedger(branchId, version, events, active, irrBalance, pools);
+    }
+
+    private static async Task ReadTradeEventsAsync(SqlConnection conn, int branchId, List<LedgerEvent> events, HashSet<DocRef> active, CancellationToken ct)
+    {
+        const string sql = @"
+SELECT t.Id, t.TradeType, t.CurrencyCode, t.Amount, t.IrrAmount, t.FeeIrr, t.CostIrr, t.ProfitIrr, t.OccurredAt, t.Seq
+FROM dbo.CurrencyTransactions t
+WHERE t.BranchId = @branchId AND t.IsVoided = 0;";
+        await using var cmd = new SqlCommand(sql, conn);
+        cmd.Parameters.Add(new SqlParameter("@branchId", branchId));
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+        {
+            var id = reader.GetInt64(0);
+            var isBuy = reader.GetString(1) == "BUY";
+            var code = reader.GetString(2).Trim();
+            var amount = reader.GetDecimal(3);
+            var irr = reader.GetDecimal(4);
+            var fee = reader.GetDecimal(5);
+            var cost = reader.GetDecimal(6);
+            var profit = reader.GetDecimal(7);
+            var occurredAt = reader.GetDateTime(8);
+            var seq = reader.GetInt64(9);
+            active.Add(new DocRef(LedgerDocKind.Trade, id));
+            events.Add(isBuy
+                ? new LedgerEvent(LedgerDocKind.Trade, id, LedgerEventKind.Acquire, code, occurredAt, seq,
+                    amount, irr, fee, -(irr - fee), cost, profit)
+                : new LedgerEvent(LedgerDocKind.Trade, id, LedgerEventKind.Dispose, code, occurredAt, seq,
+                    amount, irr, fee, irr + fee, cost, profit));
+        }
+    }
+
+    private static async Task ReadOpeningEventsAsync(SqlConnection conn, int branchId, List<LedgerEvent> events, HashSet<DocRef> active, CancellationToken ct)
+    {
+        const string sql = @"
+SELECT o.Id, o.CurrencyCode, o.Quantity, o.CostIrr, o.OccurredAt, o.Seq
+FROM dbo.OpeningBalances o
+WHERE o.BranchId = @branchId AND o.IsVoided = 0;";
+        await using var cmd = new SqlCommand(sql, conn);
+        cmd.Parameters.Add(new SqlParameter("@branchId", branchId));
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+        {
+            var id = reader.GetInt64(0);
+            var code = reader.GetString(1).Trim();
+            var quantity = reader.GetDecimal(2);
+            var cost = reader.GetDecimal(3);
+            var occurredAt = reader.GetDateTime(4);
+            var seq = reader.GetInt64(5);
+            active.Add(new DocRef(LedgerDocKind.Opening, id));
+            events.Add(code == CurrencyCodes.Irr
+                ? new LedgerEvent(LedgerDocKind.Opening, id, LedgerEventKind.CashOnly, code, occurredAt, seq,
+                    0m, 0m, 0m, quantity, 0m, 0m)
+                : new LedgerEvent(LedgerDocKind.Opening, id, LedgerEventKind.Acquire, code, occurredAt, seq,
+                    quantity, cost, 0m, 0m, 0m, 0m));
+        }
+    }
+
+    /// <summary>
+    /// سندهای دستی فعال. اثر آن روی صندوق ریال، مجموع بدهکار منهای بستانکار سطرهای حساب 1001 است.
+    /// </summary>
+    private static async Task ReadManualEventsAsync(SqlConnection conn, int branchId, List<LedgerEvent> events, HashSet<DocRef> active, CancellationToken ct)
+    {
+        const string sql = @"
+SELECT e.Id, e.OccurredAt, e.Seq, COALESCE(SUM(CASE WHEN l.AccountCode = N'1001' THEN l.Debit - l.Credit END), 0)
+FROM dbo.JournalEntries e
+LEFT JOIN dbo.JournalLines l ON l.JournalEntryId = e.Id
+WHERE e.BranchId = @branchId AND e.SourceType = N'MANUAL' AND e.IsVoided = 0
+GROUP BY e.Id, e.OccurredAt, e.Seq;";
+        await using var cmd = new SqlCommand(sql, conn);
+        cmd.Parameters.Add(new SqlParameter("@branchId", branchId));
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+        {
+            var id = reader.GetInt64(0);
+            var occurredAt = reader.GetDateTime(1);
+            var seq = reader.GetInt64(2);
+            var irrDelta = reader.GetDecimal(3);
+            active.Add(new DocRef(LedgerDocKind.Manual, id));
+            if (irrDelta != 0m)
+            {
+                events.Add(new LedgerEvent(LedgerDocKind.Manual, id, LedgerEventKind.CashOnly, CurrencyCodes.Irr,
+                    occurredAt, seq, 0m, 0m, 0m, irrDelta, 0m, 0m));
+            }
+        }
+    }
+
+    public async Task UpdateTradeDetailsAsync(long tradeId, int branchId, string? customerName, string? nationalCode, string? note, int userId, DateTime now, CancellationToken ct = default)
+    {
+        await WithTransactionAsync<bool>(async (conn, tx) =>
+        {
+            var affected = await ExecuteAsync(conn, tx, ct, @"
+UPDATE dbo.CurrencyTransactions
+SET CustomerName = @customer, NationalCode = @nationalCode, Note = @note
+WHERE Id = @id AND BranchId = @branchId AND IsVoided = 0;",
+                new SqlParameter("@customer", (object?)customerName ?? DBNull.Value),
+                new SqlParameter("@nationalCode", (object?)nationalCode ?? DBNull.Value),
+                new SqlParameter("@note", (object?)note ?? DBNull.Value),
+                new SqlParameter("@id", tradeId),
+                new SqlParameter("@branchId", branchId));
+            if (affected != 1)
+            {
+                throw new BusinessRuleException("معامله‌ی انتخابی یافت نشد یا باطل شده است.");
+            }
+
+            await InsertAuditAsync(conn, tx, userId, now, "TRADE_EDIT_DETAILS", SourceTypes.Trade, tradeId,
+                "اطلاعات توصیفی معامله به‌روز شد (بدون اثر مالی)", ct);
+            return true;
+        }, ct);
+    }
+
+    public async Task<IReadOnlyList<OpeningInfo>> GetOpeningsAsync(int? branchId, DateTime fromInclusive, DateTime toExclusive, CancellationToken ct = default)
+    {
+        var sql = OpeningSelect + @"
+WHERE o.OccurredAt >= @from AND o.OccurredAt < @to AND (@branchId IS NULL OR o.BranchId = @branchId)
+ORDER BY o.OccurredAt DESC, o.Id DESC;";
+        var result = new List<OpeningInfo>();
+        await using var conn = await OpenAsync(ct);
+        await using var cmd = new SqlCommand(sql, conn);
+        cmd.Parameters.Add(new SqlParameter("@from", fromInclusive));
+        cmd.Parameters.Add(new SqlParameter("@to", toExclusive));
+        cmd.Parameters.Add(NullableInt("@branchId", branchId));
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+        {
+            result.Add(ReadOpening(reader));
+        }
+        return result;
+    }
+
+    public async Task<OpeningInfo?> GetOpeningAsync(long openingId, CancellationToken ct = default)
+    {
+        var sql = OpeningSelect + " WHERE o.Id = @id;";
+        await using var conn = await OpenAsync(ct);
+        await using var cmd = new SqlCommand(sql, conn);
+        cmd.Parameters.Add(new SqlParameter("@id", openingId));
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        return await reader.ReadAsync(ct) ? ReadOpening(reader) : null;
+    }
+
+    private static OpeningInfo ReadOpening(SqlDataReader reader) => new(
+        reader.GetInt64(0),
+        reader.GetInt32(1),
+        reader.GetString(2),
+        reader.GetString(3).Trim(),
+        reader.GetDecimal(4),
+        reader.IsDBNull(5) ? (decimal?)null : reader.GetDecimal(5),
+        reader.GetDecimal(6),
+        reader.GetDateTime(7),
+        reader.GetString(8),
+        reader.GetBoolean(9),
+        ReadNullableString(reader, 10));
+
+    public async Task<IReadOnlyList<JournalEntryInfo>> GetJournalAsync(int? branchId, DateTime fromInclusive, DateTime toExclusive, CancellationToken ct = default)
+    {
+        var sql = JournalSelect + @"
+WHERE e.OccurredAt >= @from AND e.OccurredAt < @to AND (@branchId IS NULL OR e.BranchId = @branchId)
+ORDER BY e.OccurredAt DESC, e.Id DESC, l.LineNumber;";
+        await using var conn = await OpenAsync(ct);
+        return await ReadJournalAsync(conn, sql, ct,
+            new SqlParameter("@from", fromInclusive),
+            new SqlParameter("@to", toExclusive),
+            NullableInt("@branchId", branchId));
+    }
+
+    public async Task<JournalEntryInfo?> GetJournalEntryAsync(long entryId, CancellationToken ct = default)
+    {
+        await using var conn = await OpenAsync(ct);
+        var entries = await ReadJournalAsync(conn, JournalSelect + " WHERE e.Id = @id ORDER BY l.LineNumber;", ct,
+            new SqlParameter("@id", entryId));
+        return entries.Count == 0 ? null : entries[0];
+    }
+
+    private static async Task<IReadOnlyList<JournalEntryInfo>> ReadJournalAsync(SqlConnection conn, string sql, CancellationToken ct, params SqlParameter[] parameters)
+    {
+        var order = new List<long>();
+        var entries = new Dictionary<long, JournalEntryBuilder>();
+        await using var cmd = new SqlCommand(sql, conn);
+        cmd.Parameters.AddRange(parameters);
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+        {
+            var id = reader.GetInt64(0);
+            if (!entries.TryGetValue(id, out var builder))
+            {
+                builder = new JournalEntryBuilder(
+                    id,
+                    reader.GetDateTime(1),
+                    reader.GetString(2),
+                    reader.GetString(3),
+                    reader.IsDBNull(4) ? (long?)null : reader.GetInt64(4),
+                    reader.GetBoolean(5),
+                    reader.GetInt32(6),
+                    reader.GetString(7));
+                entries.Add(id, builder);
+                order.Add(id);
+            }
+            builder.Lines.Add(new JournalLineInfo(
+                reader.GetInt32(8),
+                reader.GetString(9).Trim(),
+                reader.GetString(10),
+                reader.GetDecimal(11),
+                reader.GetDecimal(12)));
+        }
+        return order.Select(id => entries[id].Build()).ToList();
+    }
+
     public Task<long?> PostAsync(PostingDraft posting, CancellationToken ct = default)
     {
         return WithTransactionAsync<long?>(async (conn, tx) =>
         {
-            long? tradeId = null;
+            await BumpLedgerVersionAsync(conn, tx, posting.BranchId, posting.ExpectedVersion, ct);
+
             if (posting.Void is { } voidDraft)
             {
-                await EnsureLatestActivePoolTradeAsync(conn, tx, posting.BranchId, voidDraft.CurrencyCode, voidDraft.TradeId, ct);
-                await MarkTradeVoidedAsync(conn, tx, posting, voidDraft, ct);
-                tradeId = voidDraft.TradeId;
-            }
-            else if (posting.Trade is { } trade)
-            {
-                tradeId = await InsertTradeAsync(conn, tx, posting.BranchId, trade, ct);
+                await MarkVoidedAsync(conn, tx, posting.BranchId, voidDraft, posting.Now, posting.UserId, ct);
+                await InsertVoidJournalAsync(conn, tx, posting.BranchId, voidDraft, posting.Now, posting.UserId, ct);
             }
 
-            foreach (var movement in posting.CashMovements)
+            long? newId = null;
+            if (posting.Trade is { } trade)
             {
-                await ApplyCashMovementAsync(conn, tx, posting, movement, tradeId, ct);
+                newId = await InsertTradeAsync(conn, tx, posting.BranchId, trade, ct);
             }
+            else if (posting.Opening is { } opening)
+            {
+                newId = await InsertOpeningAsync(conn, tx, posting.BranchId, opening, posting.Now, ct);
+            }
+
+            foreach (var journal in posting.Journals)
+            {
+                // سند دستی شناسه‌ی خودش را دارد (شناسه‌ی سطر سند)؛ بقیه به سند معامله یا افتتاحیه وصل می‌شوند.
+                var isManual = journal.SourceType == SourceTypes.Manual;
+                var sourceId = isManual ? (long?)null : ResolveId(journal.Source.Id, newId);
+                var entryId = await InsertJournalAsync(conn, tx, posting.BranchId, journal, sourceId, posting.UserId, posting.Now, ct);
+                if (isManual && journal.Source.Id == 0)
+                {
+                    newId = entryId;
+                }
+            }
+
+            foreach (var update in posting.CostUpdates)
+            {
+                var affected = await ExecuteAsync(conn, tx, ct,
+                    "UPDATE dbo.CurrencyTransactions SET CostIrr = @cost, ProfitIrr = @profit WHERE Id = @id AND BranchId = @branchId AND IsVoided = 0;",
+                    Money("@cost", update.CostIrr),
+                    Money("@profit", update.ProfitIrr),
+                    new SqlParameter("@id", update.TradeId),
+                    new SqlParameter("@branchId", posting.BranchId));
+                if (affected != 1)
+                {
+                    throw new ConcurrencyConflictException();
+                }
+            }
+
+            await ApplyCashMovementsAsync(conn, tx, posting, newId, ct);
 
             foreach (var inventory in posting.Inventory)
             {
-                await ApplyInventoryAsync(conn, tx, posting.BranchId, inventory, posting.OccurredAt, ct);
+                await ApplyInventoryAsync(conn, tx, posting.BranchId, inventory, posting.Now, ct);
             }
 
-            await InsertJournalAsync(conn, tx, posting, tradeId, ct);
-            return tradeId;
+            await RecalculateBalancesAfterAsync(conn, tx, posting.BranchId, ct);
+            await InsertAuditAsync(conn, tx, posting.UserId, posting.Now, posting.Action, EntityTypeOf(posting.Entity.Kind),
+                ResolveId(posting.Entity.Id, newId), posting.AuditDetails, ct);
+            return newId;
         }, ct);
     }
+
+    /// <summary>
+    /// نسخه‌ی دفتر شعبه را یک واحد بالا می‌برد. UPDATE همزمان ردیف شعبه را قفل می‌کند و نسخه‌ی قدیمی را رد می‌کند.
+    /// </summary>
+    private static async Task BumpLedgerVersionAsync(SqlConnection conn, SqlTransaction tx, int branchId, long expectedVersion, CancellationToken ct)
+    {
+        var affected = await ExecuteAsync(conn, tx, ct,
+            "UPDATE dbo.Branches SET LedgerVersion = LedgerVersion + 1 WHERE Id = @branchId AND LedgerVersion = @expected;",
+            new SqlParameter("@branchId", branchId),
+            new SqlParameter("@expected", expectedVersion));
+        if (affected != 1)
+        {
+            throw new ConcurrencyConflictException();
+        }
+    }
+
+    /// <summary>
+    /// سند اصلی را باطل علامت می‌زند. سطرهای سند اصلی حذف نمی‌شوند؛ برای معامله و افتتاحیه سطرهای سند هم علامت می‌خورند.
+    /// </summary>
+    private static async Task MarkVoidedAsync(SqlConnection conn, SqlTransaction tx, int branchId, VoidDraft voidDraft, DateTime now, int userId, CancellationToken ct)
+    {
+        var id = voidDraft.Doc.Id;
+        var parameters = new[]
+        {
+            new SqlParameter("@now", now),
+            new SqlParameter("@userId", userId),
+            new SqlParameter("@reason", voidDraft.Reason),
+            new SqlParameter("@id", id),
+            new SqlParameter("@branchId", branchId),
+        };
+
+        int affected;
+        switch (voidDraft.Doc.Kind)
+        {
+            case LedgerDocKind.Trade:
+                affected = await ExecuteAsync(conn, tx, ct, @"
+UPDATE dbo.CurrencyTransactions
+SET IsVoided = 1, VoidedAt = @now, VoidedBy = @userId, VoidReason = @reason
+WHERE Id = @id AND BranchId = @branchId AND IsVoided = 0;", CloneParameters(parameters));
+                await ExecuteAsync(conn, tx, ct, @"
+UPDATE dbo.JournalEntries SET IsVoided = 1
+WHERE BranchId = @branchId AND SourceType IN (N'TRADE', N'ADJUST') AND SourceId = @id;", CloneParameters(parameters));
+                break;
+
+            case LedgerDocKind.Opening:
+                affected = await ExecuteAsync(conn, tx, ct, @"
+UPDATE dbo.OpeningBalances
+SET IsVoided = 1, VoidedAt = @now, VoidedBy = @userId, VoidReason = @reason
+WHERE Id = @id AND BranchId = @branchId AND IsVoided = 0;", CloneParameters(parameters));
+                await ExecuteAsync(conn, tx, ct, @"
+UPDATE dbo.JournalEntries SET IsVoided = 1
+WHERE BranchId = @branchId AND SourceType = N'OPENING' AND SourceId = @id;", CloneParameters(parameters));
+                break;
+
+            default:
+                affected = await ExecuteAsync(conn, tx, ct, @"
+UPDATE dbo.JournalEntries SET IsVoided = 1
+WHERE Id = @id AND BranchId = @branchId AND SourceType = N'MANUAL' AND IsVoided = 0;", CloneParameters(parameters));
+                break;
+        }
+
+        if (affected != 1)
+        {
+            throw new BusinessRuleException("این سند قبلاً باطل شده است.");
+        }
+    }
+
+    /// <summary>
+    /// سند معکوس سند باطل‌شده. سطرها از جمع خالص حساب‌های سند اصلی ساخته می‌شوند (شامل تعدیل‌های بعدی آن)،
+    /// پس بعد از ابطال، مانده‌ی هر حساب برای این سند دقیقاً صفر می‌شود.
+    /// </summary>
+    private static async Task InsertVoidJournalAsync(SqlConnection conn, SqlTransaction tx, int branchId, VoidDraft voidDraft, DateTime now, int userId, CancellationToken ct)
+    {
+        var entryId = await InsertJournalHeaderAsync(conn, tx, branchId, voidDraft.Description, voidDraft.OccurredAt,
+            SourceTypes.Void, voidDraft.Doc.Id, userId, now, null, ct);
+
+        var filter = voidDraft.Doc.Kind switch
+        {
+            LedgerDocKind.Trade => "e.SourceType IN (N'TRADE', N'ADJUST') AND e.SourceId = @docId",
+            LedgerDocKind.Opening => "e.SourceType = N'OPENING' AND e.SourceId = @docId",
+            _ => "e.Id = @docId AND e.SourceType = N'MANUAL'",
+        };
+        var sql = $@"
+INSERT INTO dbo.JournalLines (JournalEntryId, LineNumber, AccountCode, Debit, Credit)
+SELECT @entryId, ROW_NUMBER() OVER (ORDER BY n.AccountCode), n.AccountCode,
+       CASE WHEN n.Net < 0 THEN -n.Net ELSE 0 END,
+       CASE WHEN n.Net > 0 THEN n.Net ELSE 0 END
+FROM
+(
+    SELECT l.AccountCode, SUM(l.Debit - l.Credit) AS Net
+    FROM dbo.JournalLines l
+    INNER JOIN dbo.JournalEntries e ON e.Id = l.JournalEntryId
+    WHERE e.BranchId = @branchId AND {filter}
+    GROUP BY l.AccountCode
+) n
+WHERE n.Net <> 0;";
+        await ExecuteAsync(conn, tx, ct, sql,
+            new SqlParameter("@entryId", entryId),
+            new SqlParameter("@branchId", branchId),
+            new SqlParameter("@docId", voidDraft.Doc.Id));
+    }
+
+    private static async Task<long> InsertJournalAsync(SqlConnection conn, SqlTransaction tx, int branchId, JournalDraft journal, long? sourceId, int userId, DateTime now, CancellationToken ct)
+    {
+        var entryId = await InsertJournalHeaderAsync(conn, tx, branchId, journal.Description, journal.OccurredAt,
+            journal.SourceType, sourceId, userId, now, journal.ReplacesId, ct);
+
+        var lineNo = 0;
+        foreach (var line in journal.Lines)
+        {
+            lineNo++;
+            await ExecuteAsync(conn, tx, ct,
+                "INSERT INTO dbo.JournalLines (JournalEntryId, LineNumber, AccountCode, Debit, Credit) VALUES (@entryId, @lineNo, @account, @debit, @credit);",
+                new SqlParameter("@entryId", entryId),
+                new SqlParameter("@lineNo", lineNo),
+                new SqlParameter("@account", line.AccountCode),
+                Money("@debit", line.Debit),
+                Money("@credit", line.Credit));
+        }
+        return entryId;
+    }
+
+    private static async Task<long> InsertJournalHeaderAsync(SqlConnection conn, SqlTransaction tx, int branchId, string description, DateTime occurredAt,
+        string sourceType, long? sourceId, int userId, DateTime createdAt, long? replacesId, CancellationToken ct)
+    {
+        const string sql = @"
+INSERT INTO dbo.JournalEntries (BranchId, OccurredAt, Description, SourceType, SourceId, CreatedBy, CreatedAt, ReplacesId)
+OUTPUT INSERTED.Id
+VALUES (@branchId, @occurredAt, @description, @sourceType, @sourceId, @userId, @createdAt, @replacesId);";
+        await using var cmd = new SqlCommand(sql, conn, tx);
+        cmd.Parameters.Add(new SqlParameter("@branchId", branchId));
+        cmd.Parameters.Add(new SqlParameter("@occurredAt", occurredAt));
+        cmd.Parameters.Add(new SqlParameter("@description", description));
+        cmd.Parameters.Add(new SqlParameter("@sourceType", sourceType));
+        cmd.Parameters.Add(RefIdParam("@sourceId", sourceId));
+        cmd.Parameters.Add(new SqlParameter("@userId", userId));
+        cmd.Parameters.Add(new SqlParameter("@createdAt", createdAt));
+        cmd.Parameters.Add(RefIdParam("@replacesId", replacesId));
+        return Convert.ToInt64(await cmd.ExecuteScalarAsync(ct), CultureInfo.InvariantCulture);
+    }
+
+    private static async Task<long> InsertTradeAsync(SqlConnection conn, SqlTransaction tx, int branchId, TradeDraft trade, CancellationToken ct)
+    {
+        const string sql = @"
+INSERT INTO dbo.CurrencyTransactions
+    (BranchId, TradeType, CurrencyCode, Amount, Rate, IrrAmount, CostIrr, ProfitIrr, FeeIrr, CustomerName, NationalCode, Note, OccurredAt, CreatedBy, ReplacesId)
+OUTPUT INSERTED.Id
+VALUES (@branchId, @tradeType, @code, @amount, @rate, @irr, @cost, @profit, @fee, @customer, @nationalCode, @note, @occurredAt, @userId, @replacesId);";
+        await using var cmd = new SqlCommand(sql, conn, tx);
+        cmd.Parameters.Add(new SqlParameter("@branchId", branchId));
+        cmd.Parameters.Add(new SqlParameter("@tradeType", trade.Type == TradeType.Buy ? "BUY" : "SELL"));
+        cmd.Parameters.Add(new SqlParameter("@code", trade.CurrencyCode));
+        cmd.Parameters.Add(Money("@amount", trade.Amount));
+        cmd.Parameters.Add(Money("@rate", trade.Rate));
+        cmd.Parameters.Add(Money("@irr", trade.IrrAmount));
+        cmd.Parameters.Add(Money("@cost", trade.CostIrr));
+        cmd.Parameters.Add(Money("@profit", trade.ProfitIrr));
+        cmd.Parameters.Add(Money("@fee", trade.FeeIrr));
+        cmd.Parameters.Add(new SqlParameter("@customer", (object?)trade.CustomerName ?? DBNull.Value));
+        cmd.Parameters.Add(new SqlParameter("@nationalCode", (object?)trade.NationalCode ?? DBNull.Value));
+        cmd.Parameters.Add(new SqlParameter("@note", (object?)trade.Note ?? DBNull.Value));
+        cmd.Parameters.Add(new SqlParameter("@occurredAt", trade.OccurredAt));
+        cmd.Parameters.Add(new SqlParameter("@userId", trade.UserId));
+        cmd.Parameters.Add(RefIdParam("@replacesId", trade.ReplacesId));
+        return Convert.ToInt64(await cmd.ExecuteScalarAsync(ct), CultureInfo.InvariantCulture);
+    }
+
+    private static async Task<long> InsertOpeningAsync(SqlConnection conn, SqlTransaction tx, int branchId, OpeningDraft opening, DateTime now, CancellationToken ct)
+    {
+        const string sql = @"
+INSERT INTO dbo.OpeningBalances (BranchId, CurrencyCode, Quantity, RateIrr, CostIrr, OccurredAt, CreatedBy, CreatedAt, ReplacesId)
+OUTPUT INSERTED.Id
+VALUES (@branchId, @code, @quantity, @rate, @cost, @occurredAt, @userId, @now, @replacesId);";
+        await using var cmd = new SqlCommand(sql, conn, tx);
+        cmd.Parameters.Add(new SqlParameter("@branchId", branchId));
+        cmd.Parameters.Add(new SqlParameter("@code", opening.CurrencyCode));
+        cmd.Parameters.Add(Money("@quantity", opening.Quantity));
+        cmd.Parameters.Add(MoneyOrNull("@rate", opening.RateIrr));
+        cmd.Parameters.Add(Money("@cost", opening.CostIrr));
+        cmd.Parameters.Add(new SqlParameter("@occurredAt", opening.OccurredAt));
+        cmd.Parameters.Add(new SqlParameter("@userId", opening.UserId));
+        cmd.Parameters.Add(new SqlParameter("@now", now));
+        cmd.Parameters.Add(RefIdParam("@replacesId", opening.ReplacesId));
+        return Convert.ToInt64(await cmd.ExecuteScalarAsync(ct), CultureInfo.InvariantCulture);
+    }
+
+    /// <summary>
+    /// حرکت‌های صندوق را به‌تفکیک صندوق جمع می‌کند، مانده را یک‌بار با مقایسه‌ی مقدار قبلی به‌روز می‌کند
+    /// و همه‌ی حرکت‌ها را با شناسه‌ی سند مرجع ثبت می‌کند.
+    /// </summary>
+    private static async Task ApplyCashMovementsAsync(SqlConnection conn, SqlTransaction tx, PostingDraft posting, long? newId, CancellationToken ct)
+    {
+        foreach (var group in posting.CashMovements.GroupBy(m => m.CurrencyCode))
+        {
+            var expected = group.First().ExpectedBalance;
+            if (group.Any(m => m.ExpectedBalance != expected))
+            {
+                throw new InvalidOperationException("مانده‌ی قبلی یک صندوق در یک ثبت با هم برابر نیست.");
+            }
+
+            var box = await ReadCashBoxAsync(conn, tx, posting.BranchId, group.Key, ct);
+            if (box.Balance != expected)
+            {
+                throw new ConcurrencyConflictException();
+            }
+
+            var delta = group.Sum(m => m.Delta);
+            if (delta != 0m)
+            {
+                var affected = await ExecuteAsync(conn, tx, ct, @"
+UPDATE dbo.CashBoxes SET Balance = Balance + @delta, UpdatedAt = @now
+WHERE Id = @boxId AND Balance = @expected;",
+                    Money("@delta", delta),
+                    new SqlParameter("@now", posting.Now),
+                    new SqlParameter("@boxId", box.Id),
+                    Money("@expected", expected));
+                if (affected != 1)
+                {
+                    throw new ConcurrencyConflictException();
+                }
+            }
+
+            foreach (var movement in group)
+            {
+                var refId = movement.Ref.Id != 0 ? movement.Ref.Id : ResolveId(0, newId);
+                await ExecuteAsync(conn, tx, ct, @"
+INSERT INTO dbo.CashMovements (CashBoxId, Amount, BalanceAfter, RefType, RefId, Description, OccurredAt, CreatedBy)
+VALUES (@boxId, @amount, 0, @refType, @refId, @description, @occurredAt, @userId);",
+                    new SqlParameter("@boxId", box.Id),
+                    Money("@amount", movement.Delta),
+                    new SqlParameter("@refType", movement.RefType),
+                    RefIdParam("@refId", refId),
+                    new SqlParameter("@description", movement.Description),
+                    new SqlParameter("@occurredAt", movement.OccurredAt),
+                    new SqlParameter("@userId", posting.UserId));
+            }
+        }
+    }
+
+    private static async Task<(int Id, decimal Balance)> ReadCashBoxAsync(SqlConnection conn, SqlTransaction tx, int branchId, string currencyCode, CancellationToken ct)
+    {
+        await using var cmd = new SqlCommand(
+            "SELECT Id, Balance FROM dbo.CashBoxes WITH (UPDLOCK, HOLDLOCK) WHERE BranchId = @branchId AND CurrencyCode = @code;",
+            conn,
+            tx);
+        cmd.Parameters.Add(new SqlParameter("@branchId", branchId));
+        cmd.Parameters.Add(new SqlParameter("@code", currencyCode));
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        if (!await reader.ReadAsync(ct))
+        {
+            throw new BusinessRuleException($"صندوق {currencyCode} برای این شعبه یافت نشد.");
+        }
+        return (reader.GetInt32(0), reader.GetDecimal(1));
+    }
+
+    /// <summary>
+    /// موجودی تراکمی هر حرکت صندوق را از روی همه‌ی حرکت‌های شعبه به ترتیب زمان دوباره حساب می‌کند.
+    /// با تغییر تاریخچه (ثبت با تاریخ گذشته یا ابطال) ستون BalanceAfter باید از نو محاسبه شود.
+    /// </summary>
+    private static async Task RecalculateBalancesAfterAsync(SqlConnection conn, SqlTransaction tx, int branchId, CancellationToken ct)
+    {
+        const string sql = @"
+UPDATE m
+SET m.BalanceAfter = x.Running
+FROM dbo.CashMovements m
+INNER JOIN
+(
+    SELECT m2.Id,
+           SUM(m2.Amount) OVER (PARTITION BY m2.CashBoxId ORDER BY m2.OccurredAt, m2.Id ROWS UNBOUNDED PRECEDING) AS Running
+    FROM dbo.CashMovements m2
+    INNER JOIN dbo.CashBoxes b2 ON b2.Id = m2.CashBoxId
+    WHERE b2.BranchId = @branchId
+) x ON x.Id = m.Id
+WHERE m.BalanceAfter <> x.Running;";
+        await ExecuteAsync(conn, tx, ct, sql, new SqlParameter("@branchId", branchId));
+    }
+
+    private static async Task InsertAuditAsync(SqlConnection conn, SqlTransaction tx, int userId, DateTime now, string action,
+        string entityType, long? entityId, string details, CancellationToken ct)
+    {
+        await ExecuteAsync(conn, tx, ct, @"
+INSERT INTO dbo.AuditLog (OccurredAt, UserId, Action, EntityType, EntityId, Details)
+VALUES (@now, @userId, @action, @entityType, @entityId, @details);",
+            new SqlParameter("@now", now),
+            new SqlParameter("@userId", userId),
+            new SqlParameter("@action", action),
+            new SqlParameter("@entityType", entityType),
+            RefIdParam("@entityId", entityId),
+            new SqlParameter("@details", details));
+    }
+
+    private static long ResolveId(long id, long? newId) =>
+        id != 0 ? id : newId ?? throw new InvalidOperationException("شناسه‌ی سند جدید پیش از ثبت سطرهای وابسته تعیین نشد.");
+
+    private static string EntityTypeOf(LedgerDocKind kind) => kind switch
+    {
+        LedgerDocKind.Trade => SourceTypes.Trade,
+        LedgerDocKind.Opening => SourceTypes.Opening,
+        _ => SourceTypes.Manual,
+    };
+
+    private static SqlParameter MoneyOrNull(string name, decimal? value) =>
+        new(name, SqlDbType.Decimal) { Precision = 19, Scale = 4, Value = (object?)value ?? DBNull.Value };
+
+    /// <summary>هر پارامتر فقط یک بار در یک دستور استفاده می‌شود؛ این تابع نسخه‌ی تازه‌ای از آرایه می‌سازد.</summary>
+    private static SqlParameter[] CloneParameters(SqlParameter[] parameters) =>
+        parameters.Select(p => new SqlParameter(p.ParameterName, p.Value)).ToArray();
 
     public async Task<IReadOnlyList<TradeInfo>> GetTradesAsync(int? branchId, DateTime fromInclusive, DateTime toExclusive, CancellationToken ct = default)
     {
@@ -284,59 +903,6 @@ ORDER BY t.OccurredAt DESC, t.Id DESC;";
     {
         await using var conn = await OpenAsync(ct);
         return await QueryTradeAsync(conn, tradeId, ct);
-    }
-
-    public async Task<VoidContext?> GetTradeForVoidAsync(long tradeId, CancellationToken ct = default)
-    {
-        await using var conn = await OpenAsync(ct);
-        var trade = await QueryTradeAsync(conn, tradeId, ct);
-        if (trade is null)
-        {
-            return null;
-        }
-
-        var snapshot = await QuerySnapshotAsync(conn, trade.BranchId, trade.CurrencyCode, ct)
-            ?? throw new BusinessRuleException("ارز یا شعبه‌ی معامله یافت نشد.");
-        var latest = await LatestPoolMovementAsync(conn, null, trade.BranchId, trade.CurrencyCode, ct);
-        var isLatest = latest is not null && latest.RefType == SourceTypes.Trade && latest.RefId == tradeId;
-        return new VoidContext(trade, snapshot, isLatest);
-    }
-
-    public async Task<IReadOnlyList<JournalEntryInfo>> GetJournalAsync(int? branchId, DateTime fromInclusive, DateTime toExclusive, CancellationToken ct = default)
-    {
-        const string sql = @"
-SELECT e.Id, e.OccurredAt, e.Description, e.SourceType, e.BranchId, br.Name, l.LineNumber, l.AccountCode, a.Name, l.Debit, l.Credit
-FROM dbo.JournalEntries e
-INNER JOIN dbo.Branches br ON br.Id = e.BranchId
-INNER JOIN dbo.JournalLines l ON l.JournalEntryId = e.Id
-INNER JOIN dbo.Accounts a ON a.Code = l.AccountCode
-WHERE e.OccurredAt >= @from AND e.OccurredAt < @to AND (@branchId IS NULL OR e.BranchId = @branchId)
-ORDER BY e.OccurredAt DESC, e.Id DESC, l.LineNumber;";
-        var order = new List<long>();
-        var entries = new Dictionary<long, JournalEntryBuilder>();
-        await using var conn = await OpenAsync(ct);
-        await using var cmd = new SqlCommand(sql, conn);
-        cmd.Parameters.Add(new SqlParameter("@from", fromInclusive));
-        cmd.Parameters.Add(new SqlParameter("@to", toExclusive));
-        cmd.Parameters.Add(NullableInt("@branchId", branchId));
-        await using var reader = await cmd.ExecuteReaderAsync(ct);
-        while (await reader.ReadAsync(ct))
-        {
-            var id = reader.GetInt64(0);
-            if (!entries.TryGetValue(id, out var builder))
-            {
-                builder = new JournalEntryBuilder(id, reader.GetDateTime(1), reader.GetString(2), reader.GetString(3), reader.GetInt32(4), reader.GetString(5));
-                entries.Add(id, builder);
-                order.Add(id);
-            }
-            builder.Lines.Add(new JournalLineInfo(
-                reader.GetInt32(6),
-                reader.GetString(7).Trim(),
-                reader.GetString(8),
-                reader.GetDecimal(9),
-                reader.GetDecimal(10)));
-        }
-        return order.Select(id => entries[id].Build()).ToList();
     }
 
     public async Task<int> CountUsersAsync(CancellationToken ct = default)
@@ -463,137 +1029,6 @@ WHERE br.Id = @branchId AND c.Code = @code;";
         return ReadTrade(reader);
     }
 
-    /// <summary>
-    /// آخرین حرکت فعال موجودی یک ارز در یک شعبه: معاملات باطل‌نشده و افتتاحیه‌های ارز.
-    /// حرکت‌های ابطال (VOID) و معاملات باطل‌شده نادیده گرفته می‌شوند.
-    /// </summary>
-    private static async Task<PoolMovement?> LatestPoolMovementAsync(SqlConnection conn, SqlTransaction? tx, int branchId, string currencyCode, CancellationToken ct)
-    {
-        const string sql = @"
-SELECT TOP (1) m.RefType, m.RefId
-FROM dbo.CashMovements m
-INNER JOIN dbo.CashBoxes b ON b.Id = m.CashBoxId
-LEFT JOIN dbo.CurrencyTransactions t ON t.Id = m.RefId AND m.RefType = N'TRADE'
-WHERE b.BranchId = @branchId AND b.CurrencyCode = @code
-  AND m.RefType IN (N'TRADE', N'OPENING')
-  AND (m.RefType = N'OPENING' OR t.IsVoided = 0)
-ORDER BY m.Id DESC;";
-        await using var cmd = new SqlCommand(sql, conn, tx);
-        cmd.Parameters.Add(new SqlParameter("@branchId", branchId));
-        cmd.Parameters.Add(new SqlParameter("@code", currencyCode));
-        await using var reader = await cmd.ExecuteReaderAsync(ct);
-        if (!await reader.ReadAsync(ct))
-        {
-            return null;
-        }
-        var refId = reader.IsDBNull(1) ? (long?)null : reader.GetInt64(1);
-        return new PoolMovement(reader.GetString(0), refId);
-    }
-
-    /// <summary>
-    /// قبل از ابطال، صندوق‌های شعبه قفل می‌شوند و بررسی می‌شود که معامله هنوز آخرین حرکت همان ارز باشد.
-    /// قفل‌ها با ترتیب ثابت گرفته می‌شوند تا ثبت‌های همزمان روی همان شعبه بن‌بست ایجاد نکنند.
-    /// </summary>
-    private static async Task EnsureLatestActivePoolTradeAsync(SqlConnection conn, SqlTransaction tx, int branchId, string currencyCode, long tradeId, CancellationToken ct)
-    {
-        await ExecuteAsync(conn, tx, ct,
-            "UPDATE dbo.CashBoxes SET Balance = Balance WHERE BranchId = @branchId AND CurrencyCode = N'IRR';",
-            new SqlParameter("@branchId", branchId));
-        await ExecuteAsync(conn, tx, ct,
-            "UPDATE dbo.CashBoxes SET Balance = Balance WHERE BranchId = @branchId AND CurrencyCode = @code;",
-            new SqlParameter("@branchId", branchId),
-            new SqlParameter("@code", currencyCode));
-
-        var latest = await LatestPoolMovementAsync(conn, tx, branchId, currencyCode, ct);
-        if (latest is null || latest.RefType != SourceTypes.Trade || latest.RefId != tradeId)
-        {
-            throw new BusinessRuleException(LatestMovementDescription);
-        }
-    }
-
-    private static async Task MarkTradeVoidedAsync(SqlConnection conn, SqlTransaction tx, PostingDraft posting, VoidDraft voidDraft, CancellationToken ct)
-    {
-        const string sql = @"
-UPDATE dbo.CurrencyTransactions
-SET IsVoided = 1, VoidedAt = @now, VoidedBy = @userId, VoidReason = @reason
-WHERE Id = @tradeId AND BranchId = @branchId AND IsVoided = 0;";
-        var affected = await ExecuteAsync(conn, tx, ct, sql,
-            new SqlParameter("@now", posting.OccurredAt),
-            new SqlParameter("@userId", posting.UserId),
-            new SqlParameter("@reason", voidDraft.Reason),
-            new SqlParameter("@tradeId", voidDraft.TradeId),
-            new SqlParameter("@branchId", posting.BranchId));
-        if (affected != 1)
-        {
-            throw new BusinessRuleException("این معامله قبلاً باطل شده است.");
-        }
-    }
-
-    private static async Task<long> InsertTradeAsync(SqlConnection conn, SqlTransaction tx, int branchId, TradeDraft trade, CancellationToken ct)
-    {
-        const string sql = @"
-INSERT INTO dbo.CurrencyTransactions
-    (BranchId, TradeType, CurrencyCode, Amount, Rate, IrrAmount, CostIrr, ProfitIrr, FeeIrr, CustomerName, NationalCode, Note, OccurredAt, CreatedBy)
-OUTPUT INSERTED.Id
-VALUES (@branchId, @tradeType, @code, @amount, @rate, @irr, @cost, @profit, @fee, @customer, @nationalCode, @note, @occurredAt, @userId);";
-        await using var cmd = new SqlCommand(sql, conn, tx);
-        cmd.Parameters.Add(new SqlParameter("@branchId", branchId));
-        cmd.Parameters.Add(new SqlParameter("@tradeType", trade.Type == TradeType.Buy ? "BUY" : "SELL"));
-        cmd.Parameters.Add(new SqlParameter("@code", trade.CurrencyCode));
-        cmd.Parameters.Add(Money("@amount", trade.Amount));
-        cmd.Parameters.Add(Money("@rate", trade.Rate));
-        cmd.Parameters.Add(Money("@irr", trade.IrrAmount));
-        cmd.Parameters.Add(Money("@cost", trade.CostIrr));
-        cmd.Parameters.Add(Money("@profit", trade.ProfitIrr));
-        cmd.Parameters.Add(Money("@fee", trade.FeeIrr));
-        cmd.Parameters.Add(new SqlParameter("@customer", (object?)trade.CustomerName ?? DBNull.Value));
-        cmd.Parameters.Add(new SqlParameter("@nationalCode", (object?)trade.NationalCode ?? DBNull.Value));
-        cmd.Parameters.Add(new SqlParameter("@note", (object?)trade.Note ?? DBNull.Value));
-        cmd.Parameters.Add(new SqlParameter("@occurredAt", trade.OccurredAt));
-        cmd.Parameters.Add(new SqlParameter("@userId", trade.UserId));
-        var id = await cmd.ExecuteScalarAsync(ct);
-        return Convert.ToInt64(id, CultureInfo.InvariantCulture);
-    }
-
-    private static async Task ApplyCashMovementAsync(SqlConnection conn, SqlTransaction tx, PostingDraft posting, CashMovementDraft movement, long? tradeId, CancellationToken ct)
-    {
-        const string updateSql = @"
-UPDATE dbo.CashBoxes
-SET Balance = Balance + @delta, UpdatedAt = @occurredAt
-OUTPUT INSERTED.Id, INSERTED.Balance
-WHERE BranchId = @branchId AND CurrencyCode = @code AND Balance = @expected;";
-
-        int boxId;
-        decimal newBalance;
-        await using (var cmd = new SqlCommand(updateSql, conn, tx))
-        {
-            cmd.Parameters.Add(Money("@delta", movement.Delta));
-            cmd.Parameters.Add(new SqlParameter("@occurredAt", posting.OccurredAt));
-            cmd.Parameters.Add(new SqlParameter("@branchId", posting.BranchId));
-            cmd.Parameters.Add(new SqlParameter("@code", movement.CurrencyCode));
-            cmd.Parameters.Add(Money("@expected", movement.ExpectedBalance));
-            await using var reader = await cmd.ExecuteReaderAsync(ct);
-            if (!await reader.ReadAsync(ct))
-            {
-                throw new ConcurrencyConflictException();
-            }
-            boxId = reader.GetInt32(0);
-            newBalance = reader.GetDecimal(1);
-        }
-
-        await ExecuteAsync(conn, tx, ct,
-            @"INSERT INTO dbo.CashMovements (CashBoxId, Amount, BalanceAfter, RefType, RefId, Description, OccurredAt, CreatedBy)
-              VALUES (@boxId, @amount, @balanceAfter, @refType, @refId, @description, @occurredAt, @userId);",
-            new SqlParameter("@boxId", boxId),
-            Money("@amount", movement.Delta),
-            Money("@balanceAfter", newBalance),
-            new SqlParameter("@refType", posting.SourceType),
-            RefIdParam("@refId", tradeId),
-            new SqlParameter("@description", movement.Description),
-            new SqlParameter("@occurredAt", posting.OccurredAt),
-            new SqlParameter("@userId", posting.UserId));
-    }
-
     private static async Task ApplyInventoryAsync(SqlConnection conn, SqlTransaction tx, int branchId, InventoryDraft change, DateTime occurredAt, CancellationToken ct)
     {
         const string sql = @"
@@ -609,38 +1044,6 @@ WHERE BranchId = @branchId AND CurrencyCode = @code AND TotalCostIrr = @expected
         if (affected != 1)
         {
             throw new ConcurrencyConflictException();
-        }
-    }
-
-    private static async Task InsertJournalAsync(SqlConnection conn, SqlTransaction tx, PostingDraft posting, long? tradeId, CancellationToken ct)
-    {
-        const string headerSql = @"
-INSERT INTO dbo.JournalEntries (BranchId, OccurredAt, Description, SourceType, SourceId, CreatedBy, CreatedAt)
-OUTPUT INSERTED.Id
-VALUES (@branchId, @occurredAt, @description, @sourceType, @sourceId, @userId, @occurredAt);";
-        long entryId;
-        await using (var cmd = new SqlCommand(headerSql, conn, tx))
-        {
-            cmd.Parameters.Add(new SqlParameter("@branchId", posting.BranchId));
-            cmd.Parameters.Add(new SqlParameter("@occurredAt", posting.OccurredAt));
-            cmd.Parameters.Add(new SqlParameter("@description", posting.Journal.Description));
-            cmd.Parameters.Add(new SqlParameter("@sourceType", posting.SourceType));
-            cmd.Parameters.Add(RefIdParam("@sourceId", tradeId));
-            cmd.Parameters.Add(new SqlParameter("@userId", posting.UserId));
-            entryId = Convert.ToInt64(await cmd.ExecuteScalarAsync(ct), CultureInfo.InvariantCulture);
-        }
-
-        var lineNo = 0;
-        foreach (var line in posting.Journal.Lines)
-        {
-            lineNo++;
-            await ExecuteAsync(conn, tx, ct,
-                "INSERT INTO dbo.JournalLines (JournalEntryId, LineNumber, AccountCode, Debit, Credit) VALUES (@entryId, @lineNo, @account, @debit, @credit);",
-                new SqlParameter("@entryId", entryId),
-                new SqlParameter("@lineNo", lineNo),
-                new SqlParameter("@account", line.AccountCode),
-                Money("@debit", line.Debit),
-                Money("@credit", line.Credit));
         }
     }
 
@@ -737,16 +1140,16 @@ VALUES (@branchId, @occurredAt, @description, @sourceType, @sourceId, @userId, @
 
     private static UserRole ParseRole(string value) => Enum.Parse<UserRole>(value, ignoreCase: true);
 
-    private sealed record PoolMovement(string RefType, long? RefId);
-
     private sealed class JournalEntryBuilder
     {
-        public JournalEntryBuilder(long id, DateTime occurredAt, string description, string sourceType, int branchId, string branchName)
+        public JournalEntryBuilder(long id, DateTime occurredAt, string description, string sourceType, long? sourceId, bool isVoided, int branchId, string branchName)
         {
             Id = id;
             OccurredAt = occurredAt;
             Description = description;
             SourceType = sourceType;
+            SourceId = sourceId;
+            IsVoided = isVoided;
             BranchId = branchId;
             BranchName = branchName;
         }
@@ -759,12 +1162,16 @@ VALUES (@branchId, @occurredAt, @description, @sourceType, @sourceId, @userId, @
 
         public string SourceType { get; }
 
+        public long? SourceId { get; }
+
+        public bool IsVoided { get; }
+
         public int BranchId { get; }
 
         public string BranchName { get; }
 
         public List<JournalLineInfo> Lines { get; } = new();
 
-        public JournalEntryInfo Build() => new(Id, OccurredAt, Description, SourceType, BranchId, BranchName, Lines);
+        public JournalEntryInfo Build() => new(Id, OccurredAt, Description, SourceType, BranchId, BranchName, Lines, SourceId, IsVoided);
     }
 }

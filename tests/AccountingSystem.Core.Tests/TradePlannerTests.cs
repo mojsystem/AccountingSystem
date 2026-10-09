@@ -26,7 +26,7 @@ public class TradePlannerTests
         Assert.Equal(-10_000_000m, posting.CashMovements.Single(m => m.CurrencyCode == "IRR").Delta);
         Assert.Equal(10m, posting.CashMovements.Single(m => m.CurrencyCode == "USD").Delta);
         Assert.Equal(10_000_000m, posting.Inventory.Single().NewCostIrr);
-        Assert.Equal(posting.Journal.Lines.Sum(l => l.Debit), posting.Journal.Lines.Sum(l => l.Credit));
+        Assert.Equal(posting.Journals[0].Lines.Sum(l => l.Debit), posting.Journals[0].Lines.Sum(l => l.Credit));
     }
 
     [Fact]
@@ -51,9 +51,9 @@ public class TradePlannerTests
         Assert.Equal(40_000_000m, posting.Trade.CostIrr);
         Assert.Equal(8_000_000m, posting.Trade.ProfitIrr);
         Assert.Equal(60_000_000m, posting.Inventory.Single().NewCostIrr);
-        Assert.Equal(8_000_000m, posting.Journal.Lines.Single(l => l.AccountCode == AccountCodes.FxProfit).Credit);
-        Assert.Equal(48_000_000m, posting.Journal.Lines.Sum(l => l.Debit));
-        Assert.Equal(48_000_000m, posting.Journal.Lines.Sum(l => l.Credit));
+        Assert.Equal(8_000_000m, posting.Journals[0].Lines.Single(l => l.AccountCode == AccountCodes.FxProfit).Credit);
+        Assert.Equal(48_000_000m, posting.Journals[0].Lines.Sum(l => l.Debit));
+        Assert.Equal(48_000_000m, posting.Journals[0].Lines.Sum(l => l.Credit));
     }
 
     [Fact]
@@ -65,8 +65,8 @@ public class TradePlannerTests
         var posting = TradePlanner.PlanSell(input, snapshot, 1, Now);
 
         Assert.Equal(-1_000_000m, posting.Trade!.ProfitIrr);
-        Assert.Equal(1_000_000m, posting.Journal.Lines.Single(l => l.AccountCode == AccountCodes.FxLoss).Debit);
-        Assert.Equal(posting.Journal.Lines.Sum(l => l.Debit), posting.Journal.Lines.Sum(l => l.Credit));
+        Assert.Equal(1_000_000m, posting.Journals[0].Lines.Single(l => l.AccountCode == AccountCodes.FxLoss).Debit);
+        Assert.Equal(posting.Journals[0].Lines.Sum(l => l.Debit), posting.Journals[0].Lines.Sum(l => l.Credit));
     }
 
     [Fact]
@@ -103,8 +103,8 @@ public class TradePlannerTests
         Assert.Equal(10_000_000m, posting.Trade.CostIrr);
         Assert.Equal(-9_900_000m, posting.CashMovements.Single(m => m.CurrencyCode == "IRR").Delta);
         Assert.Equal(10_000_000m, posting.Inventory.Single().NewCostIrr);
-        Assert.Equal(100_000m, posting.Journal.Lines.Single(l => l.AccountCode == AccountCodes.FeeIncome).Credit);
-        Assert.Equal(posting.Journal.Lines.Sum(l => l.Debit), posting.Journal.Lines.Sum(l => l.Credit));
+        Assert.Equal(100_000m, posting.Journals[0].Lines.Single(l => l.AccountCode == AccountCodes.FeeIncome).Credit);
+        Assert.Equal(posting.Journals[0].Lines.Sum(l => l.Debit), posting.Journals[0].Lines.Sum(l => l.Credit));
     }
 
     [Fact]
@@ -118,9 +118,9 @@ public class TradePlannerTests
         Assert.Equal(8_000_000m, posting.Trade!.ProfitIrr);
         Assert.Equal(50_000m, posting.Trade.FeeIrr);
         Assert.Equal(48_050_000m, posting.CashMovements.Single(m => m.CurrencyCode == "IRR").Delta);
-        Assert.Equal(50_000m, posting.Journal.Lines.Single(l => l.AccountCode == AccountCodes.FeeIncome).Credit);
-        Assert.Equal(48_050_000m, posting.Journal.Lines.Sum(l => l.Debit));
-        Assert.Equal(48_050_000m, posting.Journal.Lines.Sum(l => l.Credit));
+        Assert.Equal(50_000m, posting.Journals[0].Lines.Single(l => l.AccountCode == AccountCodes.FeeIncome).Credit);
+        Assert.Equal(48_050_000m, posting.Journals[0].Lines.Sum(l => l.Debit));
+        Assert.Equal(48_050_000m, posting.Journals[0].Lines.Sum(l => l.Credit));
     }
 
     [Fact]
@@ -145,110 +145,15 @@ public class TradePlannerTests
     }
 
     [Fact]
-    public void Voiding_the_latest_buy_restores_the_previous_state_exactly()
-    {
-        var before = new TradeSnapshot(1, Usd, 10_000_000m, 0m, 0m);
-        var buy = TradePlanner.PlanBuy(new TradeInput(1, "USD", 10m, 1_000_000m, null, null, null, FeeIrr: 100_000m), before, 1, Now);
-        var trade = TradeInfoFor(7, TradeType.Buy, amount: 10m, irr: 10_000_000m, cost: 10_000_000m, profit: 0m, fee: 100_000m);
-        var afterBuy = new TradeSnapshot(1, Usd, 100_000m, 10m, 10_000_000m);
-
-        var posting = TradePlanner.PlanVoid(new VoidContext(trade, afterBuy, IsLatestInPool: true), "اشتباه در مبلغ", 1, Now);
-
-        Assert.Equal(SourceTypes.Void, posting.SourceType);
-        Assert.Equal(7, posting.Void!.TradeId);
-        Assert.Equal(9_900_000m, posting.CashMovements.Single(m => m.CurrencyCode == "IRR").Delta);
-        Assert.Equal(-10m, posting.CashMovements.Single(m => m.CurrencyCode == "USD").Delta);
-        Assert.Equal(0m, posting.Inventory.Single().NewCostIrr);
-        AssertOriginalAndReversalCancel(buy.Journal.Lines, posting.Journal.Lines);
-    }
-
-    [Fact]
-    public void Voiding_a_sell_returns_stock_cash_and_fee_and_cancels_the_journal()
-    {
-        var before = new TradeSnapshot(1, Usd, 0m, 100m, 100_000_000m);
-        var sell = TradePlanner.PlanSell(new TradeInput(1, "USD", 40m, 1_200_000m, null, null, null, FeeIrr: 50_000m), before, 1, Now);
-        var trade = TradeInfoFor(9, TradeType.Sell, amount: 40m, irr: 48_000_000m, cost: 40_000_000m, profit: 8_000_000m, fee: 50_000m);
-        var afterSell = new TradeSnapshot(1, Usd, 48_050_000m, 60m, 60_000_000m);
-
-        var posting = TradePlanner.PlanVoid(new VoidContext(trade, afterSell, IsLatestInPool: true), "مشتری انصراف داد", 2, Now);
-
-        Assert.Equal(-48_050_000m, posting.CashMovements.Single(m => m.CurrencyCode == "IRR").Delta);
-        Assert.Equal(40m, posting.CashMovements.Single(m => m.CurrencyCode == "USD").Delta);
-        Assert.Equal(100_000_000m, posting.Inventory.Single().NewCostIrr);
-        AssertOriginalAndReversalCancel(sell.Journal.Lines, posting.Journal.Lines);
-    }
-
-    [Fact]
-    public void Void_is_rejected_when_the_trade_is_not_the_latest_movement()
-    {
-        var trade = TradeInfoFor(3, TradeType.Buy, amount: 10m, irr: 10_000_000m, cost: 10_000_000m, profit: 0m, fee: 0m);
-        var snapshot = new TradeSnapshot(1, Usd, 0m, 20m, 20_000_000m);
-
-        var ex = Assert.Throws<BusinessRuleException>(() =>
-            TradePlanner.PlanVoid(new VoidContext(trade, snapshot, IsLatestInPool: false), "دلیل", 1, Now));
-        Assert.Contains("آخرین", ex.Message);
-    }
-
-    [Fact]
-    public void Void_is_rejected_for_an_already_voided_trade()
-    {
-        var trade = TradeInfoFor(3, TradeType.Buy, amount: 10m, irr: 10_000_000m, cost: 10_000_000m, profit: 0m, fee: 0m) with
-        {
-            IsVoided = true,
-            VoidedAt = Now,
-            VoidedBy = "admin",
-            VoidReason = "قبلی",
-        };
-        var snapshot = new TradeSnapshot(1, Usd, 0m, 10m, 10_000_000m);
-
-        var ex = Assert.Throws<BusinessRuleException>(() =>
-            TradePlanner.PlanVoid(new VoidContext(trade, snapshot, IsLatestInPool: true), "دلیل", 1, Now));
-        Assert.Contains("قبلاً باطل", ex.Message);
-    }
-
-    [Fact]
-    public void Void_requires_a_reason()
-    {
-        var trade = TradeInfoFor(3, TradeType.Buy, amount: 10m, irr: 10_000_000m, cost: 10_000_000m, profit: 0m, fee: 0m);
-        var snapshot = new TradeSnapshot(1, Usd, 0m, 10m, 10_000_000m);
-
-        Assert.Throws<BusinessRuleException>(() =>
-            TradePlanner.PlanVoid(new VoidContext(trade, snapshot, IsLatestInPool: true), "   ", 1, Now));
-    }
-
-    [Fact]
-    public void Voiding_a_sell_is_rejected_when_irr_cash_was_already_spent()
-    {
-        var trade = TradeInfoFor(9, TradeType.Sell, amount: 40m, irr: 48_000_000m, cost: 40_000_000m, profit: 8_000_000m, fee: 0m);
-        var snapshot = new TradeSnapshot(1, Usd, 1_000_000m, 60m, 60_000_000m);
-
-        Assert.Throws<BusinessRuleException>(() =>
-            TradePlanner.PlanVoid(new VoidContext(trade, snapshot, IsLatestInPool: true), "دلیل", 1, Now));
-    }
-
-    [Fact]
-    public void Journal_draft_rejects_unbalanced_lines()
-    {
-        Assert.Throws<InvalidOperationException>(() =>
-        {
-            _ = new JournalDraft("نامتوازن", Now, new[]
-            {
-                new JournalLineDraft(AccountCodes.IrrCash, 100m, 0m),
-                new JournalLineDraft(AccountCodes.OpeningCapital, 0m, 90m),
-            });
-        });
-    }
-
-    [Fact]
     public void Opening_foreign_balance_credits_opening_capital()
     {
         var snapshot = new TradeSnapshot(1, Usd, 0m, 0m, 0m);
 
         var posting = TradePlanner.PlanOpeningForeign(Usd, 100m, 1_000_000m, snapshot, 1, Now);
 
-        Assert.Equal(SourceTypes.Opening, posting.SourceType);
+        Assert.Equal(SourceTypes.Opening, posting.Journals[0].SourceType);
         Assert.Null(posting.Trade);
-        Assert.Equal(100_000_000m, posting.Journal.Lines.Single(l => l.AccountCode == AccountCodes.OpeningCapital).Credit);
+        Assert.Equal(100_000_000m, posting.Journals[0].Lines.Single(l => l.AccountCode == AccountCodes.OpeningCapital).Credit);
         Assert.Equal(100m, posting.CashMovements.Single().Delta);
         Assert.Equal(100_000_000m, posting.Inventory.Single().NewCostIrr);
     }
@@ -277,18 +182,263 @@ public class TradePlannerTests
         Assert.Throws<BusinessRuleException>(() => TradePlanner.PlanBuy(input, snapshot, 1, Now));
     }
 
-    private static TradeInfo TradeInfoFor(long id, TradeType type, decimal amount, decimal irr, decimal cost, decimal profit, decimal fee) =>
-        new(id, 1, "MAIN", "شعبه‌ی مرکزی", type, "USD", amount, irr / amount, irr, cost, profit, fee,
-            null, null, null, Now, "cashier", false, null, null, null);
+    // ---------------------------------------------------------------------------------------------
+    // تاریخچه‌ی کامل: ثبت با تاریخ گذشته، ابطال هر سند، جایگزینی، سند افتتاحیه و سند دستی.
+    // ---------------------------------------------------------------------------------------------
 
-    /// <summary>سند اصلی و سند ابطال باید روی هر حساب جمعاً صفر شوند.</summary>
-    private static void AssertOriginalAndReversalCancel(IEnumerable<JournalLineDraft> original, IEnumerable<JournalLineDraft> reversal)
+    private static readonly DateTime Day1 = new(2026, 10, 1, 9, 0, 0);
+    private static readonly DateTime Day2 = new(2026, 10, 2, 9, 0, 0);
+    private static readonly DateTime Day3 = new(2026, 10, 3, 9, 0, 0);
+    private static readonly DateTime Today = new(2026, 10, 4, 10, 0, 0);
+
+    private static LedgerEvent Acquire(long tradeId, DateTime at, long seq, decimal qty, decimal cost, decimal irrDelta) =>
+        new(LedgerDocKind.Trade, tradeId, LedgerEventKind.Acquire, "USD", at, seq, qty, cost, 0m, irrDelta, 0m, 0m);
+
+    private static LedgerEvent Sell(long tradeId, DateTime at, long seq, decimal qty, decimal irr) =>
+        new(LedgerDocKind.Trade, tradeId, LedgerEventKind.Dispose, "USD", at, seq, qty, irr, 0m, irr, 0m, 0m);
+
+    private static LedgerEvent Cash(LedgerDocKind kind, long id, DateTime at, long seq, decimal delta) =>
+        new(kind, id, LedgerEventKind.CashOnly, "IRR", at, seq, 0m, 0m, 0m, delta, 0m, 0m);
+
+    /// <summary>
+    /// دفتر با مقادیر ذخیره‌شده‌ی درست: بهای فروش‌ها و مانده‌ها از همان بازپخش تاریخچه به دست می‌آید.
+    /// </summary>
+    private static BranchLedger LedgerOf(params LedgerEvent[] events)
     {
-        var net = new Dictionary<string, decimal>();
-        foreach (var line in original.Concat(reversal))
+        var state = LedgerEngine.Replay(events);
+        var filled = events
+            .Select(e => e.Kind == LedgerEventKind.Dispose
+                ? e with { StoredCostIrr = state.Disposals[e.Doc].CostIrr, StoredProfitIrr = state.Disposals[e.Doc].ProfitIrr }
+                : e)
+            .ToList();
+        var active = new HashSet<DocRef>(events.Where(e => e.DocId > 0).Select(e => e.Doc));
+        var pools = state.Pools.ToDictionary(kv => kv.Key, kv => kv.Value, StringComparer.Ordinal);
+        return new BranchLedger(1, 5, filled, active, state.IrrBalance, pools);
+    }
+
+    private static TradeInput Input(decimal amount, decimal rate, decimal fee = 0m) =>
+        new(1, "USD", amount, rate, null, null, null, fee);
+
+    private static IReadOnlyDictionary<string, AccountInfo> Accounts() => new Dictionary<string, AccountInfo>
+    {
+        [AccountCodes.IrrCash] = new(AccountCodes.IrrCash, "صندوق ریال", "Asset", true),
+        [AccountCodes.ForeignCash("USD")] = new(AccountCodes.ForeignCash("USD"), "موجودی ارز", "Asset", true),
+        [AccountCodes.OpeningCapital] = new(AccountCodes.OpeningCapital, "سرمایه", "Equity", true),
+        ["6001"] = new("6001", "هزینه‌های اداری", "Expense", true),
+        ["6999"] = new("6999", "حساب غیرفعال", "Expense", false),
+    };
+
+    [Fact]
+    public void Backdated_buy_recalculates_later_sale_and_posts_an_adjustment()
+    {
+        // موجودی افتتاحیه، خرید ۱۰۰ دلاری در روز دوم و فروش ۵۰ دلاری در روز سوم.
+        var ledger = LedgerOf(
+            Cash(LedgerDocKind.Opening, 9, Day1, 1, 400_000_000m),
+            Acquire(1, Day2, 2, 100m, 100_000_000m, -100_000_000m),
+            Sell(2, Day3, 3, 50m, 60_000_000m));
+
+        // خرید جدید با تاریخ روز اول (گذشته) و نرخ ۱٫۵ میلیون: بهای فروش روز سوم بالا می‌رود.
+        var plan = LedgerPlanner.PlanTrade(ledger, Usd, Input(100m, 1_500_000m), TradeType.Buy, 1,
+            new DateTime(2026, 10, 1, 12, 0, 0), Today);
+
+        Assert.Equal("TRADE_CREATE", plan.Action);
+        Assert.Equal(5, plan.ExpectedVersion);
+        Assert.Equal(150_000_000m, plan.Trade!.CostIrr);
+        var update = Assert.Single(plan.CostUpdates);
+        Assert.Equal(2, update.TradeId);
+        Assert.Equal(62_500_000m, update.CostIrr);
+        Assert.Equal(-2_500_000m, update.ProfitIrr);
+
+        var adjustment = Assert.Single(plan.Journals, j => j.SourceType == SourceTypes.Adjust);
+        Assert.Equal(12_500_000m, adjustment.Lines.Single(l => l.AccountCode == "1101-USD").Credit);
+        Assert.Equal(10_000_000m, adjustment.Lines.Single(l => l.AccountCode == AccountCodes.FxProfit).Debit);
+        Assert.Equal(2_500_000m, adjustment.Lines.Single(l => l.AccountCode == AccountCodes.FxLoss).Debit);
+        Assert.Equal(187_500_000m, plan.Inventory.Single().NewCostIrr);
+        Assert.Equal(50_000_000m, plan.Inventory.Single().ExpectedCostIrr);
+        Assert.Equal(-150_000_000m, plan.CashMovements.Single(m => m.CurrencyCode == "IRR").Delta);
+    }
+
+    [Fact]
+    public void Voiding_a_buy_is_rejected_when_a_later_sale_would_have_no_stock()
+    {
+        var ledger = LedgerOf(
+            Cash(LedgerDocKind.Opening, 9, Day1, 1, 300_000_000m),
+            Acquire(1, Day1, 2, 100m, 100_000_000m, -100_000_000m),
+            Sell(2, Day2, 3, 60m, 90_000_000m));
+
+        var ex = Assert.Throws<BusinessRuleException>(() =>
+            LedgerPlanner.PlanVoid(ledger, new DocRef(LedgerDocKind.Trade, 1), "اشتباه", 1, Today));
+        Assert.Contains("کافی نیست", ex.Message);
+    }
+
+    [Fact]
+    public void Voiding_an_unused_earlier_buy_is_allowed_and_recalculates_the_sale()
+    {
+        var ledger = LedgerOf(
+            Cash(LedgerDocKind.Opening, 9, Day1, 1, 500_000_000m),
+            Acquire(1, Day1, 2, 100m, 100_000_000m, -100_000_000m),
+            Acquire(2, Day2, 3, 100m, 200_000_000m, -200_000_000m),
+            Sell(3, Day3, 4, 50m, 80_000_000m));
+
+        var plan = LedgerPlanner.PlanVoid(ledger, new DocRef(LedgerDocKind.Trade, 1), "خطا در مبلغ", 1, Today);
+
+        Assert.Equal(new DocRef(LedgerDocKind.Trade, 1), plan.Void!.Doc);
+        var update = Assert.Single(plan.CostUpdates);
+        Assert.Equal(3, update.TradeId);
+        Assert.Equal(100_000_000m, update.CostIrr);
+        Assert.Equal(-20_000_000m, update.ProfitIrr);
+        var adjustment = Assert.Single(plan.Journals, j => j.SourceType == SourceTypes.Adjust);
+        Assert.Equal(25_000_000m, adjustment.Lines.Single(l => l.AccountCode == "1101-USD").Credit);
+        Assert.Equal(100_000_000m, plan.Inventory.Single().NewCostIrr);
+        Assert.Equal(100_000_000m, plan.CashMovements.Single(m => m.CurrencyCode == "IRR").Delta);
+        Assert.Equal(-100m, plan.CashMovements.Single(m => m.CurrencyCode == "USD").Delta);
+        Assert.All(plan.CashMovements, m => Assert.Equal("VOID", m.RefType));
+    }
+
+    [Fact]
+    public void Voiding_an_opening_is_rejected_when_trades_depend_on_it()
+    {
+        var ledger = LedgerOf(
+            Cash(LedgerDocKind.Opening, 9, Day1, 1, 400_000_000m),
+            new LedgerEvent(LedgerDocKind.Opening, 7, LedgerEventKind.Acquire, "USD", Day1, 2, 50m, 50_000_000m, 0m, 0m, 0m, 0m),
+            Sell(1, Day2, 3, 50m, 60_000_000m));
+
+        var ex = Assert.Throws<BusinessRuleException>(() =>
+            LedgerPlanner.PlanVoid(ledger, new DocRef(LedgerDocKind.Opening, 7), "اشتباه", 1, Today));
+        Assert.Contains("کافی نیست", ex.Message);
+    }
+
+    [Fact]
+    public void Replacing_a_trade_removes_the_old_version_and_recalculates_later_sales()
+    {
+        var ledger = LedgerOf(
+            Cash(LedgerDocKind.Opening, 9, Day1, 1, 300_000_000m),
+            Acquire(1, Day1.AddHours(1), 2, 100m, 100_000_000m, -100_000_000m),
+            Sell(2, Day2, 3, 50m, 60_000_000m));
+
+        var plan = LedgerPlanner.PlanTrade(ledger, Usd, Input(200m, 1_200_000m), TradeType.Buy, 1,
+            Day1.AddHours(1), Today, new DocRef(LedgerDocKind.Trade, 1), "ویرایش معامله");
+
+        Assert.Equal("TRADE_REPLACE", plan.Action);
+        Assert.Equal(new DocRef(LedgerDocKind.Trade, 1), plan.Void!.Doc);
+        Assert.Equal(1L, plan.Trade!.ReplacesId);
+        Assert.Equal(240_000_000m, plan.Trade.CostIrr);
+        var update = Assert.Single(plan.CostUpdates);
+        Assert.Equal(2, update.TradeId);
+        Assert.Equal(60_000_000m, update.CostIrr);
+        Assert.Equal(0m, update.ProfitIrr);
+        Assert.Equal(180_000_000m, plan.Inventory.Single().NewCostIrr);
+        Assert.Equal(-140_000_000m, plan.CashMovements.Where(m => m.CurrencyCode == "IRR").Sum(m => m.Delta));
+        Assert.Equal(100m, plan.CashMovements.Where(m => m.CurrencyCode == "USD").Sum(m => m.Delta));
+    }
+
+    [Fact]
+    public void Manual_expense_is_checked_against_the_cash_balance()
+    {
+        var ledger = LedgerOf(Cash(LedgerDocKind.Opening, 9, Day1, 1, 100_000_000m));
+        var lines = new[]
         {
-            net[line.AccountCode] = net.GetValueOrDefault(line.AccountCode) + line.Debit - line.Credit;
-        }
-        Assert.All(net, pair => Assert.Equal(0m, pair.Value));
+            new JournalLineDraft("6001", 150_000_000m, 0m),
+            new JournalLineDraft(AccountCodes.IrrCash, 0m, 150_000_000m),
+        };
+
+        var ex = Assert.Throws<BusinessRuleException>(() =>
+            LedgerPlanner.PlanManual(ledger, Accounts(), "هزینه‌ی اجاره", lines, 1, Day2, Today));
+        Assert.Contains("کافی نیست", ex.Message);
+    }
+
+    [Fact]
+    public void Manual_expense_paid_in_cash_creates_a_cash_movement()
+    {
+        var ledger = LedgerOf(Cash(LedgerDocKind.Opening, 9, Day1, 1, 100_000_000m));
+        var lines = new[]
+        {
+            new JournalLineDraft("6001", 30_000_000m, 0m),
+            new JournalLineDraft(AccountCodes.IrrCash, 0m, 30_000_000m),
+        };
+
+        var plan = LedgerPlanner.PlanManual(ledger, Accounts(), " هزینه‌ی برق ", lines, 1, Day2, Today);
+
+        Assert.Equal(SourceTypes.Manual, plan.Journals.Single().SourceType);
+        Assert.Equal("هزینه‌ی برق", plan.Journals.Single().Description);
+        Assert.Equal(-30_000_000m, plan.CashMovements.Single().Delta);
+        Assert.Equal("MANUAL", plan.CashMovements.Single().RefType);
+    }
+
+    [Fact]
+    public void Manual_document_cannot_touch_foreign_inventory_accounts()
+    {
+        var ledger = LedgerOf(Cash(LedgerDocKind.Opening, 9, Day1, 1, 100_000_000m));
+        var lines = new[]
+        {
+            new JournalLineDraft("1101-USD", 1_000_000m, 0m),
+            new JournalLineDraft(AccountCodes.OpeningCapital, 0m, 1_000_000m),
+        };
+
+        Assert.Throws<BusinessRuleException>(() =>
+            LedgerPlanner.PlanManual(ledger, Accounts(), "تعدیل ارز", lines, 1, Day2, Today));
+    }
+
+    [Fact]
+    public void Manual_document_rejects_inactive_accounts_and_unbalanced_lines()
+    {
+        var ledger = LedgerOf(Cash(LedgerDocKind.Opening, 9, Day1, 1, 100_000_000m));
+        var inactive = new[]
+        {
+            new JournalLineDraft("6999", 1_000_000m, 0m),
+            new JournalLineDraft(AccountCodes.OpeningCapital, 0m, 1_000_000m),
+        };
+        Assert.Throws<BusinessRuleException>(() =>
+            LedgerPlanner.PlanManual(ledger, Accounts(), "هزینه", inactive, 1, Day2, Today));
+
+        Assert.Throws<BusinessRuleException>(() => new JournalDraft("نامتوازن", Day2, new[]
+        {
+            new JournalLineDraft(AccountCodes.IrrCash, 100m, 0m),
+            new JournalLineDraft(AccountCodes.OpeningCapital, 0m, 90m),
+        }, SourceTypes.Manual, new DocRef(LedgerDocKind.Manual, 0)));
+    }
+
+    [Fact]
+    public void Voiding_an_unknown_or_already_voided_document_is_rejected()
+    {
+        var ledger = LedgerOf(Cash(LedgerDocKind.Opening, 9, Day1, 1, 100_000_000m));
+
+        var unknown = Assert.Throws<BusinessRuleException>(() =>
+            LedgerPlanner.PlanVoid(ledger, new DocRef(LedgerDocKind.Trade, 999), "دلیل", 1, Today));
+        Assert.Contains("یافت نشد", unknown.Message);
+    }
+
+    [Fact]
+    public void Void_requires_a_reason()
+    {
+        var ledger = LedgerOf(
+            Cash(LedgerDocKind.Opening, 9, Day1, 1, 400_000_000m),
+            Acquire(1, Day2, 2, 10m, 10_000_000m, -10_000_000m));
+
+        Assert.Throws<BusinessRuleException>(() =>
+            LedgerPlanner.PlanVoid(ledger, new DocRef(LedgerDocKind.Trade, 1), "   ", 1, Today));
+    }
+
+    [Fact]
+    public void Stored_state_that_does_not_match_the_history_is_reported_as_inconsistent()
+    {
+        var good = LedgerOf(
+            Cash(LedgerDocKind.Opening, 9, Day1, 1, 400_000_000m),
+            Acquire(1, Day2, 2, 10m, 10_000_000m, -10_000_000m));
+        var broken = good with { StoredIrrBalance = good.StoredIrrBalance + 1m };
+
+        Assert.Throws<InvalidOperationException>(() =>
+            LedgerPlanner.PlanVoid(broken, new DocRef(LedgerDocKind.Trade, 1), "دلیل", 1, Today));
+    }
+
+    [Fact]
+    public void Occurrence_date_is_limited_to_thirty_days_back_and_never_in_the_future()
+    {
+        var now = new DateTime(2026, 10, 9, 14, 30, 45, 500);
+
+        Assert.Equal(new DateTime(2026, 10, 9, 14, 30, 45), OccurrenceRules.Resolve(null, now));
+        Assert.Equal(new DateTime(2026, 9, 9, 14, 30, 45), OccurrenceRules.Resolve(new DateTime(2026, 9, 9), now));
+        Assert.Throws<BusinessRuleException>(() => OccurrenceRules.Resolve(new DateTime(2026, 9, 8), now));
+        Assert.Throws<BusinessRuleException>(() => OccurrenceRules.Resolve(new DateTime(2026, 10, 10), now));
     }
 }

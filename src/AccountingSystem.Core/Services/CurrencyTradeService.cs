@@ -5,9 +5,15 @@ using AccountingSystem.Core.Domain;
 
 namespace AccountingSystem.Core.Services;
 
-/// <summary>ثبت و ابطال معاملات خرید و فروش ارز (با کنترل موجودی و ایجاد سند حسابداری).</summary>
+/// <summary>
+/// ثبت، ابطال و ویرایش معاملات خرید و فروش ارز. هر تغییر کل تاریخچه‌ی شعبه را بازمحاسبه می‌کند.
+/// ثبت با تاریخ گذشته تا <see cref="OccurrenceRules.MaxBackdateDays"/> روز مجاز است. ابطال و ویرایش فقط برای مدیر است.
+/// </summary>
 public sealed class CurrencyTradeService
 {
+    /// <summary>دلیل ثبت شده برای معامله‌ای که نسخه‌ی اصلاحی آن جایگزین شده است.</summary>
+    public const string ReplacementReason = "ویرایش معامله؛ نسخه‌ی اصلاحی جایگزین شد";
+
     private readonly IAccountingRepository _repository;
 
     public CurrencyTradeService(IAccountingRepository repository)
@@ -15,44 +21,85 @@ public sealed class CurrencyTradeService
         _repository = repository;
     }
 
-    public async Task<long> BuyFromCustomerAsync(TradeInput input, CurrentUser user, DateTime now, CancellationToken ct = default)
-    {
-        var branchId = BranchScope.RequireBranch(user, input.BranchId);
-        var snapshot = await LoadSnapshotAsync(branchId, input.CurrencyCode, ct);
-        var posting = TradePlanner.PlanBuy(input, snapshot, user.Id, now);
-        return await SaveAsync(posting, ct);
-    }
+    public Task<long> BuyFromCustomerAsync(TradeInput input, CurrentUser user, DateTime now, CancellationToken ct = default) =>
+        RecordTradeAsync(input, TradeType.Buy, user, now, null, ct);
 
-    public async Task<long> SellToCustomerAsync(TradeInput input, CurrentUser user, DateTime now, CancellationToken ct = default)
+    public Task<long> SellToCustomerAsync(TradeInput input, CurrentUser user, DateTime now, CancellationToken ct = default) =>
+        RecordTradeAsync(input, TradeType.Sell, user, now, null, ct);
+
+    /// <summary>
+    /// ثبت معامله. occurredOn خالی یعنی همین لحظه؛ وگرنه معامله با آن تاریخ (تا 30 روز قبل) ثبت می‌شود.
+    /// </summary>
+    public async Task<long> RecordTradeAsync(TradeInput input, TradeType type, CurrentUser user, DateTime now, DateTime? occurredOn = null, CancellationToken ct = default)
     {
         var branchId = BranchScope.RequireBranch(user, input.BranchId);
-        var snapshot = await LoadSnapshotAsync(branchId, input.CurrencyCode, ct);
-        var posting = TradePlanner.PlanSell(input, snapshot, user.Id, now);
-        return await SaveAsync(posting, ct);
+        var scoped = input with { BranchId = branchId };
+        var currency = await LoadCurrencyAsync(scoped.CurrencyCode, ct);
+        var ledger = await _repository.GetBranchLedgerAsync(branchId, ct);
+        var occurredAt = OccurrenceRules.Resolve(occurredOn, now);
+        var posting = LedgerPlanner.PlanTrade(ledger, currency, scoped, type, user.Id, occurredAt, now);
+        var tradeId = await _repository.PostAsync(posting, ct);
+        return tradeId ?? throw new InvalidOperationException("شناسه‌ی معامله ایجاد نشد.");
     }
 
     /// <summary>
-    /// ابطال معامله (فقط مدیر). سند معکوس ثبت می‌شود و معامله‌ی اصلی به‌عنوان باطل‌شده علامت می‌خورد.
+    /// ابطال هر معامله‌ای (فقط مدیر). سند معکوس ثبت می‌شود و موجودی و بهای فروش‌های بعدی بازمحاسبه می‌شود.
+    /// اگر این کار باعث موجودی منفی شود، ابطال رد می‌شود.
     /// </summary>
-    public async Task<long> VoidTradeAsync(CurrentUser user, long tradeId, string reason, DateTime now, CancellationToken ct = default)
+    public async Task VoidTradeAsync(CurrentUser user, long tradeId, string reason, DateTime now, CancellationToken ct = default)
     {
         RoleGuard.RequireAdmin(user);
-        var context = await _repository.GetTradeForVoidAsync(tradeId, ct)
+        var trade = await _repository.GetTradeAsync(tradeId, ct)
             ?? throw new BusinessRuleException("معامله‌ی انتخابی یافت نشد.");
-        var posting = TradePlanner.PlanVoid(context, reason, user.Id, now);
-        return await SaveAsync(posting, ct);
+        var ledger = await _repository.GetBranchLedgerAsync(trade.BranchId, ct);
+        var posting = LedgerPlanner.PlanVoid(ledger, new DocRef(LedgerDocKind.Trade, tradeId), reason, user.Id, now);
+        await _repository.PostAsync(posting, ct);
     }
 
-    private async Task<TradeSnapshot> LoadSnapshotAsync(int branchId, string currencyCode, CancellationToken ct)
+    /// <summary>
+    /// ویرایش معامله (فقط مدیر). اگر فقط اطلاعات توصیفی (مشتری، کد ملی، یادداشت) تغییر کند، همان سند به‌روز می‌شود.
+    /// اگر نوع، ارز، مبلغ، نرخ، کارمزد یا تاریخ تغییر کند، معامله باطل و نسخه‌ی اصلاحی جایگزین آن می‌شود.
+    /// خروجی شناسه‌ی نسخه‌ی جدید است؛ null یعنی فقط اطلاعات توصیفی به‌روز شد.
+    /// </summary>
+    public async Task<long?> EditTradeAsync(CurrentUser user, long tradeId, TradeInput input, TradeType type, DateTime? occurredOn, DateTime now, CancellationToken ct = default)
+    {
+        RoleGuard.RequireAdmin(user);
+        var old = await _repository.GetTradeAsync(tradeId, ct)
+            ?? throw new BusinessRuleException("معامله‌ی انتخابی یافت نشد.");
+        if (old.IsVoided)
+        {
+            throw new BusinessRuleException("معامله‌ی باطل‌شده قابل ویرایش نیست.");
+        }
+
+        var currency = await LoadCurrencyAsync(input.CurrencyCode, ct);
+        var sameDay = occurredOn is null || occurredOn.Value.Date == old.OccurredAt.Date;
+        var occurredAt = sameDay ? old.OccurredAt : OccurrenceRules.Resolve(occurredOn, now);
+        var financialChanged = type != old.Type
+            || currency.Code != old.CurrencyCode
+            || input.Amount != old.Amount
+            || input.Rate != old.Rate
+            || input.FeeIrr != old.FeeIrr
+            || !sameDay;
+
+        if (!financialChanged)
+        {
+            var (customer, nationalCode, note) = TradePlanner.CleanDetails(input.CustomerName, input.NationalCode, input.Note);
+            await _repository.UpdateTradeDetailsAsync(tradeId, old.BranchId, customer, nationalCode, note, user.Id, now, ct);
+            return null;
+        }
+
+        var ledger = await _repository.GetBranchLedgerAsync(old.BranchId, ct);
+        var scoped = input with { BranchId = old.BranchId };
+        var posting = LedgerPlanner.PlanTrade(ledger, currency, scoped, type, user.Id, occurredAt, now,
+            new DocRef(LedgerDocKind.Trade, tradeId), ReplacementReason);
+        return await _repository.PostAsync(posting, ct);
+    }
+
+    private async Task<CurrencyInfo> LoadCurrencyAsync(string currencyCode, CancellationToken ct)
     {
         var code = (currencyCode ?? string.Empty).Trim().ToUpperInvariant();
-        var snapshot = await _repository.GetTradeSnapshotAsync(branchId, code, ct);
-        return snapshot ?? throw new BusinessRuleException("ارز یا شعبه‌ی انتخابی یافت نشد.");
-    }
-
-    private async Task<long> SaveAsync(PostingDraft posting, CancellationToken ct)
-    {
-        var tradeId = await _repository.PostAsync(posting, ct);
-        return tradeId ?? throw new InvalidOperationException("شناسه‌ی معامله ایجاد نشد.");
+        var currencies = await _repository.GetCurrenciesAsync(ct);
+        return currencies.FirstOrDefault(c => c.Code == code)
+            ?? throw new BusinessRuleException("ارز انتخابی یافت نشد.");
     }
 }

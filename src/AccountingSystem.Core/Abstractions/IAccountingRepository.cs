@@ -16,7 +16,15 @@ public interface IAccountingRepository
     /// <summary>ارز جدید را برای همه‌ی شعبه‌ها (صندوق و بهای تمام‌شده) و حساب دفتر کل ثبت می‌کند.</summary>
     Task AddCurrencyAsync(CurrencyInfo currency, int userId, DateTime now, CancellationToken ct = default);
 
+    Task<IReadOnlyList<AccountInfo>> GetAccountsAsync(CancellationToken ct = default);
+
     Task<TradeSnapshot?> GetTradeSnapshotAsync(int branchId, string currencyCode, CancellationToken ct = default);
+
+    /// <summary>
+    /// دفتر کامل یک شعبه: همه‌ی معاملات، افتتاحیه‌ها و سندهای دستی فعال به‌همراه نسخه‌ی دفتر.
+    /// نسخه قبل از خواندن داده‌ها خوانده می‌شود تا ثبت همزمان باعث پذیرفته شدن داده‌ی ناسازگار نشود.
+    /// </summary>
+    Task<BranchLedger> GetBranchLedgerAsync(int branchId, CancellationToken ct = default);
 
     /// <summary>آخرین نرخ هر ارز. branchId = null یعنی نرخ همه‌ی شعبه‌ها.</summary>
     Task<IReadOnlyList<RateInfo>> GetLatestRatesAsync(int? branchId, CancellationToken ct = default);
@@ -27,17 +35,30 @@ public interface IAccountingRepository
 
     Task<IReadOnlyList<InventoryInfo>> GetInventoryAsync(int? branchId, CancellationToken ct = default);
 
-    /// <summary>ثبت atomic تمام تغییرات. در صورت تغییر همزمان داده، ConcurrencyConflictException پرتاب می‌شود.</summary>
+    /// <summary>
+    /// ثبت atomic تمام تغییرات یک رویداد (ابطال، سند جدید، تعدیل‌ها، صندوق و موجودی).
+    /// اگر نسخه‌ی دفتر یا مقدار صندوق تغییر کرده باشد، ConcurrencyConflictException پرتاب می‌شود.
+    /// خروجی شناسه‌ی سند جدید (معامله، افتتاحیه یا سند دستی) است؛ برای ابطال null.
+    /// </summary>
     Task<long?> PostAsync(PostingDraft posting, CancellationToken ct = default);
+
+    /// <summary>
+    /// ویرایش اطلاعات توصیفی معامله (نام مشتری، کد ملی، یادداشت). این تغییر اثر مالی ندارد و بازمحاسبه نمی‌شود.
+    /// </summary>
+    Task UpdateTradeDetailsAsync(long tradeId, int branchId, string? customerName, string? nationalCode, string? note, int userId, DateTime now, CancellationToken ct = default);
 
     Task<IReadOnlyList<TradeInfo>> GetTradesAsync(int? branchId, DateTime fromInclusive, DateTime toExclusive, CancellationToken ct = default);
 
     Task<TradeInfo?> GetTradeAsync(long tradeId, CancellationToken ct = default);
 
-    /// <summary>اطلاعات ابطال یک معامله؛ null اگر معامله وجود نداشته باشد.</summary>
-    Task<VoidContext?> GetTradeForVoidAsync(long tradeId, CancellationToken ct = default);
+    Task<IReadOnlyList<OpeningInfo>> GetOpeningsAsync(int? branchId, DateTime fromInclusive, DateTime toExclusive, CancellationToken ct = default);
+
+    Task<OpeningInfo?> GetOpeningAsync(long openingId, CancellationToken ct = default);
 
     Task<IReadOnlyList<JournalEntryInfo>> GetJournalAsync(int? branchId, DateTime fromInclusive, DateTime toExclusive, CancellationToken ct = default);
+
+    /// <summary>یک سند حسابداری با سطرهایش؛ null اگر وجود نداشته باشد.</summary>
+    Task<JournalEntryInfo?> GetJournalEntryAsync(long entryId, CancellationToken ct = default);
 
     Task<int> CountUsersAsync(CancellationToken ct = default);
 

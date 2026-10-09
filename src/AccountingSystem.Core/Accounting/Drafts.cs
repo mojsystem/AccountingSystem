@@ -1,3 +1,4 @@
+using AccountingSystem.Core.Common;
 using AccountingSystem.Core.Domain;
 
 namespace AccountingSystem.Core.Accounting;
@@ -15,15 +16,10 @@ public sealed record TradeInput(
     string? Note,
     decimal FeeIrr = 0m);
 
-/// <summary>وضعیت فعلی صندوق و موجودی یک ارز در یک شعبه؛ مبنای محاسبه‌ی معامله.</summary>
+/// <summary>وضعیت فعلی صندوق و موجودی یک ارز در یک شعبه (برای نمایش و آزمون‌های ساده).</summary>
 public sealed record TradeSnapshot(int BranchId, CurrencyInfo Currency, decimal IrrBalance, decimal ForeignBalance, decimal ForeignCostIrr);
 
-/// <summary>
-/// اطلاعات لازم برای ابطال یک معامله: خود معامله، وضعیت فعلی صندوق و موجودی همان شعبه و ارز،
-/// و اینکه آیا این معامله آخرین حرکت فعال موجودی همان ارز در همان شعبه است.
-/// </summary>
-public sealed record VoidContext(TradeInfo Trade, TradeSnapshot Snapshot, bool IsLatestInPool);
-
+/// <summary>معامله‌ی آماده‌ی ذخیره. ReplacesId شناسه‌ی معامله‌ای است که این معامله جای آن را گرفته است.</summary>
 public sealed record TradeDraft(
     TradeType Type,
     string CurrencyCode,
@@ -37,34 +33,53 @@ public sealed record TradeDraft(
     string? NationalCode,
     string? Note,
     DateTime OccurredAt,
-    int UserId);
+    int UserId,
+    long? ReplacesId = null);
 
-/// <summary>ابطال یک معامله: شناسه‌ی معامله‌ی اصلی، ارز و دلیل ابطال.</summary>
-public sealed record VoidDraft(long TradeId, string CurrencyCode, string Reason);
+/// <summary>موجودی افتتاحیه‌ی آماده‌ی ذخیره.</summary>
+public sealed record OpeningDraft(
+    string CurrencyCode,
+    decimal Quantity,
+    decimal? RateIrr,
+    decimal CostIrr,
+    DateTime OccurredAt,
+    int UserId,
+    long? ReplacesId);
+
+/// <summary>
+/// ابطال یک سند: سند اصلی علامت باطل می‌خورد و سند معکوس با مجموع سطرهای فعال آن ثبت می‌شود.
+/// Description شرح سند معکوس است.
+/// </summary>
+public sealed record VoidDraft(DocRef Doc, string Reason, string Description, DateTime OccurredAt);
 
 public sealed record JournalLineDraft(string AccountCode, decimal Debit, decimal Credit);
 
-/// <summary>سند حسابداری؛ سازنده فقط سند متوازن و معتبر را می‌پذیرد.</summary>
+/// <summary>
+/// سند حسابداری آماده‌ی ذخیره؛ سازنده فقط سند متوازن و معتبر را می‌پذیرد.
+/// SourceType و Source مشخص می‌کنند سند از کدام نوع سند ساخته شده است. Source.Id = 0 یعنی سند جدید همین ثبت.
+/// </summary>
 public sealed class JournalDraft
 {
-    public JournalDraft(string description, DateTime occurredAt, IReadOnlyList<JournalLineDraft> lines)
+    public JournalDraft(string description, DateTime occurredAt, IReadOnlyList<JournalLineDraft> lines, string sourceType, DocRef source)
     {
         if (lines.Count < 2)
         {
-            throw new InvalidOperationException("سند حسابداری باید حداقل دو سطر داشته باشد.");
+            throw new BusinessRuleException("سند حسابداری باید حداقل دو سطر داشته باشد.");
         }
         if (lines.Any(l => l.Debit < 0 || l.Credit < 0 || (l.Debit == 0) == (l.Credit == 0)))
         {
-            throw new InvalidOperationException("هر سطر سند باید فقط بدهکار یا فقط بستانکار مثبت داشته باشد.");
+            throw new BusinessRuleException("هر سطر سند باید فقط بدهکار یا فقط بستانکار مثبت داشته باشد.");
         }
         if (lines.Sum(l => l.Debit) != lines.Sum(l => l.Credit))
         {
-            throw new InvalidOperationException("سند حسابداری متوازن نیست (جمع بدهکار با بستانکار برابر نیست).");
+            throw new BusinessRuleException("سند حسابداری متوازن نیست (جمع بدهکار با بستانکار برابر نیست).");
         }
 
         Description = description;
         OccurredAt = occurredAt;
         Lines = lines;
+        SourceType = sourceType;
+        Source = source;
     }
 
     public string Description { get; }
@@ -72,22 +87,50 @@ public sealed class JournalDraft
     public DateTime OccurredAt { get; }
 
     public IReadOnlyList<JournalLineDraft> Lines { get; }
+
+    public string SourceType { get; }
+
+    public DocRef Source { get; }
+
+    /// <summary>برای سند دستی: شناسه‌ی سندی که این سند جایگزین آن شده است.</summary>
+    public long? ReplacesId { get; init; }
 }
 
-/// <summary>تغییر موجودی صندوق. ExpectedBalance برای کنترل همزمانی (مقایسه قبل از به‌روزرسانی) استفاده می‌شود.</summary>
-public sealed record CashMovementDraft(string CurrencyCode, decimal ExpectedBalance, decimal Delta, string Description);
+/// <summary>
+/// تغییر موجودی صندوق یک ارز در این ثبت. ExpectedBalance مقدار قبل از ثبت است (کنترل همزمانی).
+/// Ref سندی است که این تغییر به آن تعلق دارد؛ برای ابطال، سند ابطال‌شده است.
+/// </summary>
+public sealed record CashMovementDraft(
+    string CurrencyCode,
+    decimal ExpectedBalance,
+    decimal Delta,
+    string Description,
+    DateTime OccurredAt,
+    string RefType,
+    DocRef Ref);
 
 /// <summary>تغییر بهای تمام‌شده‌ی موجودی ارز؛ ExpectedCostIrr برای کنترل همزمانی.</summary>
 public sealed record InventoryDraft(string CurrencyCode, decimal ExpectedCostIrr, decimal NewCostIrr);
 
-/// <summary>کل تغییرات یک رویداد مالی در یک شعبه که باید در یک تراکنش دیتابیس ذخیره شود.</summary>
+/// <summary>به‌روزرسانی بهای تمام‌شده و سود یک فروش موجود که در اثر بازمحاسبه تغییر کرده است.</summary>
+public sealed record TradeCostUpdate(long TradeId, decimal CostIrr, decimal ProfitIrr);
+
+/// <summary>
+/// کل تغییرات یک رویداد در یک شعبه که باید در یک تراکنش دیتابیس ذخیره شود.
+/// ExpectedVersion نسخه‌ی دفتر شعبه هنگام بارگذاری است. Entity سندی است که این ثبت درباره‌ی آن است.
+/// </summary>
 public sealed record PostingDraft(
-    string SourceType,
-    DateTime OccurredAt,
-    int UserId,
+    string Action,
     int BranchId,
-    TradeDraft? Trade,
+    int UserId,
+    DateTime Now,
+    long ExpectedVersion,
+    DocRef Entity,
     VoidDraft? Void,
-    JournalDraft Journal,
+    TradeDraft? Trade,
+    OpeningDraft? Opening,
+    IReadOnlyList<JournalDraft> Journals,
     IReadOnlyList<CashMovementDraft> CashMovements,
-    IReadOnlyList<InventoryDraft> Inventory);
+    IReadOnlyList<InventoryDraft> Inventory,
+    IReadOnlyList<TradeCostUpdate> CostUpdates,
+    string AuditDetails);
