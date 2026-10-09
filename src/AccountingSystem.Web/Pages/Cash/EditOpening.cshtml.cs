@@ -7,14 +7,16 @@ using Microsoft.AspNetCore.Mvc.RazorPages;
 
 namespace AccountingSystem.Web.Pages.Cash;
 
-/// <summary>ویرایش موجودی افتتاحیه (فقط مدیر). نسخه‌ی قبلی باطل و نسخه‌ی اصلاحی ثبت می‌شود.</summary>
+/// <summary>ویرایش موجودی افتتاحیه (مدیر یا دارنده‌ی دسترسی ویرایش در همان شعبه). نسخه‌ی قبلی باطل و نسخه‌ی اصلاحی ثبت می‌شود.</summary>
 public class EditOpeningModel : PageModel
 {
     private readonly CurrencyAdminService _admin;
+    private readonly PermissionService _permissions;
 
-    public EditOpeningModel(CurrencyAdminService admin)
+    public EditOpeningModel(CurrencyAdminService admin, PermissionService permissions)
     {
         _admin = admin;
+        _permissions = permissions;
     }
 
     [BindProperty]
@@ -27,6 +29,9 @@ public class EditOpeningModel : PageModel
     public string BranchName { get; private set; } = string.Empty;
 
     public bool IsVoided { get; private set; }
+
+    /// <summary>کاربر جاری اجازه‌ی ویرایش این موجودی را دارد (مدیر، یا دسترسی «ویرایش موجودی افتتاحیه» در همان شعبه).</summary>
+    public bool CanEdit { get; private set; }
 
     public bool IsIrr => CurrencyCode == CurrencyCodes.Irr;
 
@@ -42,6 +47,7 @@ public class EditOpeningModel : PageModel
         CurrencyCode = opening.CurrencyCode;
         BranchName = opening.BranchName;
         IsVoided = opening.IsVoided;
+        CanEdit = await _permissions.HasAsync(User.ToCurrentUser(), Permission.OpeningEdit, opening.BranchId, ct);
         Input = new OpeningEditForm
         {
             Quantity = opening.Quantity.ToString("0.####", CultureInfo.InvariantCulture),
@@ -98,6 +104,7 @@ public class EditOpeningModel : PageModel
         catch (Exception ex) when (ex is BusinessRuleException or ConcurrencyConflictException)
         {
             ModelState.AddModelError(string.Empty, ex.Message);
+            CanEdit = await _permissions.HasAsync(user, Permission.OpeningEdit, old.BranchId, ct);
             return Page();
         }
     }

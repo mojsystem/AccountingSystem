@@ -96,15 +96,21 @@
                     }
                 </td>
                 <td>
-                    @if (Model.IsAdmin && !o.IsVoided)
+                    @if (!o.IsVoided && (Model.CanEditOpenings || Model.CanVoidOpenings))
                     {
                         <div class="inline-form">
-                            <a class="link-button" asp-page="EditOpening" asp-route-id="@o.Id">ویرایش</a>
-                            <form method="post" asp-page-handler="VoidOpening" onsubmit="return confirm('این موجودی افتتاحیه باطل شود؟');">
-                                <input type="hidden" name="openingId" value="@o.Id" />
-                                <input name="voidReason" placeholder="دلیل ابطال" maxlength="200" required />
-                                <button type="submit" class="danger">ابطال</button>
-                            </form>
+                            @if (Model.CanEditOpenings)
+                            {
+                                <a class="link-button" asp-page="EditOpening" asp-route-id="@o.Id">ویرایش</a>
+                            }
+                            @if (Model.CanVoidOpenings)
+                            {
+                                <form method="post" asp-page-handler="VoidOpening" onsubmit="return confirm('این موجودی افتتاحیه باطل شود؟');">
+                                    <input type="hidden" name="openingId" value="@o.Id" />
+                                    <input name="voidReason" placeholder="دلیل ابطال" maxlength="200" required />
+                                    <button type="submit" class="danger">ابطال</button>
+                                </form>
+                            }
                         </div>
                     }
                 </td>

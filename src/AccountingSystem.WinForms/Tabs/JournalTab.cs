@@ -40,8 +40,9 @@ internal sealed class JournalTab : UserControl, IRefreshable
         });
         var isAdmin = user.Role == UserRole.Admin;
         _newManual.Visible = isAdmin;
-        _editManual.Visible = isAdmin;
-        _voidManual.Visible = isAdmin;
+        // ویرایش و ابطال سند دستی بر اساس دسترسی کاربر در RefreshAsync تنظیم می‌شود.
+        _editManual.Visible = false;
+        _voidManual.Visible = false;
 
         Controls.Add(_grid);
         Controls.Add(filters);
@@ -55,6 +56,10 @@ internal sealed class JournalTab : UserControl, IRefreshable
 
     public async Task RefreshAsync()
     {
+        var permissions = await _services.Permissions.GetPermissionsAsync(_user);
+        _editManual.Visible = permissions.Contains(Permission.ManualEdit);
+        _voidManual.Visible = permissions.Contains(Permission.ManualVoid);
+
         var branches = await _services.Branches.GetBranchesAsync();
         var previous = (_branch.SelectedItem as ComboItem)?.Value;
         UiHelpers.FillBranches(_branch, branches, _user, includeAll: true, selectedValue: previous);

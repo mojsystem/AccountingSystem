@@ -10,6 +10,10 @@
 {
     <div class="alert ok">@successMessage</div>
 }
+@if (TempData["Error"] is string errorMessage)
+{
+    <div class="alert error">@errorMessage</div>
+}
 <div asp-validation-summary="All" class="alert error"></div>
 
 <table>
@@ -37,6 +41,32 @@
         }
     </tbody>
 </table>
+
+<h2>دسترسی‌های ویرایش و ابطال</h2>
+<p class="hint">
+    مدیر به همه‌ی دسترسی‌ها دسترسی دارد. دسترسی‌های زیر فقط به کاربر صندوق داده می‌شود و فقط برای اسناد شعبه‌ی خودش معتبر است.
+    تغییر دسترسی همان لحظه اعمال می‌شود. ثبت موجودی افتتاحیه و سند دستی جدید فقط با مدیر است.
+</p>
+@foreach (var u in Model.UserList)
+{
+    @if (u.Role == UserRole.Cashier)
+    {
+        <form method="post" asp-page-handler="Permissions" class="panel">
+            <h3>@(u.FullName) (@(u.Username)) - @(u.BranchName ?? "بدون شعبه")@(u.IsActive ? "" : " - غیرفعال")</h3>
+            <input type="hidden" name="userId" value="@u.Id" />
+            <div class="form-grid">
+                @foreach (var permission in Model.AllPermissions)
+                {
+                    <label>
+                        <input type="checkbox" name="permissions" value="@PermissionCodes.ToCode(permission)" checked="@Model.HasPermission(u.Id, permission)" />
+                        @PermissionCodes.DisplayName(permission)
+                    </label>
+                }
+            </div>
+            <div><button type="submit">ذخیره‌ی دسترسی‌ها</button></div>
+        </form>
+    }
+}
 
 <h2>افزودن کاربر</h2>
 <form method="post" class="panel form-grid">

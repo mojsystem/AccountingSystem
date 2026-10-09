@@ -12,9 +12,9 @@
 {
     <div class="alert error">این معامله باطل شده است و قابل ویرایش نیست.</div>
 }
-else if (!Model.IsAdmin)
+else if (!Model.CanEdit)
 {
-    <div class="alert error">ویرایش معامله فقط برای مدیر سیستم مجاز است.</div>
+    <div class="alert error">برای ویرایش این معامله دسترسی لازم را ندارید. از مدیر سیستم بخواهید دسترسی «ویرایش معامله» را به حساب شما بدهد.</div>
 }
 else
 {

@@ -17,13 +17,15 @@ public class IndexModel : PageModel
     private readonly CurrencyAdminService _admin;
     private readonly ReportService _reports;
     private readonly BranchService _branches;
+    private readonly PermissionService _permissions;
 
-    public IndexModel(CurrencyTradeService trades, CurrencyAdminService admin, ReportService reports, BranchService branches)
+    public IndexModel(CurrencyTradeService trades, CurrencyAdminService admin, ReportService reports, BranchService branches, PermissionService permissions)
     {
         _trades = trades;
         _admin = admin;
         _reports = reports;
         _branches = branches;
+        _permissions = permissions;
     }
 
     [BindProperty]
@@ -47,6 +49,12 @@ public class IndexModel : PageModel
     public string RatesJson { get; private set; } = "{}";
 
     public bool IsAdmin { get; private set; }
+
+    /// <summary>دسترسی ویرایش معامله برای کاربر جاری (مدیر همه را دارد).</summary>
+    public bool CanEditTrades { get; private set; }
+
+    /// <summary>دسترسی ابطال معامله برای کاربر جاری (مدیر همه را دارد).</summary>
+    public bool CanVoidTrades { get; private set; }
 
     public string? RangeError { get; private set; }
 
@@ -134,6 +142,9 @@ public class IndexModel : PageModel
     {
         var user = User.ToCurrentUser();
         IsAdmin = user.Role == UserRole.Admin;
+        var permissions = await _permissions.GetPermissionsAsync(user, ct);
+        CanEditTrades = permissions.Contains(Permission.TradeEdit);
+        CanVoidTrades = permissions.Contains(Permission.TradeVoid);
 
         Currencies = (await _admin.GetCurrenciesAsync(ct))
             .Where(c => c.IsActive && c.Code != CurrencyCodes.Irr)

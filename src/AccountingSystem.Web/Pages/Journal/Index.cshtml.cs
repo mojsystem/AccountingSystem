@@ -15,12 +15,14 @@ public class IndexModel : PageModel
     private readonly ReportService _reports;
     private readonly BranchService _branches;
     private readonly ManualJournalService _manual;
+    private readonly PermissionService _permissions;
 
-    public IndexModel(ReportService reports, BranchService branches, ManualJournalService manual)
+    public IndexModel(ReportService reports, BranchService branches, ManualJournalService manual, PermissionService permissions)
     {
         _reports = reports;
         _branches = branches;
         _manual = manual;
+        _permissions = permissions;
     }
 
     [BindProperty]
@@ -115,12 +117,21 @@ public class IndexModel : PageModel
 
     public bool IsAdmin { get; private set; }
 
+    /// <summary>دسترسی ویرایش سند دستی برای کاربر جاری (مدیر همه را دارد).</summary>
+    public bool CanEditManual { get; private set; }
+
+    /// <summary>دسترسی ابطال سند دستی برای کاربر جاری (مدیر همه را دارد).</summary>
+    public bool CanVoidManual { get; private set; }
+
     public string? RangeError { get; private set; }
 
     public async Task OnGetAsync(CancellationToken ct)
     {
         var user = User.ToCurrentUser();
         IsAdmin = user.Role == UserRole.Admin;
+        var permissions = await _permissions.GetPermissionsAsync(user, ct);
+        CanEditManual = permissions.Contains(Permission.ManualEdit);
+        CanVoidManual = permissions.Contains(Permission.ManualVoid);
         Branches = await _branches.GetBranchesAsync(ct);
         if (IsAdmin)
         {

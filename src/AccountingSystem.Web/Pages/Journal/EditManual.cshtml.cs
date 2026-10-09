@@ -8,15 +8,17 @@ using Microsoft.AspNetCore.Mvc.RazorPages;
 namespace AccountingSystem.Web.Pages.Journal;
 
 /// <summary>
-/// ویرایش سند دستی (فقط مدیر). ویرایش با ابطال سند قبلی و ثبت نسخه‌ی اصلاحی انجام می‌شود.
+/// ویرایش سند دستی (مدیر، یا دارنده‌ی دسترسی ویرایش سند دستی در همان شعبه). ویرایش با ابطال سند قبلی و ثبت نسخه‌ی اصلاحی انجام می‌شود.
 /// </summary>
 public class EditManualModel : PageModel
 {
     private readonly ManualJournalService _manual;
+    private readonly PermissionService _permissions;
 
-    public EditManualModel(ManualJournalService manual)
+    public EditManualModel(ManualJournalService manual, PermissionService permissions)
     {
         _manual = manual;
+        _permissions = permissions;
     }
 
     [BindProperty]
@@ -29,6 +31,9 @@ public class EditManualModel : PageModel
     public string BranchName { get; private set; } = string.Empty;
 
     public bool IsVoided { get; private set; }
+
+    /// <summary>کاربر جاری اجازه‌ی ویرایش این سند را دارد (مدیر، یا دسترسی «ویرایش سند دستی» در همان شعبه).</summary>
+    public bool CanEdit { get; private set; }
 
     public IReadOnlyList<AccountInfo> Accounts { get; private set; } = Array.Empty<AccountInfo>();
 
@@ -45,6 +50,7 @@ public class EditManualModel : PageModel
         BranchId = entry.BranchId;
         BranchName = entry.BranchName;
         IsVoided = entry.IsVoided;
+        CanEdit = await _permissions.HasAsync(user, Permission.ManualEdit, entry.BranchId, ct);
         Input = new ManualForm
         {
             BranchId = entry.BranchId,
@@ -85,6 +91,7 @@ public class EditManualModel : PageModel
             IsVoided = entry?.IsVoided ?? false;
             BranchId = entry?.BranchId ?? 0;
             BranchName = entry?.BranchName ?? string.Empty;
+            CanEdit = entry is not null && await _permissions.HasAsync(user, Permission.ManualEdit, entry.BranchId, ct);
             return Page();
         }
     }

@@ -29,9 +29,9 @@ internal sealed class OpeningsTab : UserControl, IRefreshable
 
         var tools = UiHelpers.CreateInputPanel();
         tools.Controls.AddRange(new Control[] { _refresh, _edit, _void });
-        var isAdmin = user.Role == UserRole.Admin;
-        _edit.Visible = isAdmin;
-        _void.Visible = isAdmin;
+        // دسترسی‌ها در RefreshAsync از دیتابیس خوانده می‌شوند.
+        _edit.Visible = false;
+        _void.Visible = false;
 
         Controls.Add(_grid);
         Controls.Add(tools);
@@ -43,6 +43,10 @@ internal sealed class OpeningsTab : UserControl, IRefreshable
 
     public async Task RefreshAsync()
     {
+        var permissions = await _services.Permissions.GetPermissionsAsync(_user);
+        _edit.Visible = permissions.Contains(Permission.OpeningEdit);
+        _void.Visible = permissions.Contains(Permission.OpeningVoid);
+
         var today = DateTime.Today;
         _openings = await _services.Admin.GetOpeningsAsync(_user, null, today.AddDays(-90), today.AddDays(1));
         var rows = _openings.Select(o => new[]

@@ -51,6 +51,7 @@ builder.Services.AddScoped<ManualJournalService>();
 builder.Services.AddScoped<ReportService>();
 builder.Services.AddScoped<ReceiptService>();
 builder.Services.AddScoped<UserService>();
+builder.Services.AddScoped<PermissionService>();
 
 var app = builder.Build();
 

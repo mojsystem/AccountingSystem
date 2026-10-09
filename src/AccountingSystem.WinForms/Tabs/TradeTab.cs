@@ -78,8 +78,9 @@ internal sealed class TradeTab : UserControl, IRefreshable
             UiHelpers.MakeLabel("شعبه:"), _filterBranch,
             _show, _receipt, _void, _edit, _excel,
         });
-        _void.Visible = user.Role == UserRole.Admin;
-        _edit.Visible = user.Role == UserRole.Admin;
+        // دسترسی‌ها در RefreshAsync از دیتابیس خوانده می‌شوند.
+        _void.Visible = false;
+        _edit.Visible = false;
 
         Controls.Add(_grid);
         Controls.Add(filters);
@@ -103,6 +104,10 @@ internal sealed class TradeTab : UserControl, IRefreshable
 
     public async Task RefreshAsync()
     {
+        var permissions = await _services.Permissions.GetPermissionsAsync(_user);
+        _edit.Visible = permissions.Contains(Permission.TradeEdit);
+        _void.Visible = permissions.Contains(Permission.TradeVoid);
+
         var currencies = await _services.Admin.GetCurrenciesAsync();
         _rates = await _services.Admin.GetLatestRatesAsync(_user, null);
         _branches = await _services.Branches.GetBranchesAsync();

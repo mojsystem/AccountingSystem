@@ -9,18 +9,20 @@ using Microsoft.AspNetCore.Mvc.RazorPages;
 namespace AccountingSystem.Web.Pages.Trade;
 
 /// <summary>
-/// ویرایش معامله (فقط مدیر). تغییر اطلاعات توصیفی همان سند را به‌روز می‌کند؛
+/// ویرایش معامله (مدیر، یا کاربری که دسترسی «ویرایش معامله» را در شعبه‌ی خودش دارد). تغییر اطلاعات توصیفی همان سند را به‌روز می‌کند؛
 /// تغییر مالی، معامله‌ی قبلی را با سند ابطال باطل می‌کند و نسخه‌ی اصلاحی جایگزین آن می‌شود.
 /// </summary>
 public class EditModel : PageModel
 {
     private readonly CurrencyTradeService _trades;
     private readonly CurrencyAdminService _admin;
+    private readonly PermissionService _permissions;
 
-    public EditModel(CurrencyTradeService trades, CurrencyAdminService admin)
+    public EditModel(CurrencyTradeService trades, CurrencyAdminService admin, PermissionService permissions)
     {
         _trades = trades;
         _admin = admin;
+        _permissions = permissions;
     }
 
     [BindProperty]
@@ -30,7 +32,8 @@ public class EditModel : PageModel
 
     public bool IsVoided { get; private set; }
 
-    public bool IsAdmin { get; private set; }
+    /// <summary>کاربر جاری اجازه‌ی ویرایش این معامله را دارد (مدیر، یا دسترسی «ویرایش معامله» در همان شعبه).</summary>
+    public bool CanEdit { get; private set; }
 
     public IReadOnlyList<CurrencyInfo> Currencies { get; private set; } = Array.Empty<CurrencyInfo>();
 
@@ -45,7 +48,7 @@ public class EditModel : PageModel
 
         Id = trade.Id;
         IsVoided = trade.IsVoided;
-        IsAdmin = user.Role == UserRole.Admin;
+        CanEdit = await _permissions.HasAsync(user, Permission.TradeEdit, trade.BranchId, ct);
         Input = new TradeForm
         {
             TradeType = trade.Type == TradeType.Sell ? "SELL" : "BUY",
@@ -66,7 +69,6 @@ public class EditModel : PageModel
     public async Task<IActionResult> OnPostAsync(long id, CancellationToken ct)
     {
         var user = User.ToCurrentUser();
-        IsAdmin = user.Role == UserRole.Admin;
         Id = id;
 
         if (!InputParser.TryParseDecimal(Input.Amount, out var amount))
@@ -111,8 +113,10 @@ public class EditModel : PageModel
     private async Task<IActionResult> ShowErrorAsync(string message, long id, CancellationToken ct)
     {
         ModelState.AddModelError(string.Empty, message);
-        var trade = await _trades.GetTradeAsync(User.ToCurrentUser(), id, ct);
+        var user = User.ToCurrentUser();
+        var trade = await _trades.GetTradeAsync(user, id, ct);
         IsVoided = trade?.IsVoided ?? false;
+        CanEdit = trade is not null && await _permissions.HasAsync(user, Permission.TradeEdit, trade.BranchId, ct);
         Currencies = await LoadCurrenciesAsync(ct);
         return Page();
     }

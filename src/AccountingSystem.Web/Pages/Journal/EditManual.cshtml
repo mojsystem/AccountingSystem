@@ -12,6 +12,10 @@
 {
     <div class="alert error">این سند باطل شده است و قابل ویرایش نیست.</div>
 }
+else if (!Model.CanEdit)
+{
+    <div class="alert error">برای ویرایش این سند دسترسی لازم را ندارید. از مدیر سیستم بخواهید دسترسی «ویرایش سند دستی» را به حساب شما بدهد.</div>
+}
 else
 {
     <form method="post" class="panel" asp-route-id="@Model.Id">

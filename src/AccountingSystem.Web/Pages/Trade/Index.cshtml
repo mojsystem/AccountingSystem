@@ -131,9 +131,12 @@
                 <td>
                     <div class="inline-form">
                         <a class="link-button" href="/Trade/Receipt/@t.Id" target="_blank" rel="noopener">رسید</a>
-                        @if (Model.IsAdmin && !t.IsVoided)
+                        @if (Model.CanEditTrades && !t.IsVoided)
                         {
                             <a class="link-button" asp-page="Edit" asp-route-id="@t.Id">ویرایش</a>
+                        }
+                        @if (Model.CanVoidTrades && !t.IsVoided)
+                        {
                             <form method="post" asp-page-handler="Void" asp-route-from="@Model.From" asp-route-to="@Model.To" asp-route-branchFilter="@Model.BranchFilter"
                                   onsubmit="return confirm('این معامله باطل شود؟ سند معکوس ثبت خواهد شد.');">
                                 <input type="hidden" name="voidTradeId" value="@t.Id" />

@@ -13,11 +13,13 @@ public class IndexModel : PageModel
 
     private readonly CurrencyAdminService _admin;
     private readonly BranchService _branches;
+    private readonly PermissionService _permissions;
 
-    public IndexModel(CurrencyAdminService admin, BranchService branches)
+    public IndexModel(CurrencyAdminService admin, BranchService branches, PermissionService permissions)
     {
         _admin = admin;
         _branches = branches;
+        _permissions = permissions;
     }
 
     [BindProperty]
@@ -37,9 +39,15 @@ public class IndexModel : PageModel
 
     public bool IsAdmin { get; private set; }
 
+    /// <summary>دسترسی ویرایش موجودی افتتاحیه برای کاربر جاری (مدیر همه را دارد).</summary>
+    public bool CanEditOpenings { get; private set; }
+
+    /// <summary>دسترسی ابطال موجودی افتتاحیه برای کاربر جاری (مدیر همه را دارد).</summary>
+    public bool CanVoidOpenings { get; private set; }
+
     public IReadOnlyList<OpeningInfo> Openings { get; private set; } = Array.Empty<OpeningInfo>();
 
-    /// <summary>ابطال موجودی افتتاحیه (فقط مدیر). اگر معاملات بعدی به آن وابسته باشند، ابطال رد می‌شود.</summary>
+    /// <summary>ابطال موجودی افتتاحیه (مدیر یا دارنده‌ی دسترسی ابطال در همان شعبه). اگر معاملات بعدی به آن وابسته باشند، ابطال رد می‌شود.</summary>
     public async Task<IActionResult> OnPostVoidOpeningAsync(long openingId, string? voidReason, CancellationToken ct)
     {
         try
@@ -136,6 +144,9 @@ public class IndexModel : PageModel
         Openings = await LoadOpeningsAsync(ct);
         var user = User.ToCurrentUser();
         IsAdmin = user.Role == UserRole.Admin;
+        var permissions = await _permissions.GetPermissionsAsync(user, ct);
+        CanEditOpenings = permissions.Contains(Permission.OpeningEdit);
+        CanVoidOpenings = permissions.Contains(Permission.OpeningVoid);
         Boxes = await _admin.GetCashBoxesAsync(user, user.ScopeFor(BranchFilter), ct);
         Branches = await _branches.GetBranchesAsync(ct);
         var all = await _admin.GetCurrenciesAsync(ct);

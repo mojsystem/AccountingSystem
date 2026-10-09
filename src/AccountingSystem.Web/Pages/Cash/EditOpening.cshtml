@@ -12,6 +12,10 @@
 {
     <div class="alert error">این موجودی افتتاحیه باطل شده است و قابل ویرایش نیست.</div>
 }
+else if (!Model.CanEdit)
+{
+    <div class="alert error">برای ویرایش این موجودی افتتاحیه دسترسی لازم را ندارید. از مدیر سیستم بخواهید دسترسی «ویرایش موجودی افتتاحیه» را به حساب شما بدهد.</div>
+}
 else
 {
     <form method="post" class="panel form-grid" asp-route-id="@Model.Id">
