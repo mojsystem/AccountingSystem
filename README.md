@@ -66,6 +66,20 @@ sqlcmd -S localhost -E -f 65001 -i database\AccountingSystem.sql
 - `src/AccountingSystem.Web/appsettings.json` ← بخش `ConnectionStrings:AccountingSystem`
 - `src/AccountingSystem.WinForms/appsettings.json` ← همین بخش
 
+اگر SQL Server با نمونه‌ی پیش‌فرض نصب شده، همین کافی است:
+
+```json
+"AccountingSystem": "Server=localhost;Database=AccountingSystem;Trusted_Connection=True;TrustServerCertificate=True;"
+```
+
+**مهم:** در JSON بک‌اسلش (`\`) کاراکتر escape است. اگر نمونه‌ی نام‌دار دارید، هر بک‌اسلش را **دو بار** بنویسید:
+
+```json
+"AccountingSystem": "Server=localhost\\MSSQLSERVER;Database=AccountingSystem;Trusted_Connection=True;TrustServerCertificate=True;"
+```
+
+نوشتن `localhost\MSSQLSERVER` با یک بک‌اسلش باعث خطای `is an invalid escapable character` در راه‌اندازی نسخه‌ی ویندوز می‌شود. به جای `MSSQLSERVER` نام نمونه‌ی خودتان را بگذارید.
+
 ### ۳. اجرای نسخه‌ی وب
 
 برای توسعه و اجرای محلی:
