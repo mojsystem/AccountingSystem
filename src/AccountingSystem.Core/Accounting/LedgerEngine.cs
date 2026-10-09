@@ -51,7 +51,8 @@ public sealed record LedgerEvent(
     decimal FeeIrr,
     decimal IrrDelta,
     decimal StoredCostIrr,
-    decimal StoredProfitIrr)
+    decimal StoredProfitIrr,
+    int? SettlementLineNumber = null)
 {
     public DocRef Doc => new(DocKind, DocId);
 }
@@ -104,11 +105,13 @@ public sealed class LedgerState
     internal LedgerState(
         decimal irrBalance,
         IReadOnlyDictionary<string, PoolBalance> pools,
-        IReadOnlyDictionary<DocRef, DisposalResult> disposals)
+        IReadOnlyDictionary<DocRef, DisposalResult> disposals,
+        IReadOnlyDictionary<(DocRef Doc, int LineNumber), DisposalResult> settlementDisposals)
     {
         IrrBalance = irrBalance;
         Pools = pools;
         Disposals = disposals;
+        SettlementDisposals = settlementDisposals;
     }
 
     public decimal IrrBalance { get; }
@@ -117,6 +120,9 @@ public sealed class LedgerState
 
     /// <summary>بهای تمام‌شده و سود هر فروش، با کلید سند فروش.</summary>
     public IReadOnlyDictionary<DocRef, DisposalResult> Disposals { get; }
+
+    /// <summary>بهای خروج ارزهای پرداختی در سطرهای تسویه‌ی معامله.</summary>
+    public IReadOnlyDictionary<(DocRef Doc, int LineNumber), DisposalResult> SettlementDisposals { get; }
 
     public PoolBalance Pool(string currencyCode) =>
         Pools.TryGetValue(currencyCode, out var pool) ? pool : default;
@@ -135,6 +141,7 @@ public static class LedgerEngine
         var irr = 0m;
         var pools = new Dictionary<string, PoolBalance>(StringComparer.Ordinal);
         var disposals = new Dictionary<DocRef, DisposalResult>();
+        var settlementDisposals = new Dictionary<(DocRef Doc, int LineNumber), DisposalResult>();
 
         foreach (var e in ordered)
         {
@@ -160,7 +167,15 @@ public static class LedgerEngine
                         ? pool.CostIrr
                         : MoneyMath.RoundIrr(pool.CostIrr * e.Quantity / pool.Quantity);
                     pools[e.CurrencyCode] = new PoolBalance(pool.Quantity - e.Quantity, pool.CostIrr - cost);
-                    disposals[e.Doc] = new DisposalResult(cost, e.ValueIrr - cost);
+                    var disposal = new DisposalResult(cost, e.ValueIrr - cost);
+                    if (e.SettlementLineNumber is { } lineNumber)
+                    {
+                        settlementDisposals[(e.Doc, lineNumber)] = disposal;
+                    }
+                    else
+                    {
+                        disposals[e.Doc] = disposal;
+                    }
                     break;
                 }
             }
@@ -172,7 +187,7 @@ public static class LedgerEngine
             }
         }
 
-        return new LedgerState(irr, pools, disposals);
+        return new LedgerState(irr, pools, disposals, settlementDisposals);
     }
 
     private static PoolBalance GetPool(Dictionary<string, PoolBalance> pools, string code) =>

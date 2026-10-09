@@ -7,6 +7,28 @@ public enum TradeType
     Sell,
 }
 
+/// <summary>روش تسویه‌ی معامله: جفت‌ارز، چند دریافت/پرداخت، یا ثبت روی حساب مشتری.</summary>
+public enum TradeSettlementMode
+{
+    Direct,
+    Split,
+    CustomerAccount,
+}
+
+/// <summary>روش تعیین نرخ جفت‌ارز.</summary>
+public enum TradeRateMode
+{
+    Direct,
+    Derived,
+}
+
+/// <summary>سمت یک سطر تسویه از دید صرافی.</summary>
+public enum TradeSettlementDirection
+{
+    Payment,
+    Receipt,
+}
+
 /// <summary>Admin: دسترسی کامل به همه‌ی شعبه‌ها. Cashier: ثبت معاملات و نرخ‌ها در شعبه‌ی خودش.</summary>
 public enum UserRole
 {
@@ -26,6 +48,8 @@ public static class AccountCodes
     public const string FxProfit = "4001";
     public const string FxLoss = "5001";
     public const string FeeIncome = "4101";
+    public const string CustomerReceivable = "1201";
+    public const string CustomerPayable = "2101";
 
     public static string ForeignCash(string currencyCode) => "1101-" + currencyCode;
 }
@@ -97,7 +121,63 @@ public sealed record TradeInfo(
     DateTime? VoidedAt,
     string? VoidedBy,
     string? VoidReason,
-    int CustomerId);
+    int CustomerId,
+    TradeSettlementMode SettlementMode = TradeSettlementMode.Direct,
+    TradeRateMode RateMode = TradeRateMode.Derived,
+    decimal CrossRate = 0m,
+    decimal CustomerOffsetIrr = 0m,
+    IReadOnlyList<TradeSettlementInfo>? Settlements = null,
+    string? SettlementCurrencyCode = null);
+
+/// <summary>دریافت یا پرداخت ثبت‌شده برای معامله، به‌همراه ارزش ریالی و بهای خروجی صندوق.</summary>
+public sealed record TradeSettlementInfo(
+    int LineNumber,
+    TradeSettlementDirection Direction,
+    string CurrencyCode,
+    decimal Amount,
+    decimal RateIrr,
+    decimal IrrAmount,
+    decimal CostIrr,
+    decimal ProfitIrr);
+
+/// <summary>مانده‌ی تفصیلی حساب مشتری در یک شعبه، به ریال.</summary>
+public sealed record CustomerAccountBalance(int BranchId, int CustomerId, decimal ReceivableIrr, decimal PayableIrr);
+
+/// <summary>مانده‌ی خالص هر شخص در گزارش معین؛ مثبت یعنی بدهکار و منفی یعنی بستانکار.</summary>
+public sealed record CustomerBalanceReportRow(int CustomerId, string CustomerCode, string FullName, decimal BalanceIrr)
+{
+    public decimal DebitBalanceIrr => Math.Max(0m, BalanceIrr);
+
+    public decimal CreditBalanceIrr => Math.Max(0m, -BalanceIrr);
+
+    public string BalanceSide => BalanceIrr > 0m ? "بدهکار" : BalanceIrr < 0m ? "بستانکار" : "تسویه";
+}
+
+/// <summary>یک گردش حساب تفصیلی شخص از روی سطرهای واقعی دفتر روزنامه.</summary>
+public sealed record CustomerLedgerLineInfo(
+    long JournalEntryId,
+    long? SourceId,
+    DateTime OccurredAt,
+    int BranchId,
+    string BranchName,
+    string SourceType,
+    string Description,
+    int LineNo,
+    string AccountCode,
+    decimal Debit,
+    decimal Credit,
+    bool IsVoided,
+    decimal BalanceIrr);
+
+/// <summary>داده‌ی خام گردش شخص شامل مانده‌ی ابتدای دوره و ریز گردش‌های دوره.</summary>
+public sealed record CustomerLedgerData(decimal OpeningBalanceIrr, IReadOnlyList<CustomerLedgerLineInfo> Lines);
+
+/// <summary>گزارش کامل معین شخص؛ مانده‌ی پایانی بر پایه‌ی همه‌ی سطرهای دفتر در بازه است.</summary>
+public sealed record CustomerLedgerReport(
+    CustomerInfo Customer,
+    decimal OpeningBalanceIrr,
+    IReadOnlyList<CustomerLedgerLineInfo> Lines,
+    decimal ClosingBalanceIrr);
 
 public sealed record JournalLineInfo(int LineNo, string AccountCode, string AccountName, decimal Debit, decimal Credit);
 

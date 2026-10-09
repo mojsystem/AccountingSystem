@@ -20,9 +20,8 @@ else
 {
     <form method="post" class="panel" asp-route-id="@Model.Id">
         <p class="hint">
-            اگر فقط نام مشتری، کد ملی یا توضیحات را تغییر دهید، همین سند به‌روز می‌شود.
-            اگر مبلغ، نرخ، کارمزد، ارز، نوع یا تاریخ را تغییر دهید، معامله‌ی فعلی با سند ابطال باطل و نسخه‌ی اصلاحی ثبت می‌شود؛
-            بهای تمام‌شده‌ی معاملات بعدی همان ارز بازمحاسبه شده و تفاوت آن با سند تعدیل ثبت می‌شود.
+            تغییر توضیحات به‌تنهایی فقط اطلاعات نمایشی را به‌روز می‌کند. تغییر مالی با سند ابطال و نسخه‌ی اصلاحی ثبت می‌شود؛
+            بهای معاملات بعدی نیز بازمحاسبه خواهد شد. روش تسویه، ریز دریافت/پرداخت، نرخ جفت‌ارز و تهاتر را می‌توانید همین‌جا ویرایش کنید.
         </p>
         <div class="radio-row">
             <label><input type="radio" name="Input.TradeType" value="BUY" checked="@(Model.Input.TradeType != "SELL")" /> خرید ارز از مشتری</label>
@@ -31,7 +30,7 @@ else
         <input type="hidden" name="Input.BranchId" value="@Model.Input.BranchId" />
         <div class="form-grid">
             <label>ارز
-                <select name="Input.CurrencyCode">
+                <select id="currency" name="Input.CurrencyCode">
                     @foreach (var c in Model.Currencies)
                     {
                         <option value="@c.Code" selected="@(c.Code == Model.Input.CurrencyCode)">@c.Code - @c.Name</option>
@@ -39,7 +38,31 @@ else
                 </select>
             </label>
             <label>مقدار ارز<input name="Input.Amount" value="@Model.Input.Amount" dir="ltr" inputmode="decimal" /></label>
-            <label>نرخ (ریال به ازای یک واحد)<input name="Input.Rate" value="@Model.Input.Rate" dir="ltr" inputmode="decimal" /></label>
+            <label>نرخ پایه (ریال به ازای یک واحد)<input id="rate" name="Input.Rate" value="@Model.Input.Rate" dir="ltr" inputmode="decimal" /></label>
+            <label>روش تسویه
+                <select id="settlementMode" name="Input.SettlementMode">
+                    <option value="DIRECT" selected="@(Model.Input.SettlementMode == "DIRECT")">تبادل مستقیم دو ارز</option>
+                    <option value="SPLIT" selected="@(Model.Input.SettlementMode == "SPLIT")">چندبخشی (چند دریافت/پرداخت)</option>
+                    <option value="ACCOUNT" selected="@(Model.Input.SettlementMode == "ACCOUNT")">ثبت روی حساب مشتری</option>
+                </select>
+            </label>
+            <label id="counterCurrencyField">ارز مقابل
+                <select id="settlementCurrency" name="Input.SettlementCurrencyCode">
+                    @foreach (var c in Model.SettlementCurrencies)
+                    {
+                        <option value="@c.Code" selected="@(c.Code == Model.Input.SettlementCurrencyCode)">@c.Code - @c.Name</option>
+                    }
+                </select>
+            </label>
+            <label id="rateModeField">روش نرخ جفت‌ارز
+                <select id="rateMode" name="Input.RateMode">
+                    <option value="DERIVED" selected="@(Model.Input.RateMode == "DERIVED")">محاسبه از نرخ‌های ریالی روز</option>
+                    <option value="DIRECT" selected="@(Model.Input.RateMode == "DIRECT")">نرخ مستقیم جفت‌ارز</option>
+                </select>
+            </label>
+            <label id="crossRateField">نرخ جفت‌ارز (واحد ارز مقابل به ازای هر واحد)
+                <input id="crossRate" name="Input.CrossRate" value="@Model.Input.CrossRate" dir="ltr" inputmode="decimal" />
+            </label>
             <label>کارمزد (ریال)<input name="Input.Fee" value="@Model.Input.Fee" dir="ltr" inputmode="numeric" /></label>
             <label>تاریخ معامله (شمسی)<input name="Input.OccurredOn" value="@Model.Input.OccurredOn" dir="ltr" /></label>
             <label>مشتری
@@ -53,7 +76,114 @@ else
                 <a class="link small" asp-page="/Customers/Index">مشتری تازه</a>
             </label>
             <label>توضیحات<input name="Input.Note" value="@Model.Input.Note" /></label>
+            <label class="check">تهاتر مانده‌ی قبلی مشتری
+                <input type="checkbox" name="Input.ApplyCustomerOffset" value="true" checked="@(Model.Input.ApplyCustomerOffset)" />
+            </label>
         </div>
+        <section id="splitPanel" class="settlement-panel" hidden>
+            <h3>ریز دریافت/پرداخت</h3>
+            <div id="settlementLines">
+                @for (var i = 0; i < Model.Input.SettlementLines.Count; i++)
+                {
+                    <div class="settlement-line">
+                        <label>ارز
+                            <select name="Input.SettlementLines[@i].CurrencyCode">
+                                <option value="">-- انتخاب ارز --</option>
+                                @foreach (var c in Model.SettlementCurrencies)
+                                {
+                                    <option value="@c.Code" selected="@(c.Code == Model.Input.SettlementLines[i].CurrencyCode)">@c.Code - @c.Name</option>
+                                }
+                            </select>
+                        </label>
+                        <label>مقدار دریافتی/پرداختی
+                            <input name="Input.SettlementLines[@i].Amount" value="@Model.Input.SettlementLines[i].Amount" dir="ltr" inputmode="decimal" />
+                        </label>
+                    </div>
+                }
+            </div>
+            <template id="settlementLineTemplate">
+                <div class="settlement-line">
+                    <label>ارز
+                        <select name="Input.SettlementLines[0].CurrencyCode">
+                            <option value="">-- انتخاب ارز --</option>
+                            @foreach (var c in Model.SettlementCurrencies)
+                            {
+                                <option value="@c.Code">@c.Code - @c.Name</option>
+                            }
+                        </select>
+                    </label>
+                    <label>مقدار دریافتی/پرداختی
+                        <input name="Input.SettlementLines[0].Amount" dir="ltr" inputmode="decimal" />
+                    </label>
+                </div>
+            </template>
+            <button type="button" class="secondary" id="addSettlementLine">افزودن سطر</button>
+            <p class="hint">ارزش هر سطر بر اساس نرخ ریالی همان ارز محاسبه می‌شود؛ مانده‌ی باقی‌مانده روی حساب مشتری می‌ماند.</p>
+        </section>
+        <p class="hint">تهاتر فقط با مانده‌ی دریافتنی/پرداختنی همین مشتری و همین شعبه انجام می‌شود. نرخ پایه در حالت نرخ مستقیم برای ارزش‌گذاری ذخیره نمی‌شود؛ مبنا نرخ جفت‌ارز و نرخ روز ارز مقابل است.</p>
         <p><button type="submit">ذخیره‌ی ویرایش</button> <a href="/Trade">بازگشت</a></p>
     </form>
 }
+
+<script>
+(function () {
+    var rates = @Html.Raw(Model.RatesJson);
+    var currency = document.getElementById('currency');
+    if (!currency) { return; }
+    var rate = document.getElementById('rate');
+    var settlementCurrency = document.getElementById('settlementCurrency');
+    var settlementMode = document.getElementById('settlementMode');
+    var rateMode = document.getElementById('rateMode');
+    var crossRate = document.getElementById('crossRate');
+    var branchId = '@Model.Input.BranchId';
+    var splitPanel = document.getElementById('splitPanel');
+    var counterCurrencyField = document.getElementById('counterCurrencyField');
+    var rateModeField = document.getElementById('rateModeField');
+    var crossRateField = document.getElementById('crossRateField');
+    var rows = document.getElementById('settlementLines');
+    var template = document.getElementById('settlementLineTemplate');
+    var addLine = document.getElementById('addSettlementLine');
+    var radios = document.querySelectorAll('input[name="Input.TradeType"]');
+
+    function selectedRate(code, isCounter, isSell) {
+        if (code === 'IRR') { return 1; }
+        var list = rates[branchId] || [];
+        var item = list.find(function (r) { return r.code === code; });
+        if (!item) { return null; }
+        return isCounter ? (isSell ? item.buy : item.sell) : (isSell ? item.sell : item.buy);
+    }
+
+    function fillRate() {
+        var isSell = document.querySelector('input[name="Input.TradeType"][value="SELL"]').checked;
+        var baseRate = selectedRate(currency.value, false, isSell);
+        if (baseRate !== null) { rate.value = baseRate; }
+        if (settlementMode.value === 'DIRECT' && rateMode.value === 'DERIVED') {
+            var counterRate = selectedRate(settlementCurrency.value, true, isSell);
+            crossRate.value = baseRate !== null && counterRate ? (baseRate / counterRate).toPrecision(10).replace(/0+$/, '').replace(/\.$/, '') : '';
+        }
+    }
+
+    function updateMode() {
+        var direct = settlementMode.value === 'DIRECT';
+        splitPanel.hidden = settlementMode.value !== 'SPLIT';
+        counterCurrencyField.hidden = !direct;
+        rateModeField.hidden = !direct;
+        crossRateField.hidden = !direct;
+        crossRate.readOnly = direct && rateMode.value === 'DERIVED';
+    }
+
+    currency.addEventListener('change', fillRate);
+    settlementCurrency.addEventListener('change', fillRate);
+    radios.forEach(function (radio) { radio.addEventListener('change', fillRate); });
+    settlementMode.addEventListener('change', updateMode);
+    rateMode.addEventListener('change', function () { updateMode(); fillRate(); });
+    addLine.addEventListener('click', function () {
+        if (rows.querySelectorAll('.settlement-line').length >= 100) { return; }
+        var row = template.content.firstElementChild.cloneNode(true);
+        var index = rows.querySelectorAll('.settlement-line').length;
+        row.querySelectorAll('[name]').forEach(function (input) { input.name = input.name.replace('[0]', '[' + index + ']'); });
+        rows.appendChild(row);
+    });
+    updateMode();
+})();
+</script>

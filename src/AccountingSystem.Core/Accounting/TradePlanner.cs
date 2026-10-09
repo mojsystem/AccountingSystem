@@ -47,6 +47,22 @@ public static class TradePlanner
         }
     }
 
+    public static void ValidateCrossRate(decimal rate)
+    {
+        if (rate <= 0)
+        {
+            throw new BusinessRuleException("نرخ مستقیم جفت‌ارز باید بزرگ‌تر از صفر باشد.");
+        }
+        if (rate != MoneyMath.RoundTo(rate, 8))
+        {
+            throw new BusinessRuleException("نرخ مستقیم جفت‌ارز نمی‌تواند بیش از ۸ رقم اعشار داشته باشد.");
+        }
+        if (rate > 99_999_999_999.99999999m)
+        {
+            throw new BusinessRuleException("نرخ مستقیم جفت‌ارز از محدوده‌ی قابل ثبت بیشتر است.");
+        }
+    }
+
     /// <summary>اطلاعات توصیفی معامله: مقدار خالی null می‌شود و طول آن با ستون‌های دیتابیس بررسی می‌شود.</summary>
     public static (string? CustomerName, string? NationalCode, string? Note) CleanDetails(string? customerName, string? nationalCode, string? note) =>
         (CleanText(customerName, 100, "نام مشتری"), CleanText(nationalCode, 20, "کد ملی"), CleanText(note, 250, "یادداشت"));

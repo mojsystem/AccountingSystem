@@ -64,6 +64,41 @@ public class ExportAndReceiptTests
     }
 
     [Fact]
+    public void Customer_balance_and_ledger_workbooks_include_debit_credit_and_opening_balance()
+    {
+        var balances = new[]
+        {
+            new CustomerBalanceReportRow(7, "C000007", "مشتری نمونه", 250_000m),
+            new CustomerBalanceReportRow(8, "C000008", "مشتری بستانکار", -75_000m),
+        };
+        var balanceBytes = WorkbookBuilder.CustomerBalances(balances);
+        using (var archive = new ZipArchive(new MemoryStream(balanceBytes), ZipArchiveMode.Read))
+        using (var sheetStream = archive.GetEntry("xl/worksheets/sheet1.xml")!.Open())
+        {
+            XNamespace ns = "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
+            var rows = XDocument.Load(sheetStream).Descendants(ns + "row").ToList();
+            Assert.Equal(3, rows.Count);
+            Assert.Contains(rows[1].Descendants(ns + "v"), v => v.Value == "250000");
+            Assert.Contains(rows[2].Descendants(ns + "v"), v => v.Value == "75000");
+        }
+
+        var customer = new CustomerInfo(7, "C000007", "مشتری نمونه", null, null, null, null, null, null, null, null, null, null, Occurred);
+        var ledger = new CustomerLedgerReport(customer, 100_000m, new[]
+        {
+            new CustomerLedgerLineInfo(55, 21, Occurred, 1, "مرکزی", SourceTypes.Trade, "فروش ارز", 1,
+                AccountCodes.CustomerReceivable, 50_000m, 0m, false, 150_000m),
+        }, 150_000m);
+        var ledgerBytes = WorkbookBuilder.CustomerLedger(ledger);
+        using var ledgerArchive = new ZipArchive(new MemoryStream(ledgerBytes), ZipArchiveMode.Read);
+        using var ledgerSheetStream = ledgerArchive.GetEntry("xl/worksheets/sheet1.xml")!.Open();
+        XNamespace ledgerNs = "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
+        var ledgerRows = XDocument.Load(ledgerSheetStream).Descendants(ledgerNs + "row").ToList();
+        Assert.Equal(4, ledgerRows.Count);
+        Assert.Contains(ledgerRows[2].Descendants(ledgerNs + "v"), v => v.Value == "100000");
+        Assert.Contains(ledgerRows[3].Descendants(ledgerNs + "v"), v => v.Value == "150000");
+    }
+
+    [Fact]
     public void Workbook_builder_rejects_an_empty_sheet_list()
     {
         Assert.Throws<ArgumentException>(() => XlsxWriter.Build(Array.Empty<WorkbookSheet>()));

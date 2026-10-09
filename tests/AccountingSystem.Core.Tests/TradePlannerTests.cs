@@ -182,6 +182,146 @@ public class TradePlannerTests
         Assert.Throws<BusinessRuleException>(() => TradePlanner.PlanBuy(input, snapshot, 1, Now));
     }
 
+    private static BranchLedger MultiCurrencyLedger(
+        decimal irrBalance,
+        params (string Code, decimal Quantity, decimal CostIrr)[] stocks)
+    {
+        var events = new List<LedgerEvent>
+        {
+            new(LedgerDocKind.Opening, -100, LedgerEventKind.CashOnly, CurrencyCodes.Irr,
+                DateTime.MinValue, long.MinValue, 0m, 0m, 0m, irrBalance, 0m, 0m),
+        };
+        var pools = new Dictionary<string, PoolBalance>(StringComparer.Ordinal);
+        for (var i = 0; i < stocks.Length; i++)
+        {
+            var (code, quantity, cost) = stocks[i];
+            pools.Add(code, new PoolBalance(quantity, cost));
+            if (quantity != 0m || cost != 0m)
+            {
+                events.Add(new LedgerEvent(LedgerDocKind.Opening, -101 - i, LedgerEventKind.Acquire, code,
+                    DateTime.MinValue, long.MinValue + i + 1, quantity, cost, 0m, 0m, 0m, 0m));
+            }
+        }
+        return new BranchLedger(1, 5, events, new HashSet<DocRef>(), irrBalance, pools);
+    }
+
+    [Fact]
+    public void Direct_trade_can_exchange_any_two_currencies_using_a_manual_cross_rate()
+    {
+        var ledger = MultiCurrencyLedger(0m, ("USD", 0m, 0m), ("EUR", 100m, 5_000_000m));
+        var input = new TradeInput(
+            1, "USD", 10m, 100_000m, "مشتری", null, null,
+            CustomerId: 42,
+            SettlementMode: TradeSettlementMode.Direct,
+            RateMode: TradeRateMode.Direct,
+            SettlementCurrencyCode: "EUR",
+            CrossRate: 2m,
+            SettlementLines: new[] { new TradeSettlementInput("EUR", 20m, 50_000m) },
+            ValuationIrr: 1_000_000m);
+
+        var posting = LedgerPlanner.PlanTrade(ledger, Usd, input, TradeType.Buy, 7, Now, Now);
+
+        Assert.Equal(1_000_000m, posting.Trade!.IrrAmount);
+        Assert.Equal("EUR", posting.Trade.SettlementCurrencyCode);
+        Assert.Equal(2m, posting.Trade.CrossRate);
+        var settlement = Assert.Single(posting.Trade.Settlements!);
+        Assert.Equal(TradeSettlementDirection.Payment, settlement.Direction);
+        Assert.Equal("EUR", settlement.CurrencyCode);
+        Assert.Equal(20m, settlement.Amount);
+        Assert.Equal(-20m, posting.CashMovements.Single(m => m.CurrencyCode == "EUR").Delta);
+        Assert.Equal(10m, posting.CashMovements.Single(m => m.CurrencyCode == "USD").Delta);
+        Assert.DoesNotContain(posting.CashMovements, m => m.CurrencyCode == CurrencyCodes.Irr);
+        Assert.All(posting.Journals.Single().Lines.Where(l => l.AccountCode is AccountCodes.CustomerPayable or AccountCodes.CustomerReceivable),
+            line => Assert.Equal(42, line.CustomerId));
+        Assert.Equal(posting.Journals.Single().Lines.Sum(l => l.Debit), posting.Journals.Single().Lines.Sum(l => l.Credit));
+    }
+
+    [Fact]
+    public void Split_trade_can_receive_multiple_currencies_and_offset_the_customer_account()
+    {
+        var ledger = MultiCurrencyLedger(0m,
+            ("USD", 10m, 700_000m), ("EUR", 0m, 0m), ("GBP", 0m, 0m));
+        var input = new TradeInput(
+            1, "USD", 10m, 100_000m, null, null, null,
+            CustomerId: 77,
+            SettlementMode: TradeSettlementMode.Split,
+            RateMode: TradeRateMode.Derived,
+            SettlementLines: new[]
+            {
+                new TradeSettlementInput("EUR", 10m, 50_000m),
+                new TradeSettlementInput("GBP", 10m, 30_000m),
+            },
+            CustomerOffsetIrr: 200_000m,
+            ValuationIrr: 1_000_000m);
+
+        var posting = LedgerPlanner.PlanTrade(ledger, Usd, input, TradeType.Sell, 7, Now, Now);
+
+        Assert.Equal(300_000m, posting.Trade!.ProfitIrr);
+        Assert.Equal(2, posting.Trade.Settlements!.Count);
+        Assert.All(posting.Trade.Settlements, line => Assert.Equal(TradeSettlementDirection.Receipt, line.Direction));
+        Assert.Equal(10m, posting.CashMovements.Single(m => m.CurrencyCode == "EUR").Delta);
+        Assert.Equal(10m, posting.CashMovements.Single(m => m.CurrencyCode == "GBP").Delta);
+        Assert.Equal(-10m, posting.CashMovements.Single(m => m.CurrencyCode == "USD").Delta);
+        Assert.Equal(200_000m, posting.Trade.CustomerOffsetIrr);
+        Assert.Equal(200_000m, posting.Journals.Single().Lines.Single(l => l.AccountCode == AccountCodes.CustomerPayable && l.Debit > 0).Debit);
+        Assert.All(posting.Journals.Single().Lines.Where(l => l.AccountCode is AccountCodes.CustomerPayable or AccountCodes.CustomerReceivable),
+            line => Assert.Equal(77, line.CustomerId));
+        Assert.Equal(posting.Journals.Single().Lines.Sum(l => l.Debit), posting.Journals.Single().Lines.Sum(l => l.Credit));
+    }
+
+    [Fact]
+    public void Customer_account_trade_records_the_unsettled_amount_without_a_cash_settlement()
+    {
+        var ledger = MultiCurrencyLedger(0m, ("USD", 20m, 2_000_000m));
+        var input = new TradeInput(
+            1, "USD", 5m, 150_000m, null, null, null,
+            CustomerId: 81,
+            SettlementMode: TradeSettlementMode.CustomerAccount,
+            RateMode: TradeRateMode.Derived,
+            SettlementLines: Array.Empty<TradeSettlementInput>(),
+            ValuationIrr: 750_000m);
+
+        var posting = LedgerPlanner.PlanTrade(ledger, Usd, input, TradeType.Sell, 7, Now, Now);
+
+        Assert.Empty(posting.Trade!.Settlements!);
+        Assert.Null(posting.Trade.SettlementCurrencyCode);
+        Assert.Equal(-5m, posting.CashMovements.Single().Delta);
+        Assert.Equal(750_000m, posting.Journals.Single().Lines.Single(l => l.AccountCode == AccountCodes.CustomerReceivable).Debit);
+        Assert.Equal(81, posting.Journals.Single().Lines.Single(l => l.AccountCode == AccountCodes.CustomerReceivable).CustomerId);
+        Assert.Equal(posting.Journals.Single().Lines.Sum(l => l.Debit), posting.Journals.Single().Lines.Sum(l => l.Credit));
+    }
+
+    [Fact]
+    public void Backdated_purchase_recalculates_the_cost_of_a_foreign_settlement_payment()
+    {
+        var initialEvents = new List<LedgerEvent>
+        {
+            new(LedgerDocKind.Opening, 9, LedgerEventKind.CashOnly, CurrencyCodes.Irr, Day1, 1, 100_000m, 0m, 0m, 100_000m, 0m, 0m),
+            new(LedgerDocKind.Opening, 10, LedgerEventKind.Acquire, "EUR", Day1, 2, 100m, 1_000m, 0m, 0m, 0m, 0m),
+            new(LedgerDocKind.Trade, 5, LedgerEventKind.Acquire, "USD", Day3, 3, 1m, 2_000m, 0m, 0m, 0m, 1_900m),
+            new(LedgerDocKind.Trade, 5, LedgerEventKind.Dispose, "EUR", Day3, 4, 10m, 2_000m, 0m, 0m, 100m, 1_900m, 1),
+        };
+        var state = LedgerEngine.Replay(initialEvents);
+        var ledger = new BranchLedger(1, 5, initialEvents, new HashSet<DocRef>
+        {
+            new(LedgerDocKind.Opening, 9), new(LedgerDocKind.Opening, 10), new(LedgerDocKind.Trade, 5),
+        }, state.IrrBalance, state.Pools.ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.Ordinal));
+
+        var purchase = new TradeInput(1, "EUR", 100m, 100m, null, null, null);
+        var posting = LedgerPlanner.PlanTrade(ledger, new CurrencyInfo("EUR", "یورو", 2, true), purchase,
+            TradeType.Buy, 7, Day2, Today);
+
+        var settlementUpdate = Assert.Single(posting.SettlementCostUpdates!);
+        Assert.Equal(5, settlementUpdate.TradeId);
+        Assert.Equal(1, settlementUpdate.LineNumber);
+        Assert.Equal(550m, settlementUpdate.CostIrr);
+        Assert.Equal(1_450m, settlementUpdate.ProfitIrr);
+        var tradeUpdate = Assert.Single(posting.CostUpdates);
+        Assert.Equal(5, tradeUpdate.TradeId);
+        Assert.Equal(1_450m, tradeUpdate.ProfitIrr);
+        Assert.Contains(posting.Journals, journal => journal.SourceType == SourceTypes.Adjust);
+    }
+
     // ---------------------------------------------------------------------------------------------
     // تاریخچه‌ی کامل: ثبت با تاریخ گذشته، ابطال هر سند، جایگزینی، سند افتتاحیه و سند دستی.
     // ---------------------------------------------------------------------------------------------

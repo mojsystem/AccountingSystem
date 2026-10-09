@@ -44,6 +44,8 @@ public class IndexModel : PageModel
 
     public IReadOnlyList<CurrencyInfo> Currencies { get; private set; } = Array.Empty<CurrencyInfo>();
 
+    public IReadOnlyList<CurrencyInfo> SettlementCurrencies { get; private set; } = Array.Empty<CurrencyInfo>();
+
     public IReadOnlyList<BranchInfo> Branches { get; private set; } = Array.Empty<BranchInfo>();
 
     /// <summary>مشتریان مشترک برای انتخاب در فرم معامله (هر معامله باید مشتری داشته باشد).</summary>
@@ -78,28 +80,6 @@ public class IndexModel : PageModel
     public async Task<IActionResult> OnPostAsync(CancellationToken ct)
     {
         var user = User.ToCurrentUser();
-        if (!InputParser.TryParseDecimal(Input.Amount, out var amount))
-        {
-            ModelState.AddModelError(string.Empty, "مقدار ارز را به‌درستی وارد کنید.");
-            await LoadAsync(ct);
-            return Page();
-        }
-        if (!InputParser.TryParseDecimal(Input.Rate, out var rate))
-        {
-            ModelState.AddModelError(string.Empty, "نرخ را به‌درستی وارد کنید.");
-            await LoadAsync(ct);
-            return Page();
-        }
-        decimal fee = 0m;
-        if (!string.IsNullOrWhiteSpace(Input.Fee) && !InputParser.TryParseDecimal(Input.Fee, out fee))
-        {
-            ModelState.AddModelError(string.Empty, "کارمزد را به‌درستی وارد کنید (عدد ریال).");
-            await LoadAsync(ct);
-            return Page();
-        }
-
-        var branchId = Input.BranchId;
-        var input = new TradeInput(branchId, Input.CurrencyCode, amount, rate, null, null, Input.Note, fee, Input.CustomerId);
         DateTime? occurredOn = null;
         if (!string.IsNullOrWhiteSpace(Input.OccurredOn))
         {
@@ -113,6 +93,7 @@ public class IndexModel : PageModel
         }
         try
         {
+            var input = Input.ToTradeInput();
             var type = Input.TradeType == "SELL" ? TradeType.Sell : TradeType.Buy;
             var id = await _trades.RecordTradeAsync(input, type, user, DateTime.Now, occurredOn, ct);
             TempData["Success"] = $"معامله شماره {id} با موفقیت ثبت شد.";
@@ -159,9 +140,9 @@ public class IndexModel : PageModel
         var access = await _permissions.GetAccessAsync(user, ct);
         Access = access;
 
-        Currencies = (await _admin.GetCurrenciesAsync(ct))
-            .Where(c => c.IsActive && c.Code != CurrencyCodes.Irr)
-            .ToList();
+        var activeCurrencies = (await _admin.GetCurrenciesAsync(ct)).Where(c => c.IsActive).ToList();
+        Currencies = activeCurrencies.Where(c => c.Code != CurrencyCodes.Irr).ToList();
+        SettlementCurrencies = activeCurrencies;
         Branches = await _permissions.GetBranchesAsync(user, Permission.TradeRecord, ct);
         Customers = await LoadCustomersAsync(user, ct);
         ReadableBranches = await _permissions.GetBranchesAsync(user, null, ct);
@@ -210,6 +191,33 @@ public class IndexModel : PageModel
         To = PersianDate.FormatDate(toExclusive.AddDays(-1));
         return (fromInclusive, toExclusive);
     }
+
+    public static string SettlementModeText(TradeSettlementMode mode) => mode switch
+    {
+        TradeSettlementMode.Direct => "مستقیم",
+        TradeSettlementMode.Split => "چندبخشی",
+        TradeSettlementMode.CustomerAccount => "حساب مشتری",
+        _ => "نامشخص",
+    };
+
+    public static string SettlementSummary(TradeInfo trade)
+    {
+        var lines = trade.Settlements ?? Array.Empty<TradeSettlementInfo>();
+        if (lines.Count == 0 && trade.Settlements is null && trade.SettlementMode == TradeSettlementMode.Direct)
+        {
+            var legacyAmount = trade.Type == TradeType.Buy ? trade.IrrAmount - trade.FeeIrr : trade.IrrAmount + trade.FeeIrr;
+            return (trade.Type == TradeType.Buy ? "پرداخت " : "دریافت ") + MoneyMath.FormatAmount(legacyAmount, 0) + " IRR";
+        }
+
+        var parts = lines.Select(line =>
+            $"{(line.Direction == TradeSettlementDirection.Payment ? "پرداخت" : "دریافت")} {MoneyMath.FormatAmount(line.Amount, 4)} {line.CurrencyCode}");
+        var summary = string.Join("؛ ", parts);
+        if (trade.CustomerOffsetIrr > 0m)
+        {
+            summary = (summary.Length == 0 ? string.Empty : summary + "؛ ") + "تهاتر " + MoneyMath.FormatAmount(trade.CustomerOffsetIrr, 0) + " ریال";
+        }
+        return summary.Length == 0 ? "بدون وجه نقد" : summary;
+    }
 }
 
 public sealed class TradeForm
@@ -230,6 +238,113 @@ public sealed class TradeForm
 
     public string? Note { get; set; }
 
+    public string SettlementMode { get; set; } = "DIRECT";
+
+    public string RateMode { get; set; } = "DERIVED";
+
+    public string SettlementCurrencyCode { get; set; } = CurrencyCodes.Irr;
+
+    public string? CrossRate { get; set; }
+
+    public bool ApplyCustomerOffset { get; set; }
+
+    public List<TradeSettlementForm> SettlementLines { get; set; } = new() { new(), new() };
+
     /// <summary>تاریخ شمسی معامله. خالی یعنی امروز؛ تاریخ گذشته تا ۳۰ روز قبل مجاز است.</summary>
     public string? OccurredOn { get; set; }
+
+    public TradeInput ToTradeInput()
+    {
+        if (!InputParser.TryParseDecimal(Amount, out var amount))
+        {
+            throw new BusinessRuleException("مقدار ارز را به‌درستی وارد کنید.");
+        }
+        decimal fee = 0m;
+        if (!string.IsNullOrWhiteSpace(Fee) && !InputParser.TryParseDecimal(Fee, out fee))
+        {
+            throw new BusinessRuleException("کارمزد را به‌درستی وارد کنید (عدد ریال).");
+        }
+
+        var mode = (SettlementMode ?? "DIRECT").Trim().ToUpperInvariant() switch
+        {
+            "DIRECT" => TradeSettlementMode.Direct,
+            "SPLIT" => TradeSettlementMode.Split,
+            "ACCOUNT" => TradeSettlementMode.CustomerAccount,
+            _ => throw new BusinessRuleException("روش تسویه‌ی معامله معتبر نیست."),
+        };
+        var rateMode = mode == TradeSettlementMode.Direct
+            ? (RateMode ?? "DERIVED").Trim().ToUpperInvariant() switch
+            {
+                "DIRECT" => TradeRateMode.Direct,
+                "DERIVED" => TradeRateMode.Derived,
+                _ => throw new BusinessRuleException("روش تعیین نرخ جفت‌ارز معتبر نیست."),
+            }
+            : TradeRateMode.Derived;
+
+        var hasRate = InputParser.TryParseDecimal(Rate, out var rate);
+        if (!hasRate && (mode != TradeSettlementMode.Direct || !string.IsNullOrWhiteSpace(Rate)))
+        {
+            throw new BusinessRuleException("نرخ را به‌درستی وارد کنید.");
+        }
+        if (!hasRate)
+        {
+            rate = 0m;
+        }
+
+        decimal? crossRate = null;
+        if (mode == TradeSettlementMode.Direct && rateMode == TradeRateMode.Direct)
+        {
+            if (!InputParser.TryParseDecimal(CrossRate, out var parsedCrossRate))
+            {
+                throw new BusinessRuleException("نرخ مستقیم جفت‌ارز را وارد کنید.");
+            }
+            crossRate = parsedCrossRate;
+        }
+
+        var lines = new List<TradeSettlementInput>();
+        if (mode == TradeSettlementMode.Split)
+        {
+            foreach (var line in SettlementLines ?? new List<TradeSettlementForm>())
+            {
+                var code = (line.CurrencyCode ?? string.Empty).Trim().ToUpperInvariant();
+                if (code.Length == 0 && string.IsNullOrWhiteSpace(line.Amount))
+                {
+                    continue;
+                }
+                if (code.Length == 0)
+                {
+                    throw new BusinessRuleException("برای هر سطر تسویه‌ی چندبخشی، ارز را انتخاب کنید.");
+                }
+                if (!InputParser.TryParseDecimal(line.Amount, out var lineAmount))
+                {
+                    throw new BusinessRuleException($"مقدار سطر تسویه‌ی {code} را وارد کنید.");
+                }
+                lines.Add(new TradeSettlementInput(code, lineAmount));
+            }
+        }
+
+        return new TradeInput(
+            BranchId,
+            (CurrencyCode ?? string.Empty).Trim().ToUpperInvariant(),
+            amount,
+            rate,
+            null,
+            null,
+            Note,
+            fee,
+            CustomerId,
+            mode,
+            rateMode,
+            mode == TradeSettlementMode.Direct ? SettlementCurrencyCode : null,
+            crossRate,
+            lines,
+            ApplyCustomerOffset);
+    }
+}
+
+public sealed class TradeSettlementForm
+{
+    public string? CurrencyCode { get; set; }
+
+    public string? Amount { get; set; }
 }

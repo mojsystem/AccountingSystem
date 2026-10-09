@@ -15,7 +15,7 @@ public static class LedgerPlanner
     private const string ForeignInventoryPrefix = "1101-";
 
     /// <summary>سطرهای جدید بعد از همه‌ی رویدادهای هم‌زمان قرار می‌گیرند.</summary>
-    private const long NewEventSeq = long.MaxValue;
+    private const long NewEventSeq = long.MaxValue - 100_000;
 
     public static PostingDraft PlanTrade(
         BranchLedger ledger,
@@ -30,28 +30,133 @@ public static class LedgerPlanner
     {
         ValidateTrade(input, ledger.BranchId, currency);
         var code = currency.Code;
-        var irr = MoneyMath.RoundIrr(input.Amount * input.Rate);
+        var irr = input.ValuationIrr ?? MoneyMath.RoundIrr(input.Amount * input.Rate);
         if (irr <= 0)
         {
             throw new BusinessRuleException("مبلغ ریالی معامله صفر است.");
         }
+        var rate = input.ValuationIrr is { } explicitValue
+            ? MoneyMath.RoundTo(explicitValue / input.Amount, 4)
+            : input.Rate;
+        TradePlanner.ValidateRate(rate);
+
         var fee = input.FeeIrr;
         TradePlanner.ValidateFee(fee, type, irr);
-        var (customer, nationalCode, note) = TradePlanner.CleanDetails(input.CustomerName, input.NationalCode, input.Note);
+        var mode = input.SettlementMode ?? TradeSettlementMode.Direct;
+        var rateMode = input.RateMode;
+        var crossRate = input.CrossRate ?? (mode == TradeSettlementMode.Direct ? rate : 0m);
+        if (mode == TradeSettlementMode.Direct)
+        {
+            TradePlanner.ValidateCrossRate(crossRate);
+        }
+        if (input.CustomerOffsetIrr < 0 || input.CustomerOffsetIrr != MoneyMath.RoundIrr(input.CustomerOffsetIrr))
+        {
+            throw new BusinessRuleException("مبلغ تهاتر باید عدد صحیح و نامنفی ریال باشد.");
+        }
 
-        // خرید: ارز وارد موجودی می‌شود و مشتری مبلغ خالص (بدون کارمزد) را دریافت می‌کند.
-        // فروش: ارز خارج می‌شود و مشتری مبلغ به‌علاوه‌ی کارمزد را می‌پردازد.
-        var newEvent = type == TradeType.Buy
-            ? new LedgerEvent(LedgerDocKind.Trade, 0, LedgerEventKind.Acquire, code, occurredAt, NewEventSeq,
-                input.Amount, irr, fee, -(irr - fee), 0m, 0m)
-            : new LedgerEvent(LedgerDocKind.Trade, 0, LedgerEventKind.Dispose, code, occurredAt, NewEventSeq,
-                input.Amount, irr, fee, irr + fee, 0m, 0m);
+        var customerDue = type == TradeType.Buy ? irr - fee : irr + fee;
+        if (input.CustomerOffsetIrr > customerDue)
+        {
+            throw new BusinessRuleException("مبلغ تهاتر از مانده‌ی این معامله بیشتر است.");
+        }
+
+        var (customer, nationalCode, note) = TradePlanner.CleanDetails(input.CustomerName, input.NationalCode, input.Note);
+        var settlementInputs = input.SettlementLines ?? Array.Empty<TradeSettlementInput>();
+        if (input.SettlementMode is null)
+        {
+            // سازگاری با فراخوانی‌های قدیمی: خرید/فروش با صندوق ریال به‌صورت کامل تسویه می‌شد.
+            var legacyAmount = type == TradeType.Buy ? irr - fee : irr + fee;
+            settlementInputs = legacyAmount > 0
+                ? new[] { new TradeSettlementInput(CurrencyCodes.Irr, legacyAmount, 1m) }
+                : Array.Empty<TradeSettlementInput>();
+            mode = TradeSettlementMode.Direct;
+            rateMode = TradeRateMode.Derived;
+            crossRate = rate;
+        }
+        if (mode == TradeSettlementMode.CustomerAccount && settlementInputs.Count != 0)
+        {
+            throw new BusinessRuleException("در روش حساب مشتری، سطر دریافت یا پرداخت نقدی وارد نکنید.");
+        }
+        if (mode == TradeSettlementMode.Direct && settlementInputs.Count > 1)
+        {
+            throw new BusinessRuleException("تسویه‌ی مستقیم فقط یک ارز مقابل دارد؛ برای چند ارز، روش تسویه‌ی چندبخشی را انتخاب کنید.");
+        }
+        if (mode == TradeSettlementMode.Split && settlementInputs.Count == 0)
+        {
+            throw new BusinessRuleException("حداقل یک سطر دریافت یا پرداخت برای تسویه‌ی چندبخشی وارد کنید.");
+        }
+        if (input.CustomerOffsetIrr > 0 && input.CustomerId is null)
+        {
+            throw new BusinessRuleException("برای تهاتر، مشتری را انتخاب کنید.");
+        }
+
+        var direction = type == TradeType.Buy ? TradeSettlementDirection.Payment : TradeSettlementDirection.Receipt;
+        var settlements = new List<TradeSettlementDraft>();
+        var newEvents = new List<LedgerEvent>
+        {
+            type == TradeType.Buy
+                ? new LedgerEvent(LedgerDocKind.Trade, 0, LedgerEventKind.Acquire, code, occurredAt, NewEventSeq,
+                    input.Amount, irr, fee, 0m, 0m, 0m)
+                : new LedgerEvent(LedgerDocKind.Trade, 0, LedgerEventKind.Dispose, code, occurredAt, NewEventSeq,
+                    input.Amount, irr, fee, 0m, 0m, 0m),
+        };
+
+        for (var index = 0; index < settlementInputs.Count; index++)
+        {
+            var line = settlementInputs[index];
+            var settlementCode = (line.CurrencyCode ?? string.Empty).Trim().ToUpperInvariant();
+            if (settlementCode.Length != 3 || settlementCode == code)
+            {
+                throw new BusinessRuleException("ارز هر سطر دریافت/پرداخت باید معتبر و با ارز معامله متفاوت باشد.");
+            }
+            if (line.Amount <= 0 || line.Amount != MoneyMath.RoundTo(line.Amount, 4))
+            {
+                throw new BusinessRuleException("مقدار هر سطر دریافت/پرداخت باید مثبت و حداکثر تا ۴ رقم اعشار باشد.");
+            }
+            TradePlanner.ValidateRate(line.RateIrr);
+            var lineValueIrr = settlementCode == CurrencyCodes.Irr
+                ? MoneyMath.RoundIrr(line.Amount)
+                : MoneyMath.RoundIrr(line.Amount * line.RateIrr);
+            if (lineValueIrr <= 0)
+            {
+                throw new BusinessRuleException($"ارزش ریالی سطر تسویه‌ی {settlementCode} صفر است.");
+            }
+
+            var lineNumber = index + 1;
+            var lineDraft = new TradeSettlementDraft(lineNumber, direction, settlementCode, line.Amount, line.RateIrr, lineValueIrr);
+            settlements.Add(lineDraft);
+            var seq = NewEventSeq + lineNumber;
+            if (settlementCode == CurrencyCodes.Irr)
+            {
+                var irrDelta = direction == TradeSettlementDirection.Payment ? -line.Amount : line.Amount;
+                newEvents.Add(new LedgerEvent(LedgerDocKind.Trade, 0, LedgerEventKind.CashOnly, CurrencyCodes.Irr,
+                    occurredAt, seq, 0m, lineValueIrr, fee, irrDelta, 0m, 0m, lineNumber));
+            }
+            else
+            {
+                var eventKind = direction == TradeSettlementDirection.Payment ? LedgerEventKind.Dispose : LedgerEventKind.Acquire;
+                newEvents.Add(new LedgerEvent(LedgerDocKind.Trade, 0, eventKind, settlementCode, occurredAt, seq,
+                    line.Amount, lineValueIrr, 0m, 0m, 0m, 0m, lineNumber));
+            }
+        }
 
         var amountText = MoneyMath.FormatAmount(input.Amount, currency.DecimalPlaces);
-        var rateText = MoneyMath.FormatRate(input.Rate);
         var description = type == TradeType.Buy
-            ? $"خرید {amountText} {code} از مشتری با نرخ {rateText}"
-            : $"فروش {amountText} {code} به مشتری با نرخ {rateText}";
+            ? $"خرید {amountText} {code} از مشتری"
+            : $"فروش {amountText} {code} به مشتری";
+        if (mode == TradeSettlementMode.CustomerAccount)
+        {
+            description += "؛ ثبت روی حساب مشتری";
+        }
+        else if (settlements.Count > 0)
+        {
+            description += $"؛ {(direction == TradeSettlementDirection.Payment ? "پرداخت" : "دریافت")} " +
+                string.Join("، ", settlements.Select(s => $"{MoneyMath.FormatAmount(s.Amount, 4)} {s.CurrencyCode}"));
+        }
+        if (description.Length > 240)
+        {
+            description = description[..240];
+        }
 
         var tradeRef = new DocRef(LedgerDocKind.Trade, 0);
         return Compose(
@@ -62,19 +167,114 @@ public static class LedgerPlanner
             now,
             replaces,
             replaceReason,
-            new[] { newEvent },
+            newEvents,
             state =>
             {
-                var cost = type == TradeType.Sell ? state.Disposals[tradeRef].CostIrr : irr;
-                var profit = type == TradeType.Sell ? irr - cost : 0m;
-                var trade = new TradeDraft(type, code, input.Amount, input.Rate, irr, cost, profit, fee,
-                    input.CustomerId, customer, nationalCode, note, occurredAt, userId, ReplacedId(replaces));
-                var lines = type == TradeType.Buy
-                    ? TradePlanner.BuyLines(code, irr, fee)
-                    : TradePlanner.SellLines(code, irr, fee, cost, profit);
+                var mainDisposal = type == TradeType.Sell ? state.Disposals[tradeRef] : default;
+                var cost = type == TradeType.Sell ? mainDisposal.CostIrr : irr;
+                var baseProfit = type == TradeType.Sell ? mainDisposal.ProfitIrr : 0m;
+                var completedSettlements = settlements.Select(line =>
+                {
+                    if (line.Direction == TradeSettlementDirection.Payment && line.CurrencyCode != CurrencyCodes.Irr)
+                    {
+                        var disposal = state.SettlementDisposals[(tradeRef, line.LineNumber)];
+                        return line with { CostIrr = disposal.CostIrr, ProfitIrr = disposal.ProfitIrr };
+                    }
+                    return line with { CostIrr = line.IrrAmount };
+                }).ToList();
+                var profit = baseProfit + completedSettlements.Sum(s => s.ProfitIrr);
+                var trade = new TradeDraft(type, code, input.Amount, rate, irr, cost, profit, fee,
+                    input.CustomerId, customer, nationalCode, note, occurredAt, userId, ReplacedId(replaces),
+                    mode, rateMode, crossRate, input.CustomerOffsetIrr, completedSettlements,
+                    mode == TradeSettlementMode.Direct
+                        ? input.SettlementCurrencyCode ?? completedSettlements.FirstOrDefault()?.CurrencyCode
+                        : null);
+                var lines = TradeJournalLines(code, irr, fee, cost, baseProfit, input.CustomerId,
+                    input.CustomerOffsetIrr, completedSettlements, type);
                 var journal = new JournalDraft(description, occurredAt, lines, SourceTypes.Trade, tradeRef);
                 return new NewDocumentResult(trade, null, new[] { journal });
             });
+    }
+
+    private static IReadOnlyList<JournalLineDraft> TradeJournalLines(
+        string currencyCode,
+        decimal irr,
+        decimal fee,
+        decimal cost,
+        decimal baseProfit,
+        int? customerId,
+        decimal customerOffsetIrr,
+        IReadOnlyList<TradeSettlementDraft> settlements,
+        TradeType type)
+    {
+        var lines = new List<JournalLineDraft>();
+        if (type == TradeType.Buy)
+        {
+            lines.Add(new JournalLineDraft(AccountCodes.ForeignCash(currencyCode), irr, 0m));
+            lines.Add(new JournalLineDraft(AccountCodes.CustomerPayable, 0m, irr - fee, customerId));
+            if (fee > 0m)
+            {
+                lines.Add(new JournalLineDraft(AccountCodes.FeeIncome, 0m, fee));
+            }
+            if (customerOffsetIrr > 0m)
+            {
+                lines.Add(new JournalLineDraft(AccountCodes.CustomerPayable, customerOffsetIrr, 0m, customerId));
+                lines.Add(new JournalLineDraft(AccountCodes.CustomerReceivable, 0m, customerOffsetIrr, customerId));
+            }
+        }
+        else
+        {
+            lines.Add(new JournalLineDraft(AccountCodes.CustomerReceivable, irr + fee, 0m, customerId));
+            if (cost > 0m)
+            {
+                lines.Add(new JournalLineDraft(AccountCodes.ForeignCash(currencyCode), 0m, cost));
+            }
+            AddProfitLoss(lines, baseProfit);
+            if (fee > 0m)
+            {
+                lines.Add(new JournalLineDraft(AccountCodes.FeeIncome, 0m, fee));
+            }
+            if (customerOffsetIrr > 0m)
+            {
+                lines.Add(new JournalLineDraft(AccountCodes.CustomerReceivable, 0m, customerOffsetIrr, customerId));
+                lines.Add(new JournalLineDraft(AccountCodes.CustomerPayable, customerOffsetIrr, 0m, customerId));
+            }
+        }
+
+        foreach (var settlement in settlements)
+        {
+            var cashAccount = settlement.CurrencyCode == CurrencyCodes.Irr
+                ? AccountCodes.IrrCash
+                : AccountCodes.ForeignCash(settlement.CurrencyCode);
+            if (settlement.Direction == TradeSettlementDirection.Receipt)
+            {
+                lines.Add(new JournalLineDraft(cashAccount, settlement.IrrAmount, 0m));
+                lines.Add(new JournalLineDraft(AccountCodes.CustomerReceivable, 0m, settlement.IrrAmount, customerId));
+            }
+            else
+            {
+                lines.Add(new JournalLineDraft(AccountCodes.CustomerPayable, settlement.IrrAmount, 0m, customerId));
+                if (settlement.CostIrr > 0m)
+                {
+                    lines.Add(new JournalLineDraft(cashAccount, 0m, settlement.CostIrr));
+                }
+                AddProfitLoss(lines, settlement.ProfitIrr);
+            }
+        }
+
+        return lines;
+    }
+
+    private static void AddProfitLoss(List<JournalLineDraft> lines, decimal profit)
+    {
+        if (profit > 0m)
+        {
+            lines.Add(new JournalLineDraft(AccountCodes.FxProfit, 0m, profit));
+        }
+        else if (profit < 0m)
+        {
+            lines.Add(new JournalLineDraft(AccountCodes.FxLoss, -profit, 0m));
+        }
     }
 
     /// <summary>
@@ -257,15 +457,37 @@ public static class LedgerPlanner
 
         var journals = new List<JournalDraft>(created.Journals);
         var costUpdates = new List<TradeCostUpdate>();
-        foreach (var sale in kept.Where(e => e.Kind == LedgerEventKind.Dispose))
+        var settlementCostUpdates = new List<TradeSettlementCostUpdate>();
+        foreach (var disposal in kept.Where(e => e.Kind == LedgerEventKind.Dispose))
         {
-            var result = after.Disposals[sale.Doc];
-            if (result.CostIrr == sale.StoredCostIrr && result.ProfitIrr == sale.StoredProfitIrr)
+            var result = disposal.SettlementLineNumber is { } lineNumber
+                ? after.SettlementDisposals[(disposal.Doc, lineNumber)]
+                : after.Disposals[disposal.Doc];
+            if (result.CostIrr == disposal.StoredCostIrr && result.ProfitIrr == disposal.StoredProfitIrr)
             {
                 continue;
             }
-            costUpdates.Add(new TradeCostUpdate(sale.DocId, result.CostIrr, result.ProfitIrr));
-            journals.Add(AdjustmentJournal(sale, result.CostIrr, now));
+
+            if (disposal.SettlementLineNumber is { } settlementLine)
+            {
+                settlementCostUpdates.Add(new TradeSettlementCostUpdate(disposal.DocId, settlementLine, result.CostIrr, result.ProfitIrr));
+            }
+            journals.Add(AdjustmentJournal(disposal, result.CostIrr, now));
+        }
+
+        foreach (var tradeEvents in kept.Where(e => e.DocKind == LedgerDocKind.Trade).GroupBy(e => e.Doc))
+        {
+            var main = tradeEvents.Single(e => e.SettlementLineNumber is null);
+            var mainCost = main.Kind == LedgerEventKind.Dispose ? after.Disposals[main.Doc].CostIrr : main.StoredCostIrr;
+            var baseProfit = main.Kind == LedgerEventKind.Dispose ? after.Disposals[main.Doc].ProfitIrr : 0m;
+            var settlementProfit = tradeEvents
+                .Where(e => e.SettlementLineNumber is not null && e.Kind == LedgerEventKind.Dispose)
+                .Sum(e => after.SettlementDisposals[(e.Doc, e.SettlementLineNumber!.Value)].ProfitIrr);
+            var totalProfit = baseProfit + settlementProfit;
+            if (mainCost != main.StoredCostIrr || totalProfit != main.StoredProfitIrr)
+            {
+                costUpdates.Add(new TradeCostUpdate(main.DocId, mainCost, totalProfit));
+            }
         }
 
         var cash = new List<CashMovementDraft>();
@@ -310,7 +532,8 @@ public static class LedgerPlanner
             CashMovements: cash,
             Inventory: inventory,
             CostUpdates: costUpdates,
-            AuditDetails: BuildDetails(action, voidDraft, costUpdates.Count));
+            AuditDetails: BuildDetails(action, voidDraft, costUpdates.Count + settlementCostUpdates.Count),
+            SettlementCostUpdates: settlementCostUpdates);
     }
 
     /// <summary>

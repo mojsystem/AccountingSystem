@@ -47,7 +47,34 @@
             </select>
         </label>
         <label>مقدار ارز<input name="Input.Amount" value="@Model.Input.Amount" dir="ltr" inputmode="decimal" /></label>
-        <label>نرخ (ریال به ازای یک واحد)<input id="rate" name="Input.Rate" value="@Model.Input.Rate" dir="ltr" inputmode="decimal" /></label>
+        <label>نرخ پایه (ریال به ازای یک واحد)<input id="rate" name="Input.Rate" value="@Model.Input.Rate" dir="ltr" inputmode="decimal" /></label>
+        <label>روش تسویه
+            <select id="settlementMode" name="Input.SettlementMode">
+                <option value="DIRECT" selected="@(Model.Input.SettlementMode == "DIRECT")">تبادل مستقیم دو ارز</option>
+                <option value="SPLIT" selected="@(Model.Input.SettlementMode == "SPLIT")">چندبخشی (چند دریافت/پرداخت)</option>
+                <option value="ACCOUNT" selected="@(Model.Input.SettlementMode == "ACCOUNT")">ثبت روی حساب مشتری</option>
+            </select>
+        </label>
+        <label id="counterCurrencyField">ارز مقابل
+            <select id="settlementCurrency" name="Input.SettlementCurrencyCode">
+                @foreach (var c in Model.SettlementCurrencies)
+                {
+                    <option value="@c.Code" selected="@(c.Code == Model.Input.SettlementCurrencyCode)">@c.Code - @c.Name</option>
+                }
+            </select>
+        </label>
+        <label id="rateModeField">روش نرخ جفت‌ارز
+            <select id="rateMode" name="Input.RateMode">
+                <option value="DERIVED" selected="@(Model.Input.RateMode == "DERIVED")">محاسبه از نرخ‌های ریالی روز</option>
+                <option value="DIRECT" selected="@(Model.Input.RateMode == "DIRECT")">نرخ مستقیم جفت‌ارز</option>
+            </select>
+        </label>
+        <label id="crossRateField">نرخ جفت‌ارز (واحد ارز مقابل به ازای هر واحد)
+            <input id="crossRate" name="Input.CrossRate" value="@Model.Input.CrossRate" dir="ltr" inputmode="decimal" placeholder="برای نرخ مستقیم وارد شود" />
+        </label>
+        <label class="check">تهاتر مانده‌ی قبلی مشتری با این معامله
+            <input type="checkbox" name="Input.ApplyCustomerOffset" value="true" checked="@(Model.Input.ApplyCustomerOffset)" />
+        </label>
         <label>کارمزد (ریال، اختیاری)<input name="Input.Fee" value="@Model.Input.Fee" dir="ltr" inputmode="numeric" /></label>
         <label>مشتری
             <select name="Input.CustomerId" required>
@@ -62,7 +89,47 @@
         <label>توضیحات<input name="Input.Note" value="@Model.Input.Note" /></label>
         <label>تاریخ معامله (شمسی، اختیاری)<input name="Input.OccurredOn" value="@Model.Input.OccurredOn" dir="ltr" placeholder="۱۴۰۵/۰۷/۱۵" /></label>
     </div>
-    <p class="hint">تاریخ خالی یعنی امروز. برای ثبت معامله‌ی گذشته، تاریخ آن را تا ۳۰ روز قبل وارد کنید؛ ساعت، ساعت ثبت است.</p>
+    <section id="splitPanel" class="settlement-panel" hidden>
+        <h3>ریز دریافت/پرداخت</h3>
+        <div id="settlementLines">
+            @for (var i = 0; i < Model.Input.SettlementLines.Count; i++)
+            {
+                <div class="settlement-line">
+                    <label>ارز
+                        <select name="Input.SettlementLines[@i].CurrencyCode">
+                            <option value="">-- انتخاب ارز --</option>
+                            @foreach (var c in Model.SettlementCurrencies)
+                            {
+                                <option value="@c.Code" selected="@(c.Code == Model.Input.SettlementLines[i].CurrencyCode)">@c.Code - @c.Name</option>
+                            }
+                        </select>
+                    </label>
+                    <label>مقدار دریافتی/پرداختی
+                        <input name="Input.SettlementLines[@i].Amount" value="@Model.Input.SettlementLines[i].Amount" dir="ltr" inputmode="decimal" />
+                    </label>
+                </div>
+            }
+        </div>
+        <template id="settlementLineTemplate">
+            <div class="settlement-line">
+                <label>ارز
+                    <select name="Input.SettlementLines[0].CurrencyCode">
+                        <option value="">-- انتخاب ارز --</option>
+                        @foreach (var c in Model.SettlementCurrencies)
+                        {
+                            <option value="@c.Code">@c.Code - @c.Name</option>
+                        }
+                    </select>
+                </label>
+                <label>مقدار دریافتی/پرداختی
+                    <input name="Input.SettlementLines[0].Amount" dir="ltr" inputmode="decimal" />
+                </label>
+            </div>
+        </template>
+        <button type="button" class="secondary" id="addSettlementLine">افزودن سطر</button>
+        <p class="hint">ارزش ریالی هر سطر با نرخ روز همان ارز سنجیده می‌شود؛ مانده‌ی تسویه‌نشده روی حساب مشتری باقی می‌ماند.</p>
+    </section>
+    <p class="hint">در تسویه‌ی مستقیم، ارز مقابل را انتخاب کنید. در روش نرخ مشتق‌شده از نرخ‌های روز استفاده می‌شود؛ نرخ مستقیم جفت‌ارز را می‌توانید دستی وارد کنید. تهاتر اختیاری با مانده‌ی همان مشتری انجام می‌شود. تاریخ خالی یعنی امروز؛ برای ثبت معامله‌ی گذشته، تاریخ آن را تا ۳۰ روز قبل وارد کنید؛ ساعت، ساعت ثبت است.</p>
     <p><button type="submit">ثبت معامله</button></p>
 </form>
 
@@ -108,6 +175,8 @@
             <th>مقدار</th>
             <th>نرخ</th>
             <th>مبلغ ریالی</th>
+            <th>روش تسویه</th>
+            <th>دریافت/پرداخت</th>
             <th>کارمزد</th>
             <th>سود (ریال)</th>
             <th>مشتری</th>
@@ -128,6 +197,8 @@
                 <td>@ViewFormat.Quantity(t.Amount)</td>
                 <td>@ViewFormat.Rate(t.Rate)</td>
                 <td>@ViewFormat.Money(t.IrrAmount)</td>
+                <td>@IndexModel.SettlementModeText(t.SettlementMode)</td>
+                <td>@IndexModel.SettlementSummary(t)</td>
                 <td>@ViewFormat.Money(t.FeeIrr)</td>
                 <td>@ViewFormat.Money(t.ProfitIrr)</td>
                 <td>@t.CustomerName</td>
@@ -172,18 +243,65 @@
     var currency = document.getElementById('currency');
     var rate = document.getElementById('rate');
     var branch = document.getElementById('branch');
+    var settlementCurrency = document.getElementById('settlementCurrency');
+    var settlementMode = document.getElementById('settlementMode');
+    var rateMode = document.getElementById('rateMode');
+    var crossRate = document.getElementById('crossRate');
+    var splitPanel = document.getElementById('splitPanel');
+    var counterCurrencyField = document.getElementById('counterCurrencyField');
+    var rateModeField = document.getElementById('rateModeField');
+    var crossRateField = document.getElementById('crossRateField');
+    var rows = document.getElementById('settlementLines');
+    var template = document.getElementById('settlementLineTemplate');
+    var addLine = document.getElementById('addSettlementLine');
     var radios = document.querySelectorAll('input[name="Input.TradeType"]');
 
-    function fillRate() {
+    function selectedRate(code, isCounter, isSell) {
+        if (code === 'IRR') { return 1; }
         var list = rates[branch.value] || [];
-        var item = list.find(function (r) { return r.code === currency.value; });
-        if (!item) { return; }
-        var isSell = document.querySelector('input[name="Input.TradeType"][value="SELL"]').checked;
-        rate.value = isSell ? item.sell : item.buy;
+        var item = list.find(function (r) { return r.code === code; });
+        if (!item) { return null; }
+        return isCounter ? (isSell ? item.buy : item.sell) : (isSell ? item.sell : item.buy);
     }
 
+    function fillRate() {
+        var isSell = document.querySelector('input[name="Input.TradeType"][value="SELL"]').checked;
+        var baseRate = selectedRate(currency.value, false, isSell);
+        if (baseRate !== null) { rate.value = baseRate; }
+        if (settlementMode.value === 'DIRECT' && rateMode.value === 'DERIVED') {
+            var counterRate = selectedRate(settlementCurrency.value, true, isSell);
+            crossRate.value = baseRate !== null && counterRate ? (baseRate / counterRate).toPrecision(10).replace(/0+$/, '').replace(/\.$/, '') : '';
+        }
+    }
+
+    function updateMode() {
+        var direct = settlementMode.value === 'DIRECT';
+        var split = settlementMode.value === 'SPLIT';
+        counterCurrencyField.hidden = !direct;
+        rateModeField.hidden = !direct;
+        crossRateField.hidden = !direct;
+        splitPanel.hidden = !split;
+        crossRate.readOnly = direct && rateMode.value === 'DERIVED';
+        fillRate();
+    }
+
+    addLine.addEventListener('click', function () {
+        if (rows.querySelectorAll('.settlement-line').length >= 100) { return; }
+        var row = template.content.firstElementChild.cloneNode(true);
+        var index = rows.querySelectorAll('.settlement-line').length;
+        row.querySelectorAll('[name]').forEach(function (input) {
+            input.name = input.name.replace('[0]', '[' + index + ']');
+        });
+        rows.appendChild(row);
+    });
+
     currency.addEventListener('change', fillRate);
+    settlementCurrency.addEventListener('change', fillRate);
     branch.addEventListener('change', fillRate);
-    radios.forEach(function (r) { r.addEventListener('change', fillRate); });
+    radios.forEach(function (radio) { radio.addEventListener('change', fillRate); });
+    settlementMode.addEventListener('change', updateMode);
+    rateMode.addEventListener('change', updateMode);
+    if (!rate.value) { fillRate(); }
+    updateMode();
 })();
 </script>

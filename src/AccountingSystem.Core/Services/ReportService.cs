@@ -61,6 +61,39 @@ public sealed class ReportService
         return await _repository.GetJournalAsync(scope, fromInclusive, toExclusive, ct);
     }
 
+    /// <summary>مانده‌ی بدهکار/بستانکار اشخاص در شعبه‌ی انتخابی یا همه‌ی شعبه‌های قابل مشاهده.</summary>
+    public async Task<IReadOnlyList<CustomerBalanceReportRow>> GetCustomerBalancesAsync(
+        CurrentUser actor,
+        int? branchId,
+        DateTime toExclusive,
+        CancellationToken ct = default)
+    {
+        var scope = await _permissions.ResolveReadBranchAsync(actor, branchId, ct);
+        return await _repository.GetCustomerBalancesAsync(scope, toExclusive, ct);
+    }
+
+    /// <summary>گردش معین شخص با مانده‌ی اول دوره و ریز بدهکار/بستانکار در بازه‌ی انتخابی.</summary>
+    public async Task<CustomerLedgerReport> GetCustomerLedgerAsync(
+        CurrentUser actor,
+        int? branchId,
+        int customerId,
+        DateTime fromInclusive,
+        DateTime toExclusive,
+        CancellationToken ct = default)
+    {
+        if (toExclusive <= fromInclusive)
+        {
+            throw new BusinessRuleException("بازه‌ی گزارش معین اشخاص معتبر نیست.");
+        }
+
+        var scope = await _permissions.ResolveReadBranchAsync(actor, branchId, ct);
+        var customer = await _repository.GetCustomerAsync(customerId, ct)
+            ?? throw new BusinessRuleException("مشتری انتخاب‌شده پیدا نشد.");
+        var data = await _repository.GetCustomerLedgerAsync(customerId, scope, fromInclusive, toExclusive, ct);
+        var closing = data.Lines.Count > 0 ? data.Lines[^1].BalanceIrr : data.OpeningBalanceIrr;
+        return new CustomerLedgerReport(customer, data.OpeningBalanceIrr, data.Lines, closing);
+    }
+
     private static IReadOnlyList<PositionInfo> BuildPositions(
         IReadOnlyList<CurrencyInfo> currencies,
         IReadOnlyList<CashBoxInfo> boxes,

@@ -103,6 +103,145 @@ public class SqlAccountingRepositoryTests : IClassFixture<SqlServerFixture>, IAs
     }
 
     [Fact]
+    public async Task Direct_split_customer_account_and_offset_settlements_persist_and_replay()
+    {
+        if (!_fixture.IsEnabled)
+        {
+            return;
+        }
+
+        var repo = new SqlAccountingRepository(_fixture.ConnectionString!);
+        var admin = new CurrencyAdminService(repo);
+        var trades = new CurrencyTradeService(repo);
+        var receipts = new ReceiptService(repo);
+        var reports = new ReportService(repo);
+        var now = DateTime.Now;
+        var user = await EnsureAdminAsync(repo, now);
+        var branchId = await MainBranchIdAsync(repo);
+        var tradedCode = await NewCurrencyCodeAsync(repo);
+        string settlementCode;
+        do
+        {
+            settlementCode = await NewCurrencyCodeAsync(repo);
+        } while (settlementCode == tradedCode);
+
+        await admin.AddCurrencyAsync(user, tradedCode, "ارز معامله‌ی مستقیم", 2, now);
+        await admin.AddCurrencyAsync(user, settlementCode, "ارز تسویه‌ی مستقیم", 2, now);
+        await admin.SetRateAsync(user, branchId, tradedCode, 1_000_000m, 1_100_000m, now);
+        await admin.SetRateAsync(user, branchId, settlementCode, 500_000m, 550_000m, now);
+        await admin.OpeningIrrAsync(user, branchId, 100_000_000m, now);
+        await admin.OpeningForeignAsync(user, branchId, settlementCode, 100m, 500_000m, now);
+
+        var directId = await trades.BuyFromCustomerAsync(new TradeInput(
+            branchId, tradedCode, 10m, 0m, null, null, null,
+            CustomerId: _customerId,
+            SettlementMode: TradeSettlementMode.Direct,
+            RateMode: TradeRateMode.Direct,
+            SettlementCurrencyCode: settlementCode,
+            CrossRate: 2m), user, now);
+        var direct = await repo.GetTradeAsync(directId);
+        Assert.NotNull(direct);
+        Assert.Equal(TradeSettlementMode.Direct, direct!.SettlementMode);
+        Assert.Equal(TradeRateMode.Direct, direct.RateMode);
+        Assert.Equal(settlementCode, direct.SettlementCurrencyCode);
+        Assert.Equal(2m, direct.CrossRate);
+        var directLine = Assert.Single(direct.Settlements!);
+        Assert.Equal(20m, directLine.Amount);
+        Assert.Equal(550_000m, directLine.RateIrr);
+        Assert.Equal(11_000_000m, directLine.IrrAmount);
+        Assert.Equal(10_000_000m, directLine.CostIrr);
+        Assert.Equal(1_000_000m, directLine.ProfitIrr);
+
+        var directSnapshot = await repo.GetTradeSnapshotAsync(branchId, tradedCode);
+        var settlementSnapshot = await repo.GetTradeSnapshotAsync(branchId, settlementCode);
+        Assert.Equal(10m, directSnapshot!.ForeignBalance);
+        Assert.Equal(80m, settlementSnapshot!.ForeignBalance);
+        Assert.Equal(100_000_000m, directSnapshot.IrrBalance);
+
+        var derivedId = await trades.BuyFromCustomerAsync(new TradeInput(
+            branchId, tradedCode, 5.5m, 0m, null, null, null,
+            CustomerId: _customerId,
+            SettlementMode: TradeSettlementMode.Direct,
+            RateMode: TradeRateMode.Derived,
+            SettlementCurrencyCode: settlementCode), user, now);
+        var derived = await repo.GetTradeAsync(derivedId);
+        Assert.NotNull(derived);
+        Assert.Equal(TradeRateMode.Derived, derived!.RateMode);
+        Assert.Equal(1.81818182m, derived.CrossRate);
+        Assert.Equal(10m, Assert.Single(derived.Settlements!).Amount);
+        Assert.Equal(5_500_000m, derived.Settlements[0].IrrAmount);
+
+        var splitId = await trades.SellToCustomerAsync(new TradeInput(
+            branchId, tradedCode, 5m, 1_200_000m, null, null, null,
+            CustomerId: _customerId,
+            SettlementMode: TradeSettlementMode.Split,
+            SettlementLines: new[]
+            {
+                new TradeSettlementInput(settlementCode, 5m),
+                new TradeSettlementInput(CurrencyCodes.Irr, 3_500_000m),
+            }), user, now);
+        var split = await repo.GetTradeAsync(splitId);
+        Assert.Equal(2, split!.Settlements!.Count);
+        Assert.Equal(TradeSettlementDirection.Receipt, split.Settlements[0].Direction);
+        Assert.Equal(2_500_000m, split.Settlements[0].IrrAmount);
+        Assert.Equal(TradeSettlementDirection.Receipt, split.Settlements[1].Direction);
+        Assert.Equal(3_500_000m, split.Settlements[1].IrrAmount);
+
+        var accountSaleId = await trades.SellToCustomerAsync(new TradeInput(
+            branchId, tradedCode, 1m, 1_200_000m, null, null, null,
+            CustomerId: _customerId,
+            SettlementMode: TradeSettlementMode.CustomerAccount), user, now);
+        var afterSale = await repo.GetCustomerAccountBalanceAsync(branchId, _customerId, now);
+        Assert.Equal(1_200_000m, afterSale.ReceivableIrr);
+        Assert.Equal(0m, afterSale.PayableIrr);
+
+        var offsetBuyId = await trades.BuyFromCustomerAsync(new TradeInput(
+            branchId, tradedCode, 1m, 1_100_000m, null, null, null,
+            CustomerId: _customerId,
+            SettlementMode: TradeSettlementMode.CustomerAccount,
+            ApplyCustomerOffset: true), user, now);
+        var offsetBuy = await repo.GetTradeAsync(offsetBuyId);
+        Assert.Equal(1_100_000m, offsetBuy!.CustomerOffsetIrr);
+        Assert.Empty(offsetBuy.Settlements!);
+        var afterOffset = await repo.GetCustomerAccountBalanceAsync(branchId, _customerId, now);
+        Assert.Equal(100_000m, afterOffset.ReceivableIrr);
+        Assert.Equal(0m, afterOffset.PayableIrr);
+
+        var customerLineCount = Convert.ToInt32(await SqlTestDb.ScalarAsync(_fixture.ConnectionString!, @"
+SELECT COUNT(*) FROM dbo.JournalLines l
+INNER JOIN dbo.JournalEntries e ON e.Id = l.JournalEntryId
+WHERE e.SourceType = N'TRADE' AND e.SourceId = @tradeId AND l.CustomerId = @customerId
+  AND l.AccountCode IN (N'1201', N'2101');",
+            ("@tradeId", offsetBuyId), ("@customerId", _customerId)), CultureInfo.InvariantCulture);
+        Assert.True(customerLineCount >= 2);
+
+        var html = await receipts.RenderTradeReceiptAsync(user, splitId);
+        Assert.Contains(settlementCode, html);
+        Assert.Contains("3,500,000 IRR", html);
+        await AssertLedgerConsistentAsync(_fixture.ConnectionString!, branchId, tradedCode);
+        await AssertLedgerConsistentAsync(_fixture.ConnectionString!, branchId, settlementCode);
+
+        // ابطال باید در مانده‌ی اشخاص با سند معکوس خنثی شود، نه اینکه مانده را دوبار تغییر دهد.
+        await trades.VoidTradeAsync(user, offsetBuyId, "ابطال آزمایش گزارش", now.AddMinutes(1));
+        var afterVoid = await repo.GetCustomerAccountBalanceAsync(branchId, _customerId, now.AddMinutes(2));
+        Assert.Equal(1_200_000m, afterVoid.ReceivableIrr);
+        Assert.Equal(0m, afterVoid.PayableIrr);
+
+        var balanceRows = await reports.GetCustomerBalancesAsync(user, branchId, now.AddDays(1));
+        var customerBalance = Assert.Single(balanceRows.Where(row => row.CustomerId == _customerId));
+        Assert.Equal(1_200_000m, customerBalance.BalanceIrr);
+        Assert.Equal(1_200_000m, customerBalance.DebitBalanceIrr);
+        Assert.Equal(0m, customerBalance.CreditBalanceIrr);
+        var ledger = await reports.GetCustomerLedgerAsync(user, branchId, _customerId, now.Date, now.Date.AddDays(1));
+        Assert.Equal(0m, ledger.OpeningBalanceIrr);
+        Assert.Equal(1_200_000m, ledger.ClosingBalanceIrr);
+        Assert.Contains(ledger.Lines, line => line.SourceId == offsetBuyId && line.IsVoided);
+        Assert.Contains(ledger.Lines, line => line.SourceType == SourceTypes.Void && line.SourceId == offsetBuyId);
+        await AssertLedgerConsistentAsync(_fixture.ConnectionString!, branchId, tradedCode);
+        await AssertLedgerConsistentAsync(_fixture.ConnectionString!, branchId, settlementCode);
+    }
+
+    [Fact]
     public async Task Selling_more_than_stock_is_rejected_before_posting()
     {
         if (!_fixture.IsEnabled)

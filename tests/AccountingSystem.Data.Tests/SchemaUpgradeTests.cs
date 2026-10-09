@@ -42,7 +42,7 @@ public sealed class SchemaUpgradeTests
 
         var first = await SchemaUpgrader.EnsureUpToDateAsync(Db(fresh)!, NoBackup());
         Assert.Equal(UpgradeKind.Create, first.Kind);
-        Assert.Equal(new[] { 1, 2 }, first.AppliedVersions);
+        Assert.Equal(new[] { 1, 2, 3 }, first.AppliedVersions);
 
         var second = await SchemaUpgrader.EnsureUpToDateAsync(Db(fresh)!, NoBackup());
         Assert.Equal(UpgradeKind.UpToDate, second.Kind);
@@ -55,8 +55,8 @@ public sealed class SchemaUpgradeTests
         Assert.Empty(actual.Except(expected));
 
         var versions = await SqlTestDb.RowsAsync(Db(fresh)!, "SELECT Version, AppliedBy FROM dbo.SchemaVersion ORDER BY Version;");
-        Assert.Equal(2, versions.Count);
-        Assert.NotEqual("ADOPTED", (string)versions[1][1]!);
+        Assert.Equal(3, versions.Count);
+        Assert.NotEqual("ADOPTED", (string)versions[2][1]!);
     }
 
     [Fact]
@@ -111,15 +111,15 @@ public sealed class SchemaUpgradeTests
 
         Assert.Equal(UpgradeKind.Upgrade, result.Kind);
         Assert.Equal(new[] { 1 }, result.AdoptedVersions);
-        Assert.Equal(new[] { 2 }, result.AppliedVersions);
+        Assert.Equal(new[] { 2, 3 }, result.AppliedVersions);
         Assert.NotNull(result.BackupPath);
 
         var backups = await new SqlDatabaseMaintenance(Db(legacy)!).ListBackupsAsync();
         Assert.Contains(backups, b => b.FilePath == result.BackupPath);
 
-        // نسخه‌ها: ۱ ثبت‌شده‌ی قدیمی (ADOPTED) و ۲ که توسط برنامه اجرا شده است.
+        // نسخه‌ی ۱ قدیمی پذیرفته شده و نسخه‌های ۲ و ۳ توسط برنامه اجرا شده‌اند.
         var versions = await SqlTestDb.RowsAsync(Db(legacy)!, "SELECT Version, AppliedBy FROM dbo.SchemaVersion ORDER BY Version;");
-        Assert.Equal(2, versions.Count);
+        Assert.Equal(3, versions.Count);
         Assert.Equal("ADOPTED", (string)versions[0][1]!);
 
         // backfill: هر معامله به مشتری وصل است و گروه‌بندی درست است.
@@ -127,6 +127,24 @@ public sealed class SchemaUpgradeTests
             .Select(r => Convert.ToInt32(r[1]))
             .ToList();
         Assert.Equal(6, ids.Count);
+        Assert.Equal(6, Convert.ToInt32(await SqlTestDb.ScalarAsync(Db(legacy)!, "SELECT COUNT(*) FROM dbo.CurrencyTransactionSettlements;")));
+        Assert.Equal("IRR", await SqlTestDb.ScalarAsync(Db(legacy)!,
+            "SELECT RTRIM(SettlementCurrencyCode) FROM dbo.CurrencyTransactions WHERE Id = 1;"));
+        Assert.Equal("DIRECT", await SqlTestDb.ScalarAsync(Db(legacy)!,
+            "SELECT SettlementMode FROM dbo.CurrencyTransactions WHERE Id = 1;"));
+        Assert.Equal("DERIVED", await SqlTestDb.ScalarAsync(Db(legacy)!,
+            "SELECT RateMode FROM dbo.CurrencyTransactions WHERE Id = 1;"));
+        Assert.Equal(500_000m, Convert.ToDecimal(await SqlTestDb.ScalarAsync(Db(legacy)!,
+            "SELECT CrossRate FROM dbo.CurrencyTransactions WHERE Id = 1;"), System.Globalization.CultureInfo.InvariantCulture));
+        var legacySettlement = Assert.Single(await SqlTestDb.RowsAsync(Db(legacy)!, @"
+SELECT Direction, RTRIM(CurrencyCode), Amount, RateIrr, IrrAmount, CostIrr
+FROM dbo.CurrencyTransactionSettlements WHERE TradeId = 1;"));
+        Assert.Equal("PAY", legacySettlement[0]);
+        Assert.Equal("IRR", legacySettlement[1]);
+        Assert.Equal(50_000_000m, Convert.ToDecimal(legacySettlement[2], System.Globalization.CultureInfo.InvariantCulture));
+        Assert.Equal(1m, Convert.ToDecimal(legacySettlement[3], System.Globalization.CultureInfo.InvariantCulture));
+        Assert.Equal(50_000_000m, Convert.ToDecimal(legacySettlement[4], System.Globalization.CultureInfo.InvariantCulture));
+        Assert.Equal(50_000_000m, Convert.ToDecimal(legacySettlement[5], System.Globalization.CultureInfo.InvariantCulture));
         Assert.Equal(ids[0], ids[1]);
         Assert.Equal(ids[2], ids[3]);
         Assert.Equal(ids[4], ids[5]);

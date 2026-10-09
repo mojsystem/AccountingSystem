@@ -227,7 +227,13 @@ CREATE TABLE dbo.CurrencyTransactions
     Seq          BIGINT               NOT NULL CONSTRAINT DF_CurrencyTransactions_Seq DEFAULT (NEXT VALUE FOR dbo.LedgerSeq),
     -- معامله‌ای که این معامله نسخه‌ی اصلاحی آن است (ویرایش مالی با ابطال نسخه‌ی قبلی انجام می‌شود).
     ReplacesId   BIGINT               NULL,
+    SettlementCurrencyCode NCHAR(3) NULL,
+    SettlementMode NVARCHAR(12) NOT NULL CONSTRAINT DF_CurrencyTransactions_SettlementMode DEFAULT (N'DIRECT'),
+    RateMode NVARCHAR(12) NOT NULL CONSTRAINT DF_CurrencyTransactions_RateMode DEFAULT (N'DERIVED'),
+    CrossRate DECIMAL(19,8) NOT NULL CONSTRAINT DF_CurrencyTransactions_CrossRate DEFAULT (0),
+    CustomerOffsetIrr DECIMAL(19,4) NOT NULL CONSTRAINT DF_CurrencyTransactions_CustomerOffset DEFAULT (0),
     CONSTRAINT PK_CurrencyTransactions PRIMARY KEY (Id),
+    CONSTRAINT FK_CurrencyTransactions_SettlementCurrency FOREIGN KEY (SettlementCurrencyCode) REFERENCES dbo.Currencies (Code),
     CONSTRAINT FK_CurrencyTransactions_Replaces FOREIGN KEY (ReplacesId) REFERENCES dbo.CurrencyTransactions (Id),
     CONSTRAINT FK_CurrencyTransactions_Branches FOREIGN KEY (BranchId) REFERENCES dbo.Branches (Id),
     CONSTRAINT FK_CurrencyTransactions_Currencies FOREIGN KEY (CurrencyCode) REFERENCES dbo.Currencies (Code),
@@ -238,11 +244,35 @@ CREATE TABLE dbo.CurrencyTransactions
     CONSTRAINT CK_CurrencyTransactions_Rate CHECK (Rate > 0),
     CONSTRAINT CK_CurrencyTransactions_Irr CHECK (IrrAmount > 0 AND CostIrr >= 0),
     CONSTRAINT CK_CurrencyTransactions_Fee CHECK (FeeIrr >= 0 AND (TradeType = N'SELL' OR FeeIrr < IrrAmount)),
+    CONSTRAINT CK_CurrencyTransactions_SettlementMode CHECK (SettlementMode IN (N'DIRECT', N'SPLIT', N'ACCOUNT')),
+    CONSTRAINT CK_CurrencyTransactions_RateMode CHECK (RateMode IN (N'DIRECT', N'DERIVED')),
+    CONSTRAINT CK_CurrencyTransactions_CrossRate CHECK (CrossRate >= 0 AND CustomerOffsetIrr >= 0),
     CONSTRAINT CK_CurrencyTransactions_Void CHECK (
         (IsVoided = 0 AND VoidedAt IS NULL AND VoidedBy IS NULL AND VoidReason IS NULL)
         OR (IsVoided = 1 AND VoidedAt IS NOT NULL AND VoidedBy IS NOT NULL AND VoidReason IS NOT NULL))
 );
 CREATE INDEX IX_CurrencyTransactions_Branch_OccurredAt ON dbo.CurrencyTransactions (BranchId, OccurredAt);
+GO
+
+-- جزئیات دریافت/پرداخت برای تبادل مستقیم، تسویه‌ی چندبخشی و گردش حساب مشتری.
+CREATE TABLE dbo.CurrencyTransactionSettlements
+(
+    TradeId       BIGINT         NOT NULL,
+    LineNumber    INT            NOT NULL,
+    Direction     NVARCHAR(8)    NOT NULL,
+    CurrencyCode  NCHAR(3)       NOT NULL,
+    Amount        DECIMAL(19,4)  NOT NULL,
+    RateIrr       DECIMAL(19,4)  NOT NULL,
+    IrrAmount     DECIMAL(19,4)  NOT NULL,
+    CostIrr       DECIMAL(19,4)  NOT NULL CONSTRAINT DF_TradeSettlements_Cost DEFAULT (0),
+    ProfitIrr     DECIMAL(19,4)  NOT NULL CONSTRAINT DF_TradeSettlements_Profit DEFAULT (0),
+    CONSTRAINT PK_CurrencyTransactionSettlements PRIMARY KEY (TradeId, LineNumber),
+    CONSTRAINT FK_TradeSettlements_Trade FOREIGN KEY (TradeId) REFERENCES dbo.CurrencyTransactions (Id),
+    CONSTRAINT FK_TradeSettlements_Currency FOREIGN KEY (CurrencyCode) REFERENCES dbo.Currencies (Code),
+    CONSTRAINT CK_TradeSettlements_Direction CHECK (Direction IN (N'PAY', N'RECEIVE')),
+    CONSTRAINT CK_TradeSettlements_Amount CHECK (Amount > 0 AND RateIrr > 0 AND IrrAmount > 0 AND CostIrr >= 0)
+);
+CREATE INDEX IX_TradeSettlements_Currency ON dbo.CurrencyTransactionSettlements (CurrencyCode, TradeId);
 GO
 
 -- موجودی افتتاحیه‌ی ریال یا ارز هر شعبه. ابطال و ویرایش مثل معاملات با بازمحاسبه‌ی تاریخچه انجام می‌شود.
@@ -375,12 +405,16 @@ CREATE TABLE dbo.JournalLines
     AccountCode    NVARCHAR(20)         NOT NULL,
     Debit          DECIMAL(19,4)        NOT NULL,
     Credit         DECIMAL(19,4)        NOT NULL,
+    CustomerId     INT                  NULL,
     CONSTRAINT PK_JournalLines PRIMARY KEY (Id),
     CONSTRAINT UQ_JournalLines_EntryLine UNIQUE (JournalEntryId, LineNumber),
     CONSTRAINT FK_JournalLines_JournalEntries FOREIGN KEY (JournalEntryId) REFERENCES dbo.JournalEntries (Id),
     CONSTRAINT FK_JournalLines_Accounts FOREIGN KEY (AccountCode) REFERENCES dbo.Accounts (Code),
-    CONSTRAINT CK_JournalLines_OneSide CHECK ((Debit > 0 AND Credit = 0) OR (Debit = 0 AND Credit > 0))
+    CONSTRAINT FK_JournalLines_Customers FOREIGN KEY (CustomerId) REFERENCES dbo.Customers (Id),
+    CONSTRAINT CK_JournalLines_OneSide CHECK ((Debit > 0 AND Credit = 0) OR (Debit = 0 AND Credit > 0)),
+    CONSTRAINT CK_JournalLines_CustomerAccount CHECK (CustomerId IS NULL OR AccountCode IN (N'1201', N'2101'))
 );
+CREATE INDEX IX_JournalLines_Customer ON dbo.JournalLines (CustomerId, AccountCode, JournalEntryId) INCLUDE (Debit, Credit) WHERE CustomerId IS NOT NULL;
 GO
 
 -- داده‌های اولیه
@@ -422,9 +456,14 @@ GO
 -- حساب‌های IsSystem=1 پایه‌ی موتور معاملات و سندهای خودکارند: کد، پدر، نوع و وضعیت آن‌ها قابل تغییر نیست؛ فقط نام قابل ویرایش است.
 INSERT INTO dbo.Accounts (Code, Name, AccountType, Level, ParentCode, IsSystem) VALUES
 (N'1',          N'دارایی‌ها',                       N'Asset',   1, NULL,     0),
+(N'2',          N'بدهی‌ها',                          N'Liability', 1, NULL,   1),
 (N'10',         N'دارایی‌های نقدی',                 N'Asset',   2, N'1',     0),
 (N'1001',       N'صندوق ریال',                      N'Asset',   3, N'10',    1),
 (N'11',         N'دارایی‌های ارزی',                 N'Asset',   2, N'1',     0),
+(N'12',         N'مطالبات از مشتریان',               N'Asset',   2, N'1',     1),
+(N'1201',       N'حساب دریافتنی مشتریان',            N'Asset',   3, N'12',    1),
+(N'21',         N'بدهی به مشتریان',                  N'Liability', 2, N'2',  1),
+(N'2101',       N'حساب پرداختنی مشتریان',           N'Liability', 3, N'21', 1),
 (N'1101',       N'موجودی ارز به تفکیک ارز',         N'Asset',   3, N'11',    0),
 (N'1101-USD',   N'موجودی ارز - دلار آمریکا',        N'Asset',   4, N'1101',  1),
 (N'1101-EUR',   N'موجودی ارز - یورو',               N'Asset',   4, N'1101',  1),

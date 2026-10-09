@@ -504,6 +504,54 @@ label.check {
     align-items: end;
 }
 
+.settlement-panel {
+    margin: 1rem 0;
+    padding: 0.85rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--surface-2);
+}
+
+.settlement-panel h3 {
+    margin-top: 0;
+}
+
+.report-filters {
+    margin-block: 1rem;
+}
+
+.report-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.55rem;
+}
+
+.report-summary {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.65rem 1.4rem;
+    margin-block: 1rem;
+}
+
+.summary-row {
+    background: var(--surface-2);
+    font-weight: 700;
+}
+
+.settlement-line {
+    display: grid;
+    grid-template-columns: minmax(150px, 1fr) minmax(150px, 1fr);
+    gap: 0.7rem;
+    margin-bottom: 0.6rem;
+}
+
+@media (max-width: 560px) {
+    .settlement-line {
+        grid-template-columns: 1fr;
+    }
+}
+
 .filters {
     display: flex;
     flex-wrap: wrap;

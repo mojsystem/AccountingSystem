@@ -31,12 +31,13 @@
                     <a class="@Active("/Index")" aria-current="@Current("/Index")" asp-page="/Index">داشبورد</a>
                     <a class="@Active("/Trade")" aria-current="@Current("/Trade")" asp-page="/Trade/Index">خرید و فروش</a>
                     <a class="@Active("/Customers")" aria-current="@Current("/Customers")" asp-page="/Customers/Index">مشتریان</a>
-                    <a class="@Active("/Rates")" aria-current="@Current("/Rates")" asp-page="/Rates/Index">نرخ و ارزها</a>
+                    <a class="@Active("/Rates")" aria-current="@Current("/Rates")" asp-page="/Rates/Index">نرخ‌ها و مدیریت ارز</a>
                 </div>
                 <div class="nav-group">
                     <span class="nav-group-title">حسابداری</span>
                     <a class="@Active("/Cash")" aria-current="@Current("/Cash")" asp-page="/Cash/Index">صندوق‌ها</a>
                     <a class="@Active("/Journal")" aria-current="@Current("/Journal")" asp-page="/Journal/Index">اسناد حسابداری</a>
+                    <a class="@Active("/Reports")" aria-current="@Current("/Reports")" asp-page="/Reports/Index">گزارش اشخاص</a>
                 </div>
                 @if (User.IsInRole("Admin"))
                 {

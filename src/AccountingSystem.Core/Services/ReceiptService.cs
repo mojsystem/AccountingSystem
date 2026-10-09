@@ -26,6 +26,8 @@ public sealed class ReceiptService
         var currencies = await _repository.GetCurrenciesAsync(ct);
         var currency = currencies.FirstOrDefault(c => c.Code == trade.CurrencyCode)
             ?? new CurrencyInfo(trade.CurrencyCode, trade.CurrencyCode, 2, true);
-        return ReceiptHtml.Render(new ReceiptData(trade, currency.Name, currency.DecimalPlaces));
+        var names = currencies.ToDictionary(c => c.Code, c => c.Name, StringComparer.Ordinal);
+        var decimals = currencies.ToDictionary(c => c.Code, c => (int)c.DecimalPlaces, StringComparer.Ordinal);
+        return ReceiptHtml.Render(new ReceiptData(trade, currency.Name, currency.DecimalPlaces, names, decimals));
     }
 }

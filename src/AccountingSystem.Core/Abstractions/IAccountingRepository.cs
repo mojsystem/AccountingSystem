@@ -65,6 +65,15 @@ public interface IAccountingRepository
 
     Task<TradeInfo?> GetTradeAsync(long tradeId, CancellationToken ct = default);
 
+    /// <summary>مانده‌ی دریافتنی و پرداختنی مشتری تا تاریخ معامله؛ excludeTradeId هنگام ویرایش همان معامله را کنار می‌گذارد.</summary>
+    Task<CustomerAccountBalance> GetCustomerAccountBalanceAsync(int branchId, int customerId, DateTime asOf, long? excludeTradeId = null, CancellationToken ct = default);
+
+    /// <summary>مانده‌ی خالص اشخاص از دفتر حساب‌های تفصیلی مشتری، تا قبل از toExclusive.</summary>
+    Task<IReadOnlyList<CustomerBalanceReportRow>> GetCustomerBalancesAsync(int? branchId, DateTime toExclusive, CancellationToken ct = default);
+
+    /// <summary>مانده‌ی ابتدای دوره و گردش دفتر شخص در بازه؛ اسناد ابطال‌شده و سند معکوسشان برای حفظ تاریخچه با هم لحاظ می‌شوند.</summary>
+    Task<CustomerLedgerData> GetCustomerLedgerAsync(int customerId, int? branchId, DateTime fromInclusive, DateTime toExclusive, CancellationToken ct = default);
+
     Task<IReadOnlyList<OpeningInfo>> GetOpeningsAsync(int? branchId, DateTime fromInclusive, DateTime toExclusive, CancellationToken ct = default);
 
     Task<OpeningInfo?> GetOpeningAsync(long openingId, CancellationToken ct = default);

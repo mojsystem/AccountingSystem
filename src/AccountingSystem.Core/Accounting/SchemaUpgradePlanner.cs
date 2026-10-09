@@ -17,6 +17,18 @@ public static class SchemaUpgradePlanner
     private static readonly LegacyFingerprint[] LegacyFingerprints =
     {
         new(
+            3,
+            new[]
+            {
+                "dbo.AccessRoles", "dbo.UserBranchRoles", "dbo.Customers",
+                "dbo.Accounts.Level", "dbo.Accounts.ParentCode", "dbo.Accounts.IsSystem",
+                "dbo.CurrencyTransactions.CustomerId", "dbo.CurrencyTransactions.SettlementMode",
+                "dbo.CurrencyTransactions.RateMode", "dbo.CurrencyTransactions.SettlementCurrencyCode",
+                "dbo.CurrencyTransactions.CrossRate", "dbo.CurrencyTransactions.CustomerOffsetIrr",
+                "dbo.JournalLines.CustomerId", "dbo.CurrencyTransactionSettlements",
+            },
+            Array.Empty<string>()),
+        new(
             2,
             new[]
             {

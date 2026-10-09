@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text.Json;
 using AccountingSystem.Core.Accounting;
 using AccountingSystem.Core.Common;
 using AccountingSystem.Core.Domain;
@@ -39,6 +40,10 @@ public class EditModel : PageModel
 
     public IReadOnlyList<CurrencyInfo> Currencies { get; private set; } = Array.Empty<CurrencyInfo>();
 
+    public IReadOnlyList<CurrencyInfo> SettlementCurrencies { get; private set; } = Array.Empty<CurrencyInfo>();
+
+    public string RatesJson { get; private set; } = "{}";
+
     /// <summary>مشتریان مشترک برای انتخاب مشتری معامله.</summary>
     public IReadOnlyList<CustomerInfo> Customers { get; private set; } = Array.Empty<CustomerInfo>();
 
@@ -64,9 +69,29 @@ public class EditModel : PageModel
             Fee = trade.FeeIrr.ToString("0", CultureInfo.InvariantCulture),
             CustomerId = trade.CustomerId,
             Note = trade.Note,
+            SettlementMode = trade.SettlementMode switch
+            {
+                TradeSettlementMode.Direct => "DIRECT",
+                TradeSettlementMode.Split => "SPLIT",
+                TradeSettlementMode.CustomerAccount => "ACCOUNT",
+                _ => "DIRECT",
+            },
+            RateMode = trade.RateMode == TradeRateMode.Direct ? "DIRECT" : "DERIVED",
+            SettlementCurrencyCode = trade.SettlementCurrencyCode ?? CurrencyCodes.Irr,
+            CrossRate = trade.CrossRate > 0m ? trade.CrossRate.ToString("0.########", CultureInfo.InvariantCulture) : null,
+            ApplyCustomerOffset = trade.CustomerOffsetIrr > 0m,
+            SettlementLines = (trade.Settlements ?? Array.Empty<TradeSettlementInfo>())
+                .Select(line => new TradeSettlementForm
+                {
+                    CurrencyCode = line.CurrencyCode,
+                    Amount = line.Amount.ToString("0.####", CultureInfo.InvariantCulture),
+                }).ToList(),
             OccurredOn = PersianDate.FormatDate(trade.OccurredAt),
         };
+        EnsureSettlementRows();
         Currencies = await LoadCurrenciesAsync(ct);
+        SettlementCurrencies = await LoadSettlementCurrenciesAsync(ct);
+        RatesJson = await LoadRatesJsonAsync(user, trade.BranchId, ct);
         Customers = await LoadCustomersAsync(user, ct);
         return Page();
     }
@@ -76,19 +101,6 @@ public class EditModel : PageModel
         var user = User.ToCurrentUser();
         Id = id;
 
-        if (!InputParser.TryParseDecimal(Input.Amount, out var amount))
-        {
-            return await ShowErrorAsync("مقدار ارز را به‌درستی وارد کنید.", id, ct);
-        }
-        if (!InputParser.TryParseDecimal(Input.Rate, out var rate))
-        {
-            return await ShowErrorAsync("نرخ را به‌درستی وارد کنید.", id, ct);
-        }
-        decimal fee = 0m;
-        if (!string.IsNullOrWhiteSpace(Input.Fee) && !InputParser.TryParseDecimal(Input.Fee, out fee))
-        {
-            return await ShowErrorAsync("کارمزد را به‌درستی وارد کنید (عدد ریال).", id, ct);
-        }
         DateTime? occurredOn = null;
         if (!string.IsNullOrWhiteSpace(Input.OccurredOn))
         {
@@ -101,7 +113,7 @@ public class EditModel : PageModel
 
         try
         {
-            var input = new TradeInput(Input.BranchId, Input.CurrencyCode, amount, rate, null, null, Input.Note, fee, Input.CustomerId);
+            var input = Input.ToTradeInput();
             var type = Input.TradeType == "SELL" ? TradeType.Sell : TradeType.Buy;
             var newId = await _trades.EditTradeAsync(user, id, input, type, occurredOn, DateTime.Now, ct);
             TempData["Success"] = newId is null
@@ -122,7 +134,10 @@ public class EditModel : PageModel
         var trade = await _trades.GetTradeAsync(user, id, ct);
         IsVoided = trade?.IsVoided ?? false;
         CanEdit = trade is not null && await _permissions.HasAsync(user, Permission.TradeEdit, trade.BranchId, ct);
+        EnsureSettlementRows();
         Currencies = await LoadCurrenciesAsync(ct);
+        SettlementCurrencies = await LoadSettlementCurrenciesAsync(ct);
+        RatesJson = trade is null ? "{}" : await LoadRatesJsonAsync(user, trade.BranchId, ct);
         Customers = await LoadCustomersAsync(user, ct);
         return Page();
     }
@@ -141,4 +156,26 @@ public class EditModel : PageModel
 
     private async Task<IReadOnlyList<CurrencyInfo>> LoadCurrenciesAsync(CancellationToken ct) =>
         (await _admin.GetCurrenciesAsync(ct)).Where(c => c.IsActive && c.Code != CurrencyCodes.Irr).ToList();
+
+    private async Task<IReadOnlyList<CurrencyInfo>> LoadSettlementCurrenciesAsync(CancellationToken ct) =>
+        (await _admin.GetCurrenciesAsync(ct)).Where(c => c.IsActive).ToList();
+
+    private async Task<string> LoadRatesJsonAsync(CurrentUser user, int branchId, CancellationToken ct)
+    {
+        var rates = await _admin.GetLatestRatesAsync(user, branchId, ct);
+        return JsonSerializer.Serialize(rates
+            .GroupBy(r => r.BranchId.ToString(CultureInfo.InvariantCulture))
+            .ToDictionary(
+                group => group.Key,
+                group => group.Select(rate => new { code = rate.CurrencyCode, buy = rate.BuyRateIrr, sell = rate.SellRateIrr }).ToList()));
+    }
+
+    private void EnsureSettlementRows()
+    {
+        Input.SettlementLines ??= new List<TradeSettlementForm>();
+        while (Input.SettlementLines.Count < 2)
+        {
+            Input.SettlementLines.Add(new TradeSettlementForm());
+        }
+    }
 }
