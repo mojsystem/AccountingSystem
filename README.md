@@ -1,2 +1,2 @@
 # AccountingSystem
-Professional Accounting System - C# .NET 8.0
+Professional Accounting System - C# .NET 10.0
