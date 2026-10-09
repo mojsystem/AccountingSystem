@@ -21,6 +21,7 @@ internal sealed class MainForm : Form
         AddTab("خرید و فروش ارز", new TradeTab(services, user));
         AddTab("نرخ و ارزها", new RatesTab(services, user));
         AddTab("صندوق‌ها", new CashTab(services, user));
+        AddTab("موجودی‌های افتتاحیه", new OpeningsTab(services, user));
         AddTab("اسناد حسابداری", new JournalTab(services, user));
         if (user.Role == UserRole.Admin)
         {

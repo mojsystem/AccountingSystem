@@ -18,6 +18,9 @@ internal sealed class JournalTab : UserControl, IRefreshable
     private readonly ComboBox _branch = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 200 };
     private readonly Button _show = new() { Text = "نمایش", AutoSize = true };
     private readonly Button _excel = new() { Text = "خروجی Excel", AutoSize = true };
+    private readonly Button _newManual = new() { Text = "سند دستی جدید", AutoSize = true };
+    private readonly Button _editManual = new() { Text = "ویرایش سند دستی", AutoSize = true };
+    private readonly Button _voidManual = new() { Text = "ابطال سند دستی", AutoSize = true };
     private readonly DataGridView _grid = UiHelpers.CreateGrid();
     private IReadOnlyList<JournalEntryInfo> _entries = Array.Empty<JournalEntryInfo>();
 
@@ -33,13 +36,21 @@ internal sealed class JournalTab : UserControl, IRefreshable
             UiHelpers.MakeLabel("تا تاریخ (شمسی):"), _to,
             UiHelpers.MakeLabel("شعبه:"), _branch,
             _show, _excel,
+            _newManual, _editManual, _voidManual,
         });
+        var isAdmin = user.Role == UserRole.Admin;
+        _newManual.Visible = isAdmin;
+        _editManual.Visible = isAdmin;
+        _voidManual.Visible = isAdmin;
 
         Controls.Add(_grid);
         Controls.Add(filters);
 
         _show.Click += async (_, _) => await SafeRefreshAsync();
         _excel.Click += (_, _) => ExportExcel();
+        _newManual.Click += async (_, _) => await CreateManualAsync();
+        _editManual.Click += async (_, _) => await EditManualAsync();
+        _voidManual.Click += async (_, _) => await VoidManualAsync();
     }
 
     public async Task RefreshAsync()
@@ -62,7 +73,7 @@ internal sealed class JournalTab : UserControl, IRefreshable
                     PersianDate.FormatDateTime(entry.OccurredAt),
                     entry.BranchName,
                     SourceText(entry.SourceType),
-                    entry.Description,
+                    entry.IsVoided ? "[باطل شد] " + entry.Description : entry.Description,
                     line.LineNo.ToString(),
                     line.AccountCode,
                     line.AccountName,
@@ -79,8 +90,95 @@ internal sealed class JournalTab : UserControl, IRefreshable
         SourceTypes.Trade => "معامله",
         SourceTypes.Opening => "موجودی اولیه",
         SourceTypes.Void => "ابطال",
+        SourceTypes.Adjust => "تعدیل بهای تمام‌شده",
+        SourceTypes.Manual => "سند دستی",
         _ => sourceType,
     };
+
+    /// <summary>سند انتخاب‌شده در جدول. ستون اول جدول شماره‌ی سند است.</summary>
+    private JournalEntryInfo? SelectedEntry()
+    {
+        if (_grid.CurrentRow is null || _grid.CurrentRow.Cells.Count == 0)
+        {
+            return null;
+        }
+        if (!long.TryParse(_grid.CurrentRow.Cells[0].Value?.ToString(), out var entryId))
+        {
+            return null;
+        }
+        return _entries.FirstOrDefault(e => e.Id == entryId);
+    }
+
+    private async Task CreateManualAsync()
+    {
+        try
+        {
+            var branchId = UiHelpers.RequiredBranchId(_branch);
+            var accounts = await _services.Manual.GetAccountsAsync();
+            using var dialog = new ManualEntryDialog(accounts, "سند حسابداری دستی جدید", string.Empty, null, Array.Empty<JournalLineInfo>());
+            if (dialog.ShowDialog(this) != DialogResult.OK)
+            {
+                return;
+            }
+            var entryId = await _services.Manual.CreateAsync(_user, branchId, dialog.Description, dialog.OccurredOn, dialog.Lines, DateTime.Now);
+            UiHelpers.ShowInfo(this, $"سند دستی شماره {entryId} ثبت شد.");
+            await RefreshAsync();
+        }
+        catch (Exception ex)
+        {
+            UiHelpers.ShowError(this, ex);
+        }
+    }
+
+    private async Task EditManualAsync()
+    {
+        try
+        {
+            var selected = SelectedEntry() ?? throw new BusinessRuleException("یک سند دستی را از جدول انتخاب کنید.");
+            var entry = await _services.Manual.GetAsync(_user, selected.Id) ?? throw new BusinessRuleException("سند انتخابی یافت نشد.");
+            if (entry.SourceType != SourceTypes.Manual || entry.IsVoided)
+            {
+                throw new BusinessRuleException("فقط سند دستی فعال را می‌توان ویرایش کرد.");
+            }
+            var accounts = await _services.Manual.GetAccountsAsync();
+            using var dialog = new ManualEntryDialog(accounts, $"ویرایش سند دستی شماره {entry.Id}", entry.Description, entry.OccurredAt, entry.Lines);
+            if (dialog.ShowDialog(this) != DialogResult.OK)
+            {
+                return;
+            }
+            var newId = await _services.Manual.EditAsync(_user, entry.Id, dialog.Description, dialog.OccurredOn, dialog.Lines, DateTime.Now);
+            UiHelpers.ShowInfo(this, $"سند دستی ویرایش شد؛ نسخه‌ی اصلاحی شماره {newId} ثبت گردید.");
+            await RefreshAsync();
+        }
+        catch (Exception ex)
+        {
+            UiHelpers.ShowError(this, ex);
+        }
+    }
+
+    private async Task VoidManualAsync()
+    {
+        try
+        {
+            var entry = SelectedEntry() ?? throw new BusinessRuleException("یک سند دستی را از جدول انتخاب کنید.");
+            if (entry.SourceType != SourceTypes.Manual || entry.IsVoided)
+            {
+                throw new BusinessRuleException("فقط سند دستی فعال را می‌توان باطل کرد.");
+            }
+            var reason = UiHelpers.PromptText(this, "ابطال سند دستی", $"دلیل ابطال سند دستی شماره {entry.Id} را وارد کنید:");
+            if (string.IsNullOrWhiteSpace(reason))
+            {
+                return;
+            }
+            await _services.Manual.VoidAsync(_user, entry.Id, reason, DateTime.Now);
+            UiHelpers.ShowInfo(this, "سند دستی باطل شد و سند ابطال ثبت گردید.");
+            await RefreshAsync();
+        }
+        catch (Exception ex)
+        {
+            UiHelpers.ShowError(this, ex);
+        }
+    }
 
     private void ExportExcel()
     {

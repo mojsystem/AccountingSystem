@@ -1,3 +1,4 @@
+using System.Globalization;
 using AccountingSystem.Core.Accounting;
 using AccountingSystem.Core.Common;
 using AccountingSystem.Core.Domain;
@@ -24,6 +25,7 @@ internal sealed class TradeTab : UserControl, IRefreshable
     private readonly TextBox _customer = new() { Width = 150 };
     private readonly TextBox _nationalCode = new() { Width = 120 };
     private readonly TextBox _note = new() { Width = 170 };
+    private readonly TextBox _occurredOn = new() { Width = 110, PlaceholderText = "امروز" };
     private readonly Label _preview = UiHelpers.MakeLabel(string.Empty);
     private readonly Button _submit = new() { Text = "ثبت معامله", AutoSize = true };
 
@@ -33,6 +35,9 @@ internal sealed class TradeTab : UserControl, IRefreshable
     private readonly Button _show = new() { Text = "نمایش", AutoSize = true };
     private readonly Button _receipt = new() { Text = "رسید", AutoSize = true };
     private readonly Button _void = new() { Text = "ابطال معامله", AutoSize = true };
+    private readonly Button _edit = new() { Text = "ویرایش معامله", AutoSize = true };
+    private readonly Button _cancelEdit = new() { Text = "انصراف از ویرایش", AutoSize = true, Visible = false };
+    private long? _editingTradeId;
     private readonly Button _excel = new() { Text = "خروجی Excel", AutoSize = true };
 
     private readonly DataGridView _grid = UiHelpers.CreateGrid();
@@ -59,8 +64,10 @@ internal sealed class TradeTab : UserControl, IRefreshable
             UiHelpers.MakeLabel("نام مشتری:"), _customer,
             UiHelpers.MakeLabel("کد ملی:"), _nationalCode,
             UiHelpers.MakeLabel("توضیحات:"), _note,
+            UiHelpers.MakeLabel("تاریخ (شمسی):"), _occurredOn,
             _preview,
             _submit,
+            _cancelEdit,
         });
 
         var filters = UiHelpers.CreateInputPanel();
@@ -69,9 +76,10 @@ internal sealed class TradeTab : UserControl, IRefreshable
             UiHelpers.MakeLabel("از تاریخ (شمسی):"), _from,
             UiHelpers.MakeLabel("تا تاریخ (شمسی):"), _to,
             UiHelpers.MakeLabel("شعبه:"), _filterBranch,
-            _show, _receipt, _void, _excel,
+            _show, _receipt, _void, _edit, _excel,
         });
         _void.Visible = user.Role == UserRole.Admin;
+        _edit.Visible = user.Role == UserRole.Admin;
 
         Controls.Add(_grid);
         Controls.Add(filters);
@@ -88,6 +96,8 @@ internal sealed class TradeTab : UserControl, IRefreshable
         _show.Click += async (_, _) => await SafeRefreshAsync();
         _receipt.Click += async (_, _) => await OpenReceiptAsync();
         _void.Click += async (_, _) => await VoidSelectedAsync();
+        _edit.Click += (_, _) => StartEdit();
+        _cancelEdit.Click += (_, _) => CancelEdit();
         _excel.Click += (_, _) => ExportExcel();
     }
 
@@ -155,6 +165,56 @@ internal sealed class TradeTab : UserControl, IRefreshable
     }
 
     /// <summary>نرخ فرم را از نرخ روز ارز و شعبه‌ی انتخابی پر می‌کند؛ اگر نرخی نباشد، کادر خالی می‌شود تا نرخ ارز قبلی باقی نماند.</summary>
+    /// <summary>بارگذاری معامله‌ی انتخاب‌شده در فرم برای ویرایش (مدیر).</summary>
+    private void StartEdit()
+    {
+        var trade = SelectedTrade();
+        if (trade is null || trade.IsVoided)
+        {
+            UiHelpers.ShowInfo(this, "یک معامله‌ی فعال را در جدول انتخاب کنید.");
+            return;
+        }
+
+        _filling = true;
+        try
+        {
+            _editingTradeId = trade.Id;
+            _buy.Checked = trade.Type == TradeType.Buy;
+            _sell.Checked = trade.Type == TradeType.Sell;
+            UiHelpers.SelectByValue(_branch, trade.BranchId.ToString(CultureInfo.InvariantCulture));
+            UiHelpers.SelectByValue(_currency, trade.CurrencyCode);
+            _amount.Text = trade.Amount.ToString("0.####", CultureInfo.InvariantCulture);
+            _rate.Text = trade.Rate.ToString("0.####", CultureInfo.InvariantCulture);
+            _fee.Text = trade.FeeIrr.ToString("0", CultureInfo.InvariantCulture);
+            _customer.Text = trade.CustomerName ?? string.Empty;
+            _nationalCode.Text = trade.NationalCode ?? string.Empty;
+            _note.Text = trade.Note ?? string.Empty;
+            _occurredOn.Text = PersianDate.FormatDate(trade.OccurredAt);
+        }
+        finally
+        {
+            _filling = false;
+        }
+
+        _submit.Text = "ذخیره‌ی ویرایش";
+        _cancelEdit.Visible = true;
+        UpdatePreview();
+    }
+
+    private void CancelEdit()
+    {
+        _editingTradeId = null;
+        _submit.Text = "ثبت معامله";
+        _cancelEdit.Visible = false;
+        _amount.Clear();
+        _fee.Text = "0";
+        _customer.Clear();
+        _nationalCode.Clear();
+        _note.Clear();
+        _occurredOn.Clear();
+        UpdatePreview();
+    }
+
     private void FillRateFromSelection()
     {
         if (_filling || _currency.SelectedItem is not ComboItem item || UiHelpers.SelectedBranchId(_branch) is not { } branchId)
@@ -205,17 +265,35 @@ internal sealed class TradeTab : UserControl, IRefreshable
                 throw new BusinessRuleException("کارمزد را به‌درستی وارد کنید (عدد ریال).");
             }
 
-            var input = new TradeInput(branchId, item.Value, amount, rate, _customer.Text, _nationalCode.Text, _note.Text, fee);
-            var id = _sell.Checked
-                ? await _services.Trades.SellToCustomerAsync(input, _user, DateTime.Now)
-                : await _services.Trades.BuyFromCustomerAsync(input, _user, DateTime.Now);
+            DateTime? occurredOn = null;
+            if (!string.IsNullOrWhiteSpace(_occurredOn.Text))
+            {
+                if (!PersianDate.TryParseDate(_occurredOn.Text, out var parsedDate))
+                {
+                    throw new BusinessRuleException("تاریخ معامله را به‌درستی وارد کنید (مثلاً ۱۴۰۵/۰۷/۱۵).");
+                }
+                occurredOn = parsedDate;
+            }
 
-            _amount.Clear();
-            _fee.Text = "0";
-            _customer.Clear();
-            _nationalCode.Clear();
-            _note.Clear();
-            UiHelpers.ShowInfo(this, $"معامله شماره {id} ثبت شد.");
+            var input = new TradeInput(branchId, item.Value, amount, rate, _customer.Text, _nationalCode.Text, _note.Text, fee);
+            var type = _sell.Checked ? TradeType.Sell : TradeType.Buy;
+            if (_editingTradeId is { } editId)
+            {
+                await _services.Trades.EditTradeAsync(_user, editId, input, type, occurredOn, DateTime.Now);
+                CancelEdit();
+                UiHelpers.ShowInfo(this, $"معامله‌ی شماره {editId} ویرایش شد. اگر مبلغ یا نرخ تغییر کرده، نسخه‌ی اصلاحی جایگزین شده است.");
+            }
+            else
+            {
+                var id = await _services.Trades.RecordTradeAsync(input, type, _user, DateTime.Now, occurredOn);
+                _amount.Clear();
+                _fee.Text = "0";
+                _customer.Clear();
+                _nationalCode.Clear();
+                _note.Clear();
+                _occurredOn.Clear();
+                UiHelpers.ShowInfo(this, $"معامله شماره {id} ثبت شد.");
+            }
             await RefreshAsync();
         }
         catch (Exception ex)

@@ -20,6 +20,7 @@ internal sealed class CashTab : UserControl, IRefreshable
     private readonly ComboBox _openCurrency = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 170 };
     private readonly TextBox _openQuantity = new() { Width = 120 };
     private readonly TextBox _openUnitRate = new() { Width = 120 };
+    private readonly TextBox _openDate = new() { Width = 120, PlaceholderText = "امروز" };
     private readonly Button _saveOpeningForeign = new() { Text = "ثبت موجودی اولیه ارز", AutoSize = true };
 
     private readonly DataGridView _grid = UiHelpers.CreateGrid();
@@ -47,6 +48,8 @@ internal sealed class CashTab : UserControl, IRefreshable
         });
         _openingPanel.Visible = user.Role == UserRole.Admin;
 
+        _openingPanel.Controls.Add(UiHelpers.MakeLabel("تاریخ (شمسی، اختیاری):"));
+        _openingPanel.Controls.Add(_openDate);
         Controls.Add(_grid);
         Controls.Add(_openingPanel);
         Controls.Add(filters);
@@ -92,6 +95,20 @@ internal sealed class CashTab : UserControl, IRefreshable
         UiHelpers.Fill(_grid, new[] { "شعبه", "نام صندوق", "ارز", "موجودی", "آخرین تغییر (شمسی)" }, rows);
     }
 
+    /// <summary>تاریخ شمسی موجودی افتتاحیه. خالی یعنی امروز؛ تاریخ گذشته تا ۳۰ روز قبل مجاز است.</summary>
+    private DateTime? ParseOpeningDate()
+    {
+        if (string.IsNullOrWhiteSpace(_openDate.Text))
+        {
+            return null;
+        }
+        if (!PersianDate.TryParseDate(_openDate.Text, out var date))
+        {
+            throw new BusinessRuleException("تاریخ افتتاحیه را به‌درستی وارد کنید (مثلاً ۱۴۰۵/۰۷/۱۵).");
+        }
+        return date;
+    }
+
     private async Task SaveOpeningIrrAsync()
     {
         try
@@ -102,8 +119,10 @@ internal sealed class CashTab : UserControl, IRefreshable
                 throw new BusinessRuleException("مبلغ ریال را به‌درستی وارد کنید.");
             }
 
-            await _services.Admin.OpeningIrrAsync(_user, branchId, amount, DateTime.Now);
+            var occurredOn = ParseOpeningDate();
+            await _services.Admin.RecordOpeningAsync(_user, branchId, CurrencyCodes.Irr, amount, null, DateTime.Now, occurredOn);
             _openIrr.Clear();
+            _openDate.Clear();
             UiHelpers.ShowInfo(this, "موجودی اولیه‌ی ریال ثبت شد.");
             await RefreshAsync();
         }
@@ -131,7 +150,9 @@ internal sealed class CashTab : UserControl, IRefreshable
                 throw new BusinessRuleException("نرخ هر واحد را به‌درستی وارد کنید.");
             }
 
-            await _services.Admin.OpeningForeignAsync(_user, branchId, item.Value, quantity, unitRate, DateTime.Now);
+            var occurredOn = ParseOpeningDate();
+            await _services.Admin.RecordOpeningAsync(_user, branchId, item.Value, quantity, unitRate, DateTime.Now, occurredOn);
+            _openDate.Clear();
             _openQuantity.Clear();
             _openUnitRate.Clear();
             UiHelpers.ShowInfo(this, "موجودی اولیه‌ی ارز ثبت شد.");
