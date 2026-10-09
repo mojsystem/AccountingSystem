@@ -17,13 +17,34 @@ jobs:
           dotnet-version: 10.0.x
 
       - name: Restore
-        run: dotnet restore AccountingSystem.sln
+        shell: bash
+        run: |
+          set -o pipefail
+          dotnet restore AccountingSystem.sln 2>&1 | tee restore.log
 
       - name: Build solution
-        run: dotnet build AccountingSystem.sln -c Release --no-restore
+        shell: bash
+        run: |
+          set -o pipefail
+          dotnet build AccountingSystem.sln -c Release --no-restore 2>&1 | tee build.log
+
+      - name: Report restore and build errors as annotations
+        if: always()
+        continue-on-error: true
+        shell: bash
+        run: python .github/scripts/report-build.py restore.log build.log
 
       - name: Core unit tests
-        run: dotnet test tests/AccountingSystem.Core.Tests/AccountingSystem.Core.Tests.csproj -c Release --no-build
+        shell: bash
+        run: |
+          set -o pipefail
+          dotnet test tests/AccountingSystem.Core.Tests/AccountingSystem.Core.Tests.csproj -c Release --no-build --logger "trx;LogFileName=core-tests.trx" --results-directory TestResults-core 2>&1 | tee core-tests.log
+
+      - name: Report Core test results
+        if: always()
+        continue-on-error: true
+        shell: bash
+        run: python .github/scripts/report-trx.py TestResults-core
 
   sql-integration:
     name: SQL integration tests (SQL Server 2019 engine, compatibility level 130)
@@ -46,10 +67,28 @@ jobs:
           dotnet-version: 10.0.x
 
       - name: Publish web app
-        run: dotnet publish src/AccountingSystem.Web/AccountingSystem.Web.csproj -c Release -o publish/web
+        shell: bash
+        run: |
+          set -o pipefail
+          dotnet publish src/AccountingSystem.Web/AccountingSystem.Web.csproj -c Release -o publish/web 2>&1 | tee publish.log
+
+      - name: Report publish errors as annotations
+        if: always()
+        continue-on-error: true
+        shell: bash
+        run: python3 .github/scripts/report-build.py publish.log
 
       - name: Data integration tests
-        run: dotnet test tests/AccountingSystem.Data.Tests/AccountingSystem.Data.Tests.csproj -c Release --logger "trx;LogFileName=data-tests.trx" --results-directory TestResults
+        shell: bash
+        run: |
+          set -o pipefail
+          dotnet test tests/AccountingSystem.Data.Tests/AccountingSystem.Data.Tests.csproj -c Release --logger "trx;LogFileName=data-tests.trx" --results-directory TestResults 2>&1 | tee data-tests.log
+
+      - name: Report data test build errors as annotations
+        if: always()
+        continue-on-error: true
+        shell: bash
+        run: python3 .github/scripts/report-build.py data-tests.log
 
       - name: Report test results
         if: always()
