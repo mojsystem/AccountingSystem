@@ -1,4 +1,5 @@
 using AccountingSystem.Core.Accounting;
+using AccountingSystem.Core.Common;
 using AccountingSystem.Core.Domain;
 using Xunit;
 
@@ -63,6 +64,31 @@ public sealed class CashTransactionPlannerTests
         Assert.Contains(lines, line => line.AccountCode == AccountCodes.ForeignCash("USD") && line.Credit == 2_000_000m);
         Assert.Contains(lines, line => line.AccountCode == AccountCodes.FxProfit && line.Credit == 200_000m);
         Assert.Equal(lines.Sum(line => line.Debit), lines.Sum(line => line.Credit));
+    }
+
+    [Fact]
+    public void Void_timestamps_are_truncated_to_database_second_precision()
+    {
+        var requestedAt = Now.AddTicks(TimeSpan.TicksPerSecond * 3 / 4);
+        var target = new DocRef(LedgerDocKind.CashTransaction, 7);
+        var eventAt = Now.AddHours(-1);
+        var ledger = new BranchLedger(
+            1,
+            0,
+            new[]
+            {
+                new LedgerEvent(LedgerDocKind.CashTransaction, 7, LedgerEventKind.CashOnly, CurrencyCodes.Irr,
+                    eventAt, 20, 0m, 3_000_000m, 0m, 3_000_000m, 0m, 0m),
+            },
+            new HashSet<DocRef> { target },
+            3_000_000m,
+            new Dictionary<string, PoolBalance>());
+
+        var posting = LedgerPlanner.PlanVoid(ledger, target, "تست", 9, requestedAt);
+
+        Assert.Equal(OccurrenceRules.Truncate(requestedAt), posting.Now);
+        Assert.Equal(OccurrenceRules.Truncate(requestedAt), posting.Void!.OccurredAt);
+        Assert.Equal(-3_000_000m, Assert.Single(posting.CashMovements).Delta);
     }
 
     [Fact]

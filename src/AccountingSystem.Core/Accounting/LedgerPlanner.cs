@@ -583,6 +583,10 @@ public static class LedgerPlanner
         IReadOnlyList<LedgerEvent> newEvents,
         Func<LedgerState, NewDocumentResult>? finish)
     {
+        // Persisted timestamps use DATETIME2(0); normalize here so an as-of query at the same instant
+        // cannot sort immediately before a void or adjustment created from an unrounded DateTime.Now.
+        now = OccurrenceRules.Truncate(now);
+
         VoidDraft? voidDraft = null;
         var removed = new List<LedgerEvent>();
         if (voidTarget is { } target)
