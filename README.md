@@ -1,5 +1,7 @@
 # AccountingSystem
 
+Professional Accounting System - C# .NET 10.0
+
 سیستم حسابداری و خرید/فروش ارز برای صرافی، با **C# و .NET 10.0** و **SQL Server 2019**.
 برنامه به‌صورت **وب** (ASP.NET Core Razor Pages) و **ویندوز** (Windows Forms) اجرا می‌شود و هر دو از یک هسته‌ی مشترک و یک پایگاه داده استفاده می‌کنند.
 
