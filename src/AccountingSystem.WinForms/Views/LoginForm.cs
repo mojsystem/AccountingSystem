@@ -35,6 +35,7 @@ internal sealed class LoginForm : Form
 
         _ok.Click += async (_, _) => await SubmitAsync();
         Shown += async (_, _) => await InitializeAsync();
+        Theme.Apply(this);
     }
 
     public CurrentUser? SignedInUser { get; private set; }

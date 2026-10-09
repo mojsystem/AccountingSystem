@@ -889,7 +889,7 @@ public class SqlAccountingRepositoryTests : IClassFixture<SqlServerFixture>, IAs
         Assert.Equal("زهرا احمدی", recorded.CustomerName);
         Assert.Equal(nationalCode, recorded.NationalCode);
 
-        await customers.UpdateAsync(user, customerId, new CustomerInput("زهرا احمدی‌نژاد", nationalCode, null, null, null), now);
+        await customers.UpdateAsync(user, customerId, new CustomerInput("زهرا احمدی‌نژاد", nationalCode, "۰۹۱۲۳۴۵۶۷۸۹", null, null), now);
         var afterEdit = await repo.GetTradeAsync(buyId);
         Assert.Equal("زهرا احمدی", afterEdit!.CustomerName);
 

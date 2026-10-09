@@ -67,6 +67,7 @@ internal sealed class CustomerDialog : Form
         AcceptButton = ok;
         CancelButton = cancel;
         ok.Click += (_, _) => Accept();
+        Theme.Apply(this);
     }
 
     /// <summary>اطلاعات تمیزشده‌ی مشتری پس از تأیید؛ null یعنی انصراف.</summary>

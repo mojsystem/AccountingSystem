@@ -78,6 +78,7 @@ internal sealed class RolesDialog : Form
         _save.Click += async (_, _) => await SaveAsync();
         _delete.Click += async (_, _) => await DeleteAsync();
         Shown += async (_, _) => await LoadRolesAsync();
+        Theme.Apply(this);
     }
 
     private async Task LoadRolesAsync()

@@ -34,6 +34,7 @@ internal sealed class MainForm : Form
         Controls.Add(_tabs);
         _tabs.SelectedIndexChanged += async (_, _) => await RefreshSelectedAsync();
         Shown += async (_, _) => await RefreshSelectedAsync();
+        Theme.Apply(this);
     }
 
     private void AddTab(string title, UserControl tab)

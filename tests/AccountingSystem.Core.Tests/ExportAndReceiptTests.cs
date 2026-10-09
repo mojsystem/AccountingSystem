@@ -102,5 +102,5 @@ public class ExportAndReceiptTests
 
     private static TradeInfo SampleTrade(long id, string customer) =>
         new(id, 1, "MAIN", "شعبه‌ی مرکزی", TradeType.Buy, "USD", 100m, 1_000_000m, 100_000_000m, 100_000_000m, 0m, 0m,
-            customer, "0012345678", null, Occurred, "cashier", false, null, null, null);
+            customer, "0012345678", null, Occurred, "cashier", false, null, null, null, CustomerId: 1);
 }

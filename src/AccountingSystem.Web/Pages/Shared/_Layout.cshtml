@@ -3,6 +3,7 @@
 <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="light" />
     <title>@ViewData["Title"] - سیستم حسابداری صرافی</title>
     <link rel="stylesheet" href="~/css/site.css" asp-append-version="true" />
 </head>
@@ -10,27 +11,30 @@
     @if (User.Identity?.IsAuthenticated == true)
     {
         <header class="topbar">
-            <nav>
+            <a class="brand" asp-page="/Index">صرافی · حسابداری</a>
+            <nav aria-label="منوی اصلی">
                 <a asp-page="/Index">داشبورد</a>
                 <a asp-page="/Trade/Index">خرید و فروش ارز</a>
                 <a asp-page="/Customers/Index">مشتریان</a>
                 <a asp-page="/Rates/Index">نرخ و ارزها</a>
+                <span class="nav-sep" aria-hidden="true"></span>
                 <a asp-page="/Cash/Index">صندوق‌ها</a>
                 <a asp-page="/Journal/Index">اسناد حسابداری</a>
                 @if (User.IsInRole("Admin"))
                 {
+                    <span class="nav-sep" aria-hidden="true"></span>
                     <a asp-page="/Branches/Index">شعبه‌ها</a>
                     <a asp-page="/Users/Index">کاربران</a>
                     <a asp-page="/Roles/Index">نقش‌ها</a>
                     <a asp-page="/Accounts/Index">سرفصل حساب‌ها</a>
                 }
             </nav>
-            <form method="post" asp-page="/Account/Logout">
-                <span>
-                    @User.Identity.Name
+            <form method="post" asp-page="/Account/Logout" class="session">
+                <span class="who">
+                    <strong>@User.Identity.Name</strong>
                     @if (User.FindFirst("BranchName")?.Value is { Length: > 0 } branchName)
                     {
-                        <text>(شعبه‌ی اصلی: @branchName)</text>
+                        <span>· شعبه‌ی اصلی: @branchName</span>
                     }
                 </span>
                 <button type="submit">خروج</button>

@@ -76,6 +76,7 @@ internal sealed class UserBranchesDialog : Form
 
         Controls.Add(table);
         Controls.Add(buttons);
+        Theme.Apply(this);
     }
 
     /// <summary>نقش انتخاب‌شده برای هر شعبه؛ null یعنی بدون دسترسی در آن شعبه.</summary>

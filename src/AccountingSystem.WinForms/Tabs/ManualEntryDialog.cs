@@ -90,6 +90,7 @@ internal sealed class ManualEntryDialog : Form
                 UiHelpers.ShowInfo(this, ex.Message);
             }
         };
+        Theme.Apply(this);
     }
 
     public string Description { get; private set; } = string.Empty;
