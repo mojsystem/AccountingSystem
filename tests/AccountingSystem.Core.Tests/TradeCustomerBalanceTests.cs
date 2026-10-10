@@ -28,8 +28,19 @@ public sealed class TradeCustomerBalanceTests
             CustomerBalanceRateIrr: 500_000m,
             CustomerBalanceDecimalPlaces: 2);
 
-        var posting = LedgerPlanner.PlanTrade(
-            BranchLedger.Empty(1, 0m), Usd, input, TradeType.Buy, 9, Now, Now);
+        var openingAt = Now.AddHours(-1);
+        var opening = new LedgerEvent(
+            LedgerDocKind.Opening, 5, LedgerEventKind.Acquire, "USD", openingAt, 10,
+            20m, 20_000_000m, 0m, 0m, 0m, 0m);
+        var ledger = new BranchLedger(
+            1,
+            0,
+            new[] { opening },
+            new HashSet<DocRef> { new(LedgerDocKind.Opening, 5) },
+            0m,
+            new Dictionary<string, PoolBalance> { ["USD"] = new(20m, 20_000_000m) });
+
+        var posting = LedgerPlanner.PlanTrade(ledger, Usd, input, TradeType.Buy, 9, Now, Now);
 
         var payable = Assert.Single(Assert.Single(posting.Journals).Lines,
             line => line.AccountCode == AccountCodes.CustomerPayable && line.Credit > 0m);
@@ -46,13 +57,24 @@ public sealed class TradeCustomerBalanceTests
         var opening = new LedgerEvent(
             LedgerDocKind.Opening, 5, LedgerEventKind.Acquire, "EUR", openingAt, 10,
             20m, 10_000_000m, 0m, 0m, 0m, 0m);
+        var tradedCurrencyOpening = new LedgerEvent(
+            LedgerDocKind.Opening, 6, LedgerEventKind.Acquire, "USD", openingAt, 11,
+            20m, 20_000_000m, 0m, 0m, 0m, 0m);
         var ledger = new BranchLedger(
             1,
             0,
-            new[] { opening },
-            new HashSet<DocRef> { new(LedgerDocKind.Opening, 5) },
+            new[] { opening, tradedCurrencyOpening },
+            new HashSet<DocRef>
+            {
+                new(LedgerDocKind.Opening, 5),
+                new(LedgerDocKind.Opening, 6),
+            },
             0m,
-            new Dictionary<string, PoolBalance> { ["EUR"] = new(20m, 10_000_000m) });
+            new Dictionary<string, PoolBalance>
+            {
+                ["EUR"] = new(20m, 10_000_000m),
+                ["USD"] = new(20m, 20_000_000m),
+            });
         var input = new TradeInput(
             BranchId: 1,
             CurrencyCode: "USD",
