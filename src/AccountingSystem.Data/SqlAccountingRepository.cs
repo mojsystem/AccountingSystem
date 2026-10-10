@@ -1510,6 +1510,7 @@ SELECT c.Id, c.CustomerCode, c.FullName,
 FROM dbo.Customers c
 LEFT JOIN dbo.JournalLines l
   ON l.CustomerId = c.Id AND l.AccountCode IN (N'1201', N'2101')
+ AND l.CustomerBalanceCurrencyCode = N'IRR'
 LEFT JOIN dbo.JournalEntries e
   ON e.Id = l.JournalEntryId
  AND e.OccurredAt < @toExclusive
@@ -1545,6 +1546,7 @@ SELECT COALESCE(SUM(l.Debit - l.Credit), 0)
 FROM dbo.JournalLines l
 INNER JOIN dbo.JournalEntries e ON e.Id = l.JournalEntryId
 WHERE l.CustomerId = @customerId AND l.AccountCode IN (N'1201', N'2101')
+  AND l.CustomerBalanceCurrencyCode = N'IRR'
   AND e.OccurredAt < @fromInclusive
   AND (@branchId IS NULL OR e.BranchId = @branchId);
 
@@ -1554,6 +1556,7 @@ FROM dbo.JournalLines l
 INNER JOIN dbo.JournalEntries e ON e.Id = l.JournalEntryId
 INNER JOIN dbo.Branches b ON b.Id = e.BranchId
 WHERE l.CustomerId = @customerId AND l.AccountCode IN (N'1201', N'2101')
+  AND l.CustomerBalanceCurrencyCode = N'IRR'
   AND e.OccurredAt >= @fromInclusive AND e.OccurredAt < @toExclusive
   AND (@branchId IS NULL OR e.BranchId = @branchId)
 ORDER BY e.OccurredAt, e.Seq, e.Id, l.LineNumber;";

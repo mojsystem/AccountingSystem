@@ -196,7 +196,7 @@ FROM dbo.CurrencyTransactionSettlements WHERE TradeId = 1;"));
 
         await SqlTestDb.ExecAsync(Db(guard)!, "UPDATE dbo.SchemaVersion SET Checksum = @c WHERE Version = 2;", ("@c", realChecksum));
         await SqlTestDb.ExecAsync(Db(guard)!,
-            "INSERT INTO dbo.SchemaVersion (Version, Name, Checksum, AppliedBy) VALUES (5, N'future', REPLICATE(N'A', 64), N'test');");
+            "INSERT INTO dbo.SchemaVersion (Version, Name, Checksum, AppliedBy) VALUES (6, N'future', REPLICATE(N'A', 64), N'test');");
         var newer = await Assert.ThrowsAsync<SchemaUpgradeException>(
             () => SchemaUpgrader.EnsureUpToDateAsync(Db(guard)!, NoBackup()));
         Assert.Contains("جدیدتر", newer.Message);
@@ -234,6 +234,6 @@ FROM dbo.CurrencyTransactionSettlements WHERE TradeId = 1;"));
 
         var status = await maintenance.GetStatusAsync();
         Assert.True(status.Exists);
-        Assert.Equal(4, status.DatabaseVersion);
+        Assert.Equal(5, status.DatabaseVersion);
     }
 }

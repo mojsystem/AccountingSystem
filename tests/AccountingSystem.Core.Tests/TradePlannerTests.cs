@@ -285,7 +285,7 @@ public class TradePlannerTests
         var posting = LedgerPlanner.PlanTrade(ledger, Usd, input, TradeType.Sell, 7, Now, Now);
 
         Assert.Empty(posting.Trade!.Settlements!);
-        Assert.Null(posting.Trade.SettlementCurrencyCode);
+        Assert.Equal(CurrencyCodes.Irr, posting.Trade.SettlementCurrencyCode);
         Assert.Equal(-5m, posting.CashMovements.Single().Delta);
         Assert.Equal(750_000m, posting.Journals.Single().Lines.Single(l => l.AccountCode == AccountCodes.CustomerReceivable).Debit);
         Assert.Equal(81, posting.Journals.Single().Lines.Single(l => l.AccountCode == AccountCodes.CustomerReceivable).CustomerId);
