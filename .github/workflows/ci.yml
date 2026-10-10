@@ -44,7 +44,7 @@ jobs:
         if: always()
         continue-on-error: true
         shell: bash
-        run: python .github/scripts/report-trx.py TestResults-core
+        run: python .github/scripts/report-trx.py TestResults-core core-tests.log
 
   sql-integration:
     name: SQL integration tests (SQL Server 2019 engine, compatibility level 150)
@@ -92,7 +92,7 @@ jobs:
 
       - name: Report test results
         if: always()
-        run: python3 .github/scripts/report-trx.py TestResults
+        run: python3 .github/scripts/report-trx.py TestResults data-tests.log
 
       - name: Web app smoke test (sign-in and main pages, against the test database)
         env:
