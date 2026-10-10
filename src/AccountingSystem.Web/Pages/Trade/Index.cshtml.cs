@@ -216,6 +216,20 @@ public class IndexModel : PageModel
         {
             summary = (summary.Length == 0 ? string.Empty : summary + "؛ ") + "تهاتر " + MoneyMath.FormatAmount(trade.CustomerOffsetIrr, 0) + " ریال";
         }
+        if (trade.SettlementMode == TradeSettlementMode.CustomerAccount)
+        {
+            var accountText = "روی حساب مشتری · " + (trade.SettlementCurrencyCode ?? CurrencyCodes.Irr);
+            return summary.Length == 0 ? accountText : summary + "؛ " + accountText;
+        }
+        if (trade.SettlementMode == TradeSettlementMode.Split)
+        {
+            var due = trade.Type == TradeType.Buy ? trade.IrrAmount - trade.FeeIrr : trade.IrrAmount + trade.FeeIrr;
+            var remaining = due - trade.CustomerOffsetIrr - lines.Sum(line => line.IrrAmount);
+            if (remaining > 0m)
+            {
+                summary += (summary.Length == 0 ? string.Empty : "؛ ") + "مانده‌ی حساب " + (trade.SettlementCurrencyCode ?? CurrencyCodes.Irr);
+            }
+        }
         return summary.Length == 0 ? "بدون وجه نقد" : summary;
     }
 }
@@ -335,7 +349,7 @@ public sealed class TradeForm
             CustomerId,
             mode,
             rateMode,
-            mode == TradeSettlementMode.Direct ? SettlementCurrencyCode : null,
+            SettlementCurrencyCode,
             crossRate,
             lines,
             ApplyCustomerOffset);

@@ -46,7 +46,7 @@ else
                     <option value="ACCOUNT" selected="@(Model.Input.SettlementMode == "ACCOUNT")">ثبت روی حساب مشتری</option>
                 </select>
             </label>
-            <label id="counterCurrencyField">ارز مقابل
+            <label id="settlementCurrencyField"><span id="settlementCurrencyLabel">ارز مقابل</span>
                 <select id="settlementCurrency" name="Input.SettlementCurrencyCode">
                     @foreach (var c in Model.SettlementCurrencies)
                     {
@@ -118,9 +118,9 @@ else
                 </div>
             </template>
             <button type="button" class="secondary" id="addSettlementLine">افزودن سطر</button>
-            <p class="hint">ارزش هر سطر بر اساس نرخ ریالی همان ارز محاسبه می‌شود؛ مانده‌ی باقی‌مانده روی حساب مشتری می‌ماند.</p>
+            <p class="hint">ارزش هر دریافت/پرداخت با نرخ شعبه در تاریخ معامله سنجیده می‌شود. مانده‌ی تسویه‌نشده با ارز انتخاب‌شده برای حساب مشتری ثبت می‌شود.</p>
         </section>
-        <p class="hint">تهاتر فقط با مانده‌ی دریافتنی/پرداختنی همین مشتری و همین شعبه انجام می‌شود. نرخ پایه در حالت نرخ مستقیم برای ارزش‌گذاری ذخیره نمی‌شود؛ مبنا نرخ جفت‌ارز و نرخ روز ارز مقابل است.</p>
+        <p class="hint">در تسویه‌ی مستقیم، ارز مقابل واقعی را انتخاب کنید؛ در تسویه‌ی چندبخشی یا حساب مشتری، این فهرست ارز مانده‌ی مشتری را تعیین می‌کند. مانده‌ی معامله بر مبنای مبلغ و ارز تسویه‌شده است، نه مقدار ارز مورد معامله. تهاتر فقط با مانده‌ی همین مشتری و شعبه انجام می‌شود.</p>
         <p><button type="submit">ذخیره‌ی ویرایش</button> <a href="/Trade">بازگشت</a></p>
     </form>
 }
@@ -137,7 +137,8 @@ else
     var crossRate = document.getElementById('crossRate');
     var branchId = '@Model.Input.BranchId';
     var splitPanel = document.getElementById('splitPanel');
-    var counterCurrencyField = document.getElementById('counterCurrencyField');
+    var settlementCurrencyField = document.getElementById('settlementCurrencyField');
+    var settlementCurrencyLabel = document.getElementById('settlementCurrencyLabel');
     var rateModeField = document.getElementById('rateModeField');
     var crossRateField = document.getElementById('crossRateField');
     var rows = document.getElementById('settlementLines');
@@ -166,7 +167,8 @@ else
     function updateMode() {
         var direct = settlementMode.value === 'DIRECT';
         splitPanel.hidden = settlementMode.value !== 'SPLIT';
-        counterCurrencyField.hidden = !direct;
+        settlementCurrencyField.hidden = false;
+        settlementCurrencyLabel.textContent = direct ? 'ارز مقابل واقعی' : 'ارز مانده‌ی حساب مشتری';
         rateModeField.hidden = !direct;
         crossRateField.hidden = !direct;
         crossRate.readOnly = direct && rateMode.value === 'DERIVED';

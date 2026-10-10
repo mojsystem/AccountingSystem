@@ -152,6 +152,7 @@ public class SqlAccountingRepositoryTests : IClassFixture<SqlServerFixture>, IAs
         Assert.Equal(11_000_000m, directLine.IrrAmount);
         Assert.Equal(10_000_000m, directLine.CostIrr);
         Assert.Equal(1_000_000m, directLine.ProfitIrr);
+        Assert.Empty(await repo.GetCustomerCurrencyBalancesAsync(branchId, _customerId, now));
 
         var directSnapshot = await repo.GetTradeSnapshotAsync(branchId, tradedCode);
         var settlementSnapshot = await repo.GetTradeSnapshotAsync(branchId, settlementCode);
@@ -198,6 +199,9 @@ public class SqlAccountingRepositoryTests : IClassFixture<SqlServerFixture>, IAs
         var afterSale = await repo.GetCustomerAccountBalanceAsync(branchId, _customerId, now);
         Assert.Equal(1_200_000m, afterSale.ReceivableIrr);
         Assert.Equal(0m, afterSale.PayableIrr);
+        var saleCurrencyBalance = Assert.Single(await repo.GetCustomerCurrencyBalancesAsync(branchId, _customerId, now));
+        Assert.Equal(CurrencyCodes.Irr, saleCurrencyBalance.CurrencyCode);
+        Assert.Equal(1_200_000m, saleCurrencyBalance.BalanceAmount);
 
         var offsetBuyId = await trades.BuyFromCustomerAsync(new TradeInput(
             branchId, tradedCode, 1m, 1_100_000m, null, null, null,
@@ -210,6 +214,7 @@ public class SqlAccountingRepositoryTests : IClassFixture<SqlServerFixture>, IAs
         var afterOffset = await repo.GetCustomerAccountBalanceAsync(branchId, _customerId, now);
         Assert.Equal(100_000m, afterOffset.ReceivableIrr);
         Assert.Equal(0m, afterOffset.PayableIrr);
+        Assert.Equal(100_000m, Assert.Single(await repo.GetCustomerCurrencyBalancesAsync(branchId, _customerId, now)).BalanceAmount);
 
         var customerLineCount = Convert.ToInt32(await SqlTestDb.ScalarAsync(_fixture.ConnectionString!, @"
 SELECT COUNT(*) FROM dbo.JournalLines l
@@ -264,6 +269,9 @@ WHERE e.SourceType = N'TRADE' AND e.SourceId = @tradeId AND l.CustomerId = @cust
 
         await admin.AddCurrencyAsync(user, code, "ارز دریافت و پرداخت مستقل", 2, now);
         await admin.SetRateAsync(user, branchId, code, 1_000_000m, 1_100_000m, now);
+        var balanceCode = await NewCurrencyCodeAsync(repo);
+        await admin.AddCurrencyAsync(user, balanceCode, "ارز مانده‌ی مستقل", 2, now);
+        await admin.SetRateAsync(user, branchId, balanceCode, 800_000m, 900_000m, now);
         await admin.OpeningForeignAsync(user, branchId, code, 20m, 1_000_000m, now);
 
         // خرید روی حساب، برای مشتری مانده‌ی پرداختنی می‌سازد؛ پرداخت ارزی باید صندوق و همان مانده را تغییر دهد.
@@ -273,7 +281,7 @@ WHERE e.SourceType = N'TRADE' AND e.SourceId = @tradeId AND l.CustomerId = @cust
             SettlementMode: TradeSettlementMode.CustomerAccount), user, now);
         var paymentId = await cashTransactions.RecordAsync(user, new CashTransactionInput(
             branchId, CashTransactionDirection.Payment, _customerId, code, 2m,
-            TradeRateMode.Derived, null, "پرداخت مستقل آزمایشی"), now, now);
+            TradeRateMode.Derived, null, "پرداخت مستقل آزمایشی", CurrencyCodes.Irr), now, now);
         var payment = await repo.GetCashTransactionAsync(paymentId);
         Assert.NotNull(payment);
         Assert.Equal(CashTransactionDirection.Payment, payment!.Direction);
@@ -282,15 +290,44 @@ WHERE e.SourceType = N'TRADE' AND e.SourceId = @tradeId AND l.CustomerId = @cust
         Assert.Equal(200_000m, payment.ProfitIrr);
         var payableAfterPayment = await repo.GetCustomerAccountBalanceAsync(branchId, _customerId, now);
         Assert.Equal(2_800_000m, payableAfterPayment.PayableIrr);
+        var currencyBalanceAfterPayment = Assert.Single(await repo.GetCustomerCurrencyBalancesAsync(branchId, _customerId, now));
+        Assert.Equal(CurrencyCodes.Irr, currencyBalanceAfterPayment.CurrencyCode);
+        Assert.Equal(-2_800_000m, currencyBalanceAfterPayment.BalanceAmount);
         await Assert.ThrowsAsync<BusinessRuleException>(() => cashTransactions.RecordAsync(user, new CashTransactionInput(
             branchId, CashTransactionDirection.Payment, _customerId, code, 3m,
-            TradeRateMode.Derived), now, now));
+            TradeRateMode.Derived, BalanceCurrencyCode: CurrencyCodes.Irr), now, now));
         var directPaymentId = await cashTransactions.RecordAsync(user, new CashTransactionInput(
             branchId, CashTransactionDirection.Payment, _customerId, code, 1m,
-            TradeRateMode.Direct, 1_000_000m, "نرخ توافقی آزمایشی"), now, now);
+            TradeRateMode.Direct, 1_000_000m, "نرخ اطلاع‌رسانی آزمایشی", CurrencyCodes.Irr), now, now);
         Assert.Equal(1_000_000m, (await repo.GetCashTransactionAsync(directPaymentId))!.RateIrr);
         var payableAfterDirectPayment = await repo.GetCustomerAccountBalanceAsync(branchId, _customerId, now);
-        Assert.Equal(1_800_000m, payableAfterDirectPayment.PayableIrr);
+        Assert.Equal(1_700_000m, payableAfterDirectPayment.PayableIrr);
+        Assert.Equal(-1_700_000m, Assert.Single(await repo.GetCustomerCurrencyBalancesAsync(branchId, _customerId, now)).BalanceAmount);
+
+        // تهاتر و پرداخت با ارز متفاوت باید مانده‌ی مشتری را در ارز حساب ثبت کنند، ولی فقط صندوق ارز پرداختی را تغییر دهند.
+        await trades.BuyFromCustomerAsync(new TradeInput(
+            branchId, code, 5m, 1_000_000m, null, null, null,
+            CustomerId: _customerId,
+            SettlementMode: TradeSettlementMode.CustomerAccount,
+            SettlementCurrencyCode: balanceCode), user, now);
+        var cashBeforeCrossCurrencyPayment = (await repo.GetCashBoxesAsync(branchId))
+            .ToDictionary(box => box.CurrencyCode, box => box.Balance, StringComparer.OrdinalIgnoreCase);
+        var crossCurrencyPaymentId = await cashTransactions.RecordAsync(user, new CashTransactionInput(
+            branchId, CashTransactionDirection.Payment, _customerId, code, 1m,
+            TradeRateMode.Direct, 3_000_000m, "نرخ صرفاً اطلاع‌رسانی", balanceCode), now, now);
+        var crossCurrencyPayment = await repo.GetCashTransactionAsync(crossCurrencyPaymentId);
+        Assert.NotNull(crossCurrencyPayment);
+        Assert.Equal(3_000_000m, crossCurrencyPayment!.RateIrr);
+        Assert.Equal(1_100_000m, crossCurrencyPayment.IrrAmount);
+        Assert.Equal(balanceCode, crossCurrencyPayment.BalanceCurrencyCode);
+        Assert.Equal(1.22m, crossCurrencyPayment.BalanceAmount);
+        var cashAfterCrossCurrencyPayment = (await repo.GetCashBoxesAsync(branchId))
+            .ToDictionary(box => box.CurrencyCode, box => box.Balance, StringComparer.OrdinalIgnoreCase);
+        Assert.Equal(cashBeforeCrossCurrencyPayment[code] - 1m, cashAfterCrossCurrencyPayment[code]);
+        Assert.Equal(cashBeforeCrossCurrencyPayment[CurrencyCodes.Irr], cashAfterCrossCurrencyPayment[CurrencyCodes.Irr]);
+        var nonIrrAccountBalance = Assert.Single(await repo.GetCustomerCurrencyBalancesAsync(branchId, _customerId, now),
+            balance => balance.CurrencyCode == balanceCode);
+        Assert.Equal(-4.34m, nonIrrAccountBalance.BalanceAmount);
 
         // فروش روی حساب مانده‌ی دریافتنی می‌سازد. رسید مستقل، ویرایش جایگزین‌محور و ابطال آن با دفتر واقعی سنجیده می‌شوند.
         await trades.SellToCustomerAsync(new TradeInput(
@@ -306,7 +343,7 @@ WHERE e.SourceType = N'TRADE' AND e.SourceId = @tradeId AND l.CustomerId = @cust
             branchId, CashTransactionDirection.Receipt, _customerId, CurrencyCodes.Irr, 3_000_000m,
             TradeRateMode.Derived, Note: "رسید مستقل آزمایشی"), now, now);
         var afterReceipt = await repo.GetCustomerAccountBalanceAsync(branchId, _customerId, now);
-        Assert.Equal(9_000_000m, afterReceipt.ReceivableIrr);
+        Assert.Equal(7_300_000m, afterReceipt.ReceivableIrr);
 
         var replacementId = await cashTransactions.EditAsync(user, receiptId, new CashTransactionInput(
             branchId, CashTransactionDirection.Receipt, _customerId, CurrencyCodes.Irr, 4_000_000m,
@@ -315,19 +352,24 @@ WHERE e.SourceType = N'TRADE' AND e.SourceId = @tradeId AND l.CustomerId = @cust
         var oldReceipt = await repo.GetCashTransactionAsync(receiptId);
         Assert.True(oldReceipt!.IsVoided);
         var afterEdit = await repo.GetCustomerAccountBalanceAsync(branchId, _customerId, now.AddMinutes(1));
-        Assert.Equal(8_000_000m, afterEdit.ReceivableIrr);
+        Assert.Equal(6_300_000m, afterEdit.ReceivableIrr);
 
         await cashTransactions.VoidAsync(user, replacementId!.Value, "آزمایش ابطال", now.AddMinutes(2));
         var afterVoid = await repo.GetCustomerAccountBalanceAsync(branchId, _customerId, now.AddMinutes(2));
-        Assert.Equal(12_000_000m, afterVoid.ReceivableIrr);
+        Assert.Equal(10_300_000m, afterVoid.ReceivableIrr);
+        var currencyBalancesAfterVoid = await repo.GetCustomerCurrencyBalancesAsync(branchId, _customerId, now.AddMinutes(2));
+        var currencyBalanceAfterVoid = Assert.Single(currencyBalancesAfterVoid, balance => balance.CurrencyCode == CurrencyCodes.Irr);
+        Assert.Equal(10_300_000m, currencyBalanceAfterVoid.BalanceAmount);
+        var foreignAccountBalanceAfterVoid = Assert.Single(currencyBalancesAfterVoid, balance => balance.CurrencyCode == balanceCode);
+        Assert.Equal(-4.34m, foreignAccountBalanceAfterVoid.BalanceAmount);
         var cashDocs = await cashTransactions.GetTransactionsAsync(user, branchId, now.Date, now.Date.AddDays(1));
         Assert.Contains(cashDocs, t => t.Id == receiptId && t.IsVoided);
         Assert.Contains(cashDocs, t => t.Id == replacementId && t.IsVoided);
         Assert.Contains(cashDocs, t => t.Id == paymentId && !t.IsVoided);
 
         var ledger = await new ReportService(repo).GetCustomerLedgerAsync(user, branchId, _customerId, now.Date, now.Date.AddDays(1));
-        // گردش معین، حساب دریافتنی ۱۲ میلیون را با پرداختنی باقیمانده‌ی ۱٫۸ میلیون خالص می‌کند.
-        Assert.Equal(10_200_000m, ledger.ClosingBalanceIrr);
+        // گردش معین، حساب دریافتنی ۱۲ میلیون را با پرداختنی باقیمانده‌ی ۱٫۷ میلیون خالص می‌کند.
+        Assert.Equal(10_300_000m, ledger.ClosingBalanceIrr);
         Assert.Contains(ledger.Lines, line => line.SourceType == SourceTypes.CashReceipt && line.IsVoided);
         Assert.Contains(ledger.Lines, line => line.SourceType == SourceTypes.Void && line.SourceId == receiptId);
         await AssertLedgerConsistentAsync(_fixture.ConnectionString!, branchId, code);

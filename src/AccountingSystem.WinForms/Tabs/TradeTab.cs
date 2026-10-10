@@ -385,8 +385,9 @@ internal sealed class TradeTab : UserControl, IRefreshable
     {
         var direct = SelectedValue(_settlementMode) == "DIRECT";
         var split = SelectedValue(_settlementMode) == "SPLIT";
-        _settlementCurrency.Visible = direct;
-        _settlementCurrencyLabel.Visible = direct;
+        _settlementCurrency.Visible = true;
+        _settlementCurrencyLabel.Visible = true;
+        _settlementCurrencyLabel.Text = direct ? "ارز مقابل واقعی:" : "ارز مانده‌ی حساب مشتری:";
         _rateMode.Visible = direct;
         _rateModeLabel.Visible = direct;
         _crossRate.Visible = direct;
@@ -430,11 +431,16 @@ internal sealed class TradeTab : UserControl, IRefreshable
         }
         else if (mode == "SPLIT")
         {
-            _preview.Text = $"ارزش معامله: {MoneyMath.FormatAmount(irr, 0)} ریال   |   تسویه‌ی چندبخشی؛ مانده‌ی تسویه‌نشده روی حساب مشتری می‌ماند.";
+            _preview.Text = $"ارزش معامله: {MoneyMath.FormatAmount(irr, 0)} ریال   |   تسویه‌ی چندبخشی؛ مانده‌ی باقیمانده با ارز حساب {SelectedValue(_settlementCurrency) ?? CurrencyCodes.Irr} ثبت می‌شود.";
         }
         else
         {
-            _preview.Text = $"ارزش معامله: {MoneyMath.FormatAmount(irr, 0)} ریال   |   مبلغ {MoneyMath.FormatAmount(due, 0)} ریال روی حساب مشتری ثبت می‌شود.";
+            var balanceCode = SelectedValue(_settlementCurrency) ?? CurrencyCodes.Irr;
+            var balanceRate = SettlementRateIrr(balanceCode);
+            var accountAmount = balanceRate > 0m
+                ? MoneyMath.RoundTo(due / balanceRate, CurrencyDecimals(balanceCode))
+                : 0m;
+            _preview.Text = $"ارزش معامله: {MoneyMath.FormatAmount(irr, 0)} ریال   |   مانده‌ی حساب: {MoneyMath.FormatAmount(accountAmount, CurrencyDecimals(balanceCode))} {balanceCode}";
         }
     }
 
@@ -505,7 +511,7 @@ internal sealed class TradeTab : UserControl, IRefreshable
                 {
                     throw new BusinessRuleException($"مقدار سطر تسویه‌ی {code} را وارد کنید.");
                 }
-                settlementLines.Add(new TradeSettlementInput(code, lineAmount));
+                settlementLines.Add(new TradeSettlementInput(code, lineAmount, DecimalPlaces: CurrencyDecimals(code)));
             }
         }
 
@@ -521,7 +527,7 @@ internal sealed class TradeTab : UserControl, IRefreshable
             customerId,
             mode,
             rateMode,
-            mode == TradeSettlementMode.Direct ? SelectedValue(_settlementCurrency) : null,
+            SelectedValue(_settlementCurrency),
             crossRate,
             settlementLines,
             _applyOffset.Checked);
@@ -754,9 +760,23 @@ internal sealed class TradeTab : UserControl, IRefreshable
         {
             summary += (summary.Length == 0 ? string.Empty : "؛ ") + "تهاتر " + MoneyMath.FormatAmount(trade.CustomerOffsetIrr, 0) + " ریال";
         }
+        if (trade.SettlementMode == TradeSettlementMode.CustomerAccount)
+        {
+            var accountText = "روی حساب مشتری · " + (trade.SettlementCurrencyCode ?? CurrencyCodes.Irr);
+            return summary.Length == 0 ? accountText : summary + "؛ " + accountText;
+        }
+        if (trade.SettlementMode == TradeSettlementMode.Split)
+        {
+            var due = trade.Type == TradeType.Buy ? trade.IrrAmount - trade.FeeIrr : trade.IrrAmount + trade.FeeIrr;
+            var remaining = due - trade.CustomerOffsetIrr - lines.Sum(line => line.IrrAmount);
+            if (remaining > 0m)
+            {
+                summary += (summary.Length == 0 ? string.Empty : "؛ ") + "مانده‌ی حساب " + (trade.SettlementCurrencyCode ?? CurrencyCodes.Irr);
+            }
+        }
         if (summary.Length == 0)
         {
-            summary = trade.SettlementMode == TradeSettlementMode.CustomerAccount ? "روی حساب مشتری" : "بدون وجه نقد";
+            summary = "بدون وجه نقد";
         }
         return summary;
     }

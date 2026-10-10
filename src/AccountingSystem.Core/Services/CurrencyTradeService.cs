@@ -190,14 +190,17 @@ public sealed class CurrencyTradeService
                 ValuationIrr = legacyIrr,
                 CustomerOffsetIrr = 0m,
                 SettlementLines = null,
+                CustomerBalanceCurrencyCode = CurrencyCodes.Irr,
+                CustomerBalanceRateIrr = 1m,
+                CustomerBalanceDecimalPlaces = 0,
             };
         }
 
         var mode = input.SettlementMode.Value;
         var currencies = (await _repository.GetCurrenciesAsync(ct)).Where(c => c.IsActive).ToDictionary(c => c.Code, StringComparer.Ordinal);
-        var rates = await _repository.GetLatestRatesAsync(input.BranchId, ct);
+        var rates = await _repository.GetRatesAtAsync(input.BranchId, occurredAt, ct);
         var applyOffset = input.ApplyCustomerOffset;
-        var offset = 0m;
+        var offset = new CustomerOffsetResolution(0m, CurrencyCodes.Irr, 0m);
         var crossRate = 0m;
         decimal valuationIrr;
         decimal effectiveRate;
@@ -236,13 +239,14 @@ public sealed class CurrencyTradeService
                 throw new BusinessRuleException("ارزش ریالی معامله صفر است؛ مقدار یا نرخ را بررسی کنید.");
             }
             TradePlanner.ValidateFee(input.FeeIrr, type, valuationIrr);
-            offset = await ResolveOffsetAsync(input, type, valuationIrr, occurredAt, excludeTradeId, applyOffset, ct);
+            offset = await ResolveOffsetAsync(input, type, valuationIrr, counterCurrency, counterRate,
+                occurredAt, excludeTradeId, applyOffset, ct);
             var due = type == TradeType.Buy ? valuationIrr - input.FeeIrr : valuationIrr + input.FeeIrr;
-            var amountInCounter = MoneyMath.RoundTo((due - offset) / counterRate, counterCurrency.DecimalPlaces);
+            var amountInCounter = MoneyMath.RoundTo((due - offset.IrrAmount) / counterRate, counterCurrency.DecimalPlaces);
             if (amountInCounter > 0m)
             {
                 TradePlanner.ValidateQuantity(amountInCounter, counterCurrency);
-                settlements = new[] { new TradeSettlementInput(counterCode, amountInCounter, counterRate) };
+                settlements = new[] { new TradeSettlementInput(counterCode, amountInCounter, counterRate, counterCurrency.DecimalPlaces) };
             }
             else
             {
@@ -255,10 +259,22 @@ public sealed class CurrencyTradeService
                 SettlementCurrencyCode = counterCode,
                 CrossRate = crossRate,
                 ValuationIrr = valuationIrr,
-                CustomerOffsetIrr = offset,
+                CustomerOffsetIrr = offset.IrrAmount,
+                CustomerOffsetCurrencyCode = offset.CurrencyCode,
+                CustomerOffsetAmount = offset.Amount,
                 SettlementLines = settlements,
+                CustomerBalanceCurrencyCode = counterCode,
+                CustomerBalanceRateIrr = counterRate,
+                CustomerBalanceDecimalPlaces = counterCurrency.DecimalPlaces,
             };
         }
+
+        var accountCurrencyCode = (input.SettlementCurrencyCode ?? CurrencyCodes.Irr).Trim().ToUpperInvariant();
+        if (!currencies.TryGetValue(accountCurrencyCode, out var accountCurrency))
+        {
+            throw new BusinessRuleException("ارز مانده‌ی حساب مشتری را انتخاب کنید.");
+        }
+        var accountBalanceRate = SettlementRate(accountCurrency, rates, input.BranchId, type);
 
         TradePlanner.ValidateRate(input.Rate);
         valuationIrr = MoneyMath.RoundIrr(input.Amount * input.Rate);
@@ -267,7 +283,8 @@ public sealed class CurrencyTradeService
             throw new BusinessRuleException("مبلغ ریالی معامله صفر است.");
         }
         TradePlanner.ValidateFee(input.FeeIrr, type, valuationIrr);
-        offset = await ResolveOffsetAsync(input, type, valuationIrr, occurredAt, excludeTradeId, applyOffset, ct);
+        offset = await ResolveOffsetAsync(input, type, valuationIrr, accountCurrency, accountBalanceRate,
+            occurredAt, excludeTradeId, applyOffset, ct);
         effectiveRate = input.Rate;
         crossRate = 0m;
 
@@ -305,7 +322,7 @@ public sealed class CurrencyTradeService
                 }
                 TradePlanner.ValidateQuantity(line.Amount, settlementCurrency);
                 var rateIrr = SettlementRate(settlementCurrency, rates, input.BranchId, type);
-                normalized.Add(new TradeSettlementInput(settlementCode, line.Amount, rateIrr));
+                normalized.Add(new TradeSettlementInput(settlementCode, line.Amount, rateIrr, settlementCurrency.DecimalPlaces));
             }
             settlements = normalized;
         }
@@ -317,18 +334,25 @@ public sealed class CurrencyTradeService
         return input with
         {
             Rate = effectiveRate,
-            SettlementCurrencyCode = null,
+            SettlementCurrencyCode = accountCurrencyCode,
             CrossRate = crossRate,
             ValuationIrr = valuationIrr,
-            CustomerOffsetIrr = offset,
+            CustomerOffsetIrr = offset.IrrAmount,
+            CustomerOffsetCurrencyCode = offset.CurrencyCode,
+            CustomerOffsetAmount = offset.Amount,
             SettlementLines = settlements,
+            CustomerBalanceCurrencyCode = accountCurrencyCode,
+            CustomerBalanceRateIrr = accountBalanceRate,
+            CustomerBalanceDecimalPlaces = accountCurrency.DecimalPlaces,
         };
     }
 
-    private async Task<decimal> ResolveOffsetAsync(
+    private async Task<CustomerOffsetResolution> ResolveOffsetAsync(
         TradeInput input,
         TradeType type,
         decimal valuationIrr,
+        CurrencyInfo balanceCurrency,
+        decimal balanceRateIrr,
         DateTime occurredAt,
         long? excludeTradeId,
         bool applyOffset,
@@ -336,17 +360,25 @@ public sealed class CurrencyTradeService
     {
         if (!applyOffset)
         {
-            return 0m;
+            return new CustomerOffsetResolution(0m, balanceCurrency.Code, 0m);
         }
         if (input.CustomerId is not { } customerId)
         {
             throw new BusinessRuleException("برای تهاتر، مشتری را انتخاب کنید.");
         }
-        var balance = await _repository.GetCustomerAccountBalanceAsync(input.BranchId, customerId, occurredAt, excludeTradeId, ct: ct);
+        var balances = await _repository.GetCustomerCurrencyBalancesAsync(
+            input.BranchId, customerId, occurredAt, excludeTradeId: excludeTradeId, ct: ct);
+        var current = balances.FirstOrDefault(b => b.CurrencyCode == balanceCurrency.Code)?.BalanceAmount ?? 0m;
+        var available = type == TradeType.Buy ? Math.Max(0m, current) : Math.Max(0m, -current);
         var due = type == TradeType.Buy ? valuationIrr - input.FeeIrr : valuationIrr + input.FeeIrr;
-        var opposite = type == TradeType.Buy ? balance.ReceivableIrr : balance.PayableIrr;
-        return MoneyMath.RoundIrr(Math.Min(Math.Max(0m, opposite), due));
+        var amountInIrr = MoneyMath.RoundIrr(Math.Min(due, available * balanceRateIrr));
+        var offsetAmount = balanceCurrency.Code == CurrencyCodes.Irr
+            ? amountInIrr
+            : Math.Min(available, MoneyMath.RoundTo(amountInIrr / balanceRateIrr, balanceCurrency.DecimalPlaces));
+        return new CustomerOffsetResolution(amountInIrr, balanceCurrency.Code, offsetAmount);
     }
+
+    private sealed record CustomerOffsetResolution(decimal IrrAmount, string CurrencyCode, decimal Amount);
 
     private static decimal BaseRate(CurrencyInfo currency, IReadOnlyList<RateInfo> rates, int branchId, TradeType type)
     {
@@ -417,7 +449,16 @@ public sealed class CurrencyTradeService
                 return false;
             }
         }
-        else if (mode == TradeSettlementMode.Split
+        else
+        {
+            var code = (input.SettlementCurrencyCode ?? CurrencyCodes.Irr).Trim().ToUpperInvariant();
+            var oldCode = (old.SettlementCurrencyCode ?? CurrencyCodes.Irr).Trim().ToUpperInvariant();
+            if (!string.Equals(code, oldCode, StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+        }
+        if (mode == TradeSettlementMode.Split
             && !SameSettlementInputs(input.SettlementLines, old.Settlements, type))
         {
             return false;

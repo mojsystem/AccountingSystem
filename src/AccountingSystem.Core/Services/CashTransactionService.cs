@@ -6,8 +6,8 @@ using AccountingSystem.Core.Domain;
 namespace AccountingSystem.Core.Services;
 
 /// <summary>
-/// رسید دریافت و پرداخت مستقل از خریدوفروش ارز. هر سند صندوق را جابه‌جا و مانده‌ی دریافتنی/پرداختنی همان مشتری را تسویه می‌کند.
-/// ویرایش با سند معکوس و نسخه‌ی جایگزین و ابطال با سند معکوس انجام می‌شود.
+/// دریافت و پرداخت مستقل از معامله. صندوق بر اساس ارز واقعی جابه‌جا می‌شود و حساب مشتری مانده‌ی امضاشده‌ی
+/// جداگانه برای هر ارز دارد؛ دریافت مانده را کاهش و پرداخت آن را افزایش می‌دهد.
 /// </summary>
 public sealed class CashTransactionService
 {
@@ -54,6 +54,17 @@ public sealed class CashTransactionService
         return await _repository.GetCustomerAccountBalanceAsync(branchId, customerId, asOf, ct: ct);
     }
 
+    public async Task<IReadOnlyList<CustomerCurrencyBalance>> GetCustomerCurrencyBalancesAsync(
+        CurrentUser actor,
+        int branchId,
+        int customerId,
+        DateTime asOf,
+        CancellationToken ct = default)
+    {
+        await _permissions.RequireReadAsync(actor, branchId, ct);
+        return await _repository.GetCustomerCurrencyBalancesAsync(branchId, customerId, asOf, ct: ct);
+    }
+
     public async Task<long> RecordAsync(
         CurrentUser actor,
         CashTransactionInput input,
@@ -68,8 +79,18 @@ public sealed class CashTransactionService
         await _permissions.RequireAsync(actor, Permission.CashTransactionCreate, input.BranchId, ct);
         var occurredAt = OccurrenceRules.Resolve(occurredOn, now);
         var ledger = await _repository.GetBranchLedgerAsync(input.BranchId, ct);
-        var (normalized, currency, rate) = await PrepareAsync(input, occurredAt, null, ct);
-        var posting = LedgerPlanner.PlanCashTransaction(ledger, currency, normalized, rate, occurredAt, actor.Id, now);
+        var prepared = await PrepareAsync(input, occurredAt, null, ct);
+        var posting = LedgerPlanner.PlanCashTransaction(
+            ledger,
+            prepared.CashCurrency,
+            prepared.BalanceCurrency,
+            prepared.Input,
+            prepared.AccountingRateIrr,
+            prepared.BalanceAmount,
+            prepared.BalanceBefore,
+            occurredAt,
+            actor.Id,
+            now);
         var id = await _repository.PostAsync(posting, ct);
         return id ?? throw new InvalidOperationException("شناسه‌ی دریافت/پرداخت ثبت نشد.");
     }
@@ -93,13 +114,22 @@ public sealed class CashTransactionService
         var sameDay = occurredOn is null || occurredOn.Value.Date == old.OccurredAt.Date;
         var occurredAt = sameDay ? old.OccurredAt : OccurrenceRules.Resolve(occurredOn, now);
         var ledger = await _repository.GetBranchLedgerAsync(old.BranchId, ct);
-        var scopedInput = input with { BranchId = old.BranchId };
-        var (normalized, currency, rate) = await PrepareAsync(scopedInput, occurredAt, transactionId, ct);
+        var scopedInput = input with
+        {
+            BranchId = old.BranchId,
+            BalanceCurrencyCode = string.IsNullOrWhiteSpace(input.BalanceCurrencyCode)
+                ? old.BalanceCurrencyCode
+                : input.BalanceCurrencyCode,
+        };
+        var prepared = await PrepareAsync(scopedInput, occurredAt, transactionId, ct);
         var posting = LedgerPlanner.PlanCashTransaction(
             ledger,
-            currency,
-            normalized,
-            rate,
+            prepared.CashCurrency,
+            prepared.BalanceCurrency,
+            prepared.Input,
+            prepared.AccountingRateIrr,
+            prepared.BalanceAmount,
+            prepared.BalanceBefore,
             occurredAt,
             actor.Id,
             now,
@@ -128,7 +158,7 @@ public sealed class CashTransactionService
         await _repository.PostAsync(posting, ct);
     }
 
-    private async Task<(CashTransactionInput Input, CurrencyInfo Currency, decimal RateIrr)> PrepareAsync(
+    private async Task<PreparedCashTransaction> PrepareAsync(
         CashTransactionInput input,
         DateTime occurredAt,
         long? excludeCashTransactionId,
@@ -138,71 +168,109 @@ public sealed class CashTransactionService
         {
             throw new BusinessRuleException("نوع دریافت یا پرداخت نامعتبر است.");
         }
+        if (!Enum.IsDefined(input.RateMode))
+        {
+            throw new BusinessRuleException("نرخ اطلاع‌رسانی نامعتبر است.");
+        }
         if (input.CustomerId <= 0 || await _repository.GetCustomerAsync(input.CustomerId, ct) is null)
         {
             throw new BusinessRuleException("مشتری را انتخاب کنید.");
         }
 
-        var code = (input.CurrencyCode ?? string.Empty).Trim().ToUpperInvariant();
-        var currency = (await _repository.GetCurrenciesAsync(ct))
-            .FirstOrDefault(c => c.Code == code && c.IsActive)
-            ?? throw new BusinessRuleException("ارز انتخابی فعال نیست یا پیدا نشد.");
-        TradePlanner.ValidateQuantity(input.Amount, currency);
-
-        decimal rate;
-        if (currency.Code == CurrencyCodes.Irr)
+        var cashCode = (input.CurrencyCode ?? string.Empty).Trim().ToUpperInvariant();
+        var balanceCode = (input.BalanceCurrencyCode ?? string.Empty).Trim().ToUpperInvariant();
+        if (balanceCode.Length == 0)
         {
-            if (input.RateMode != TradeRateMode.Derived)
+            balanceCode = cashCode;
+        }
+
+        var currencies = await _repository.GetCurrenciesAsync(ct);
+        var cashCurrency = currencies.FirstOrDefault(c => c.Code == cashCode && c.IsActive)
+            ?? throw new BusinessRuleException("ارز صندوق انتخابی فعال نیست یا پیدا نشد.");
+        var balanceCurrency = currencies.FirstOrDefault(c => c.Code == balanceCode && c.IsActive)
+            ?? throw new BusinessRuleException("ارز حساب مشتری انتخابی فعال نیست یا پیدا نشد.");
+        TradePlanner.ValidateQuantity(input.Amount, cashCurrency);
+        if (input.RateIrr is { } informativeRate)
+        {
+            TradePlanner.ValidateRate(informativeRate);
+        }
+
+        // نرخ ورودی اختیاری و صرفاً برای نگهداری/نمایش است؛ تسویه‌ی ارزی از نرخ رسمی شعبه در زمان وقوع استفاده می‌کند.
+        var rates = await _repository.GetRatesAtAsync(input.BranchId, occurredAt, ct);
+        var side = input.Direction == CashTransactionDirection.Receipt
+            ? "نرخ خرید"
+            : "نرخ فروش";
+        decimal RateFor(string code)
+        {
+            if (code == CurrencyCodes.Irr)
             {
-                throw new BusinessRuleException("نرخ ریال همیشه یک است.");
+                return 1m;
             }
-            rate = 1m;
-        }
-        else if (input.RateMode == TradeRateMode.Direct)
-        {
-            rate = input.RateIrr ?? throw new BusinessRuleException("نرخ توافقی را وارد کنید.");
-            TradePlanner.ValidateRate(rate);
-        }
-        else if (input.RateMode == TradeRateMode.Derived)
-        {
-            var rateInfo = (await _repository.GetLatestRatesAsync(input.BranchId, ct))
-                .FirstOrDefault(r => r.CurrencyCode == currency.Code)
-                ?? throw new BusinessRuleException($"برای {currency.Code} در این شعبه نرخ روز ثبت نشده است.");
-            // صندوق در رسید ارز را از مشتری می‌خرد؛ در پرداخت ارز را به مشتری می‌فروشد.
-            rate = input.Direction == CashTransactionDirection.Receipt
-                ? rateInfo.BuyRateIrr
-                : rateInfo.SellRateIrr;
-        }
-        else
-        {
-            throw new BusinessRuleException("روش نرخ دریافت/پرداخت نامعتبر است.");
+            var quote = rates.FirstOrDefault(r => r.CurrencyCode == code)
+                ?? throw new BusinessRuleException($"برای {code} در تاریخ سند {side} شعبه ثبت نشده است.");
+            return input.Direction == CashTransactionDirection.Receipt ? quote.BuyRateIrr : quote.SellRateIrr;
         }
 
-        var irrAmount = currency.Code == CurrencyCodes.Irr
+        var accountingRateIrr = RateFor(cashCode);
+        var irrAmount = cashCode == CurrencyCodes.Irr
             ? MoneyMath.RoundIrr(input.Amount)
-            : MoneyMath.RoundIrr(input.Amount * rate);
+            : MoneyMath.RoundIrr(input.Amount * accountingRateIrr);
         if (irrAmount <= 0m)
         {
-            throw new BusinessRuleException("ارزش ریالی دریافت/پرداخت صفر است.");
+            throw new BusinessRuleException("ارزش دفتری دریافت/پرداخت صفر است.");
         }
 
-        var balance = await _repository.GetCustomerAccountBalanceAsync(
+        var balanceAmount = cashCode == balanceCode
+            ? input.Amount
+            : MoneyMath.RoundTo(irrAmount / RateFor(balanceCode), balanceCurrency.DecimalPlaces);
+        if (balanceAmount <= 0m)
+        {
+            throw new BusinessRuleException("مبلغ معادل در ارز حساب مشتری صفر است.");
+        }
+
+        var balances = await _repository.GetCustomerCurrencyBalancesAsync(
             input.BranchId,
             input.CustomerId,
             occurredAt,
             excludeCashTransactionId: excludeCashTransactionId,
             ct: ct);
-        var available = input.Direction == CashTransactionDirection.Receipt
-            ? balance.ReceivableIrr
-            : balance.PayableIrr;
-        if (irrAmount > available)
+        var balanceBefore = balances.FirstOrDefault(b => b.CurrencyCode == balanceCode)?.BalanceAmount ?? 0m;
+        var availableBalance = input.Direction == CashTransactionDirection.Receipt
+            ? Math.Max(0m, balanceBefore)
+            : Math.Max(0m, -balanceBefore);
+        if (balanceAmount > availableBalance)
         {
-            var side = input.Direction == CashTransactionDirection.Receipt ? "دریافتنی" : "پرداختنی";
+            var sideName = input.Direction == CashTransactionDirection.Receipt ? "دریافتنی" : "پرداختنی";
             throw new BusinessRuleException(
-                $"مبلغ معادل {MoneyMath.FormatAmount(irrAmount, 0)} ریال از مانده‌ی {side} مشتری " +
-                $"({MoneyMath.FormatAmount(Math.Max(0m, available), 0)} ریال) بیشتر است.");
+                $"مبلغ تسویه‌شده ({MoneyMath.FormatAmount(balanceAmount, balanceCurrency.DecimalPlaces)} {balanceCode}) از مانده‌ی {sideName} مشتری بیشتر است.");
         }
 
-        return (input with { CurrencyCode = code }, currency, rate);
+        var informationalRateIrr = cashCode == CurrencyCodes.Irr
+            ? 1m
+            : input.RateIrr ?? accountingRateIrr;
+        var normalized = input with
+        {
+            CurrencyCode = cashCode,
+            BalanceCurrencyCode = balanceCode,
+            RateMode = input.RateIrr is null ? TradeRateMode.Derived : TradeRateMode.Direct,
+            RateIrr = informationalRateIrr,
+        };
+        return new PreparedCashTransaction(
+            normalized,
+            cashCurrency,
+            balanceCurrency,
+            accountingRateIrr,
+            irrAmount,
+            balanceAmount,
+            balanceBefore);
     }
+
+    private sealed record PreparedCashTransaction(
+        CashTransactionInput Input,
+        CurrencyInfo CashCurrency,
+        CurrencyInfo BalanceCurrency,
+        decimal AccountingRateIrr,
+        decimal IrrAmount,
+        decimal BalanceAmount,
+        decimal BalanceBefore);
 }

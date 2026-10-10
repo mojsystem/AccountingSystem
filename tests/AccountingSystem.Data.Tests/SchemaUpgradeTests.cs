@@ -42,7 +42,7 @@ public sealed class SchemaUpgradeTests
 
         var first = await SchemaUpgrader.EnsureUpToDateAsync(Db(fresh)!, NoBackup());
         Assert.Equal(UpgradeKind.Create, first.Kind);
-        Assert.Equal(new[] { 1, 2, 3, 4 }, first.AppliedVersions);
+        Assert.Equal(new[] { 1, 2, 3, 4, 5 }, first.AppliedVersions);
 
         var second = await SchemaUpgrader.EnsureUpToDateAsync(Db(fresh)!, NoBackup());
         Assert.Equal(UpgradeKind.UpToDate, second.Kind);
@@ -55,7 +55,7 @@ public sealed class SchemaUpgradeTests
         Assert.Empty(actual.Except(expected));
 
         var versions = await SqlTestDb.RowsAsync(Db(fresh)!, "SELECT Version, AppliedBy FROM dbo.SchemaVersion ORDER BY Version;");
-        Assert.Equal(4, versions.Count);
+        Assert.Equal(5, versions.Count);
         Assert.NotEqual("ADOPTED", (string)versions[2][1]!);
     }
 
@@ -111,15 +111,15 @@ public sealed class SchemaUpgradeTests
 
         Assert.Equal(UpgradeKind.Upgrade, result.Kind);
         Assert.Equal(new[] { 1 }, result.AdoptedVersions);
-        Assert.Equal(new[] { 2, 3, 4 }, result.AppliedVersions);
+        Assert.Equal(new[] { 2, 3, 4, 5 }, result.AppliedVersions);
         Assert.NotNull(result.BackupPath);
 
         var backups = await new SqlDatabaseMaintenance(Db(legacy)!).ListBackupsAsync();
         Assert.Contains(backups, b => b.FilePath == result.BackupPath);
 
-        // نسخه‌ی ۱ قدیمی پذیرفته شده و نسخه‌های ۲ تا ۴ توسط برنامه اجرا شده‌اند.
+        // نسخه‌ی ۱ قدیمی پذیرفته شده و نسخه‌های ۲ تا ۵ توسط برنامه اجرا شده‌اند.
         var versions = await SqlTestDb.RowsAsync(Db(legacy)!, "SELECT Version, AppliedBy FROM dbo.SchemaVersion ORDER BY Version;");
-        Assert.Equal(4, versions.Count);
+        Assert.Equal(5, versions.Count);
         Assert.Equal("ADOPTED", (string)versions[0][1]!);
 
         // backfill: هر معامله به مشتری وصل است و گروه‌بندی درست است.

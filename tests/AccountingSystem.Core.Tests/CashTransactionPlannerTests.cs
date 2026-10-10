@@ -10,16 +10,17 @@ public sealed class CashTransactionPlannerTests
     private static readonly DateTime Now = new(2026, 10, 8, 10, 0, 0);
     private static readonly CurrencyInfo Irr = new(CurrencyCodes.Irr, "ریال ایران", 0, true);
     private static readonly CurrencyInfo Usd = new("USD", "دلار آمریکا", 2, true);
+    private static readonly CurrencyInfo Eur = new("EUR", "یورو", 2, true);
 
     [Fact]
     public void Independent_irr_receipt_debits_cash_and_credits_customer_receivable()
     {
         var input = new CashTransactionInput(
             1, CashTransactionDirection.Receipt, 27, CurrencyCodes.Irr, 2_500_000m,
-            TradeRateMode.Derived, Note: "رسید مستقل");
+            TradeRateMode.Derived, Note: "رسید مستقل", BalanceCurrencyCode: CurrencyCodes.Irr);
 
         var posting = LedgerPlanner.PlanCashTransaction(
-            BranchLedger.Empty(1, 0m), Irr, input, 1m, Now, 9, Now);
+            BranchLedger.Empty(1, 0m), Irr, Irr, input, 1m, 2_500_000m, 2_500_000m, Now, 9, Now);
 
         Assert.NotNull(posting.CashTransaction);
         Assert.Equal(2_500_000m, posting.CashTransaction!.IrrAmount);
@@ -48,9 +49,10 @@ public sealed class CashTransactionPlannerTests
             new Dictionary<string, PoolBalance> { ["USD"] = new(10m, 10_000_000m) });
         var input = new CashTransactionInput(
             1, CashTransactionDirection.Payment, 27, "USD", 2m,
-            TradeRateMode.Direct, 1_100_000m);
+            TradeRateMode.Direct, 1_100_000m, BalanceCurrencyCode: "USD");
 
-        var posting = LedgerPlanner.PlanCashTransaction(ledger, Usd, input, 1_100_000m, Now, 9, Now);
+        var posting = LedgerPlanner.PlanCashTransaction(ledger, Usd, Usd, input, 1_100_000m,
+            2m, -10m, Now, 9, Now);
 
         var payment = Assert.IsType<CashTransactionDraft>(posting.CashTransaction);
         Assert.Equal(2_200_000m, payment.IrrAmount);
@@ -64,6 +66,43 @@ public sealed class CashTransactionPlannerTests
         Assert.Contains(lines, line => line.AccountCode == AccountCodes.ForeignCash("USD") && line.Credit == 2_000_000m);
         Assert.Contains(lines, line => line.AccountCode == AccountCodes.FxProfit && line.Credit == 200_000m);
         Assert.Equal(lines.Sum(line => line.Debit), lines.Sum(line => line.Credit));
+    }
+
+    [Fact]
+    public void Foreign_payment_changes_only_cash_currency_and_posts_customer_balance_in_its_own_currency()
+    {
+        var opening = new LedgerEvent(
+            LedgerDocKind.Opening, 5, LedgerEventKind.Acquire, "USD", Now.AddHours(-1), 10,
+            10m, 10_000_000m, 0m, 0m, 0m, 0m);
+        var ledger = new BranchLedger(
+            1,
+            0,
+            new[] { opening },
+            new HashSet<DocRef> { new(LedgerDocKind.Opening, 5) },
+            0m,
+            new Dictionary<string, PoolBalance> { ["USD"] = new(10m, 10_000_000m) });
+        var input = new CashTransactionInput(
+            1, CashTransactionDirection.Payment, 27, "USD", 2m,
+            TradeRateMode.Direct, 3_000_000m, BalanceCurrencyCode: "EUR");
+
+        var posting = LedgerPlanner.PlanCashTransaction(
+            ledger, Usd, Eur, input, 1_100_000m,
+            2.44m, -5m, Now, 9, Now);
+
+        var payment = Assert.IsType<CashTransactionDraft>(posting.CashTransaction);
+        Assert.Equal(3_000_000m, payment.RateIrr); // نرخ ورودی فقط اطلاع‌رسانی است
+        Assert.Equal(2_200_000m, payment.IrrAmount);
+        Assert.Equal(2_000_000m, payment.CostIrr);
+        Assert.Equal(200_000m, payment.ProfitIrr);
+        var movement = Assert.Single(posting.CashMovements);
+        Assert.Equal("USD", movement.CurrencyCode);
+        Assert.Equal(-2m, movement.Delta);
+        var journal = Assert.Single(posting.Journals);
+        Assert.Contains(journal.Lines, line => line.AccountCode == AccountCodes.CustomerPayable
+            && line.CustomerId == 27 && line.CustomerBalanceCurrencyCode == "EUR"
+            && line.CustomerBalanceDelta == 2.44m && line.Debit == 2_200_000m);
+        Assert.DoesNotContain(journal.Lines, line => line.AccountCode == AccountCodes.IrrCash);
+        Assert.Equal(journal.Lines.Sum(line => line.Debit), journal.Lines.Sum(line => line.Credit));
     }
 
     [Fact]
@@ -113,10 +152,11 @@ public sealed class CashTransactionPlannerTests
             new Dictionary<string, PoolBalance> { ["USD"] = new(5m, 5_000_000m) });
         var input = new CashTransactionInput(
             1, CashTransactionDirection.Receipt, 27, "USD", 10m,
-            TradeRateMode.Direct, 2_000_000m);
+            TradeRateMode.Direct, 2_000_000m, BalanceCurrencyCode: "USD");
 
         var posting = LedgerPlanner.PlanCashTransaction(
-            ledger, Usd, input, 2_000_000m, Now.AddHours(-2), 9, Now);
+            ledger, Usd, Usd, input, 2_000_000m,
+            10m, 0m, Now.AddHours(-2), 9, Now);
 
         var update = Assert.Single(posting.CashTransactionCostUpdates!);
         Assert.Equal(7L, update.CashTransactionId);

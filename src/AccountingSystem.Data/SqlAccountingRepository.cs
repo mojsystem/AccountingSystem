@@ -45,8 +45,9 @@ LEFT JOIN dbo.Users vu ON vu.Id = t.VoidedBy";
 
     private const string CashTransactionSelect = @"
 SELECT t.Id, t.BranchId, br.Code, br.Name, t.Direction, t.CustomerId, c.CustomerCode, c.FullName,
-       t.CurrencyCode, cur.Name, cur.DecimalPlaces, t.Amount, t.RateMode, t.RateIrr, t.IrrAmount,
-       t.CostIrr, t.ProfitIrr, t.Note, t.OccurredAt, u.Username, t.IsVoided, t.VoidedAt, vu.Username, t.VoidReason
+       t.CurrencyCode, cur.Name, cur.DecimalPlaces, t.Amount, t.BalanceCurrencyCode, t.BalanceAmount,
+       t.RateMode, t.RateIrr, t.IrrAmount, t.CostIrr, t.ProfitIrr, t.Note, t.OccurredAt,
+       u.Username, t.IsVoided, t.VoidedAt, vu.Username, t.VoidReason
 FROM dbo.CashTransactions t
 INNER JOIN dbo.Branches br ON br.Id = t.BranchId
 INNER JOIN dbo.Customers c ON c.Id = t.CustomerId
@@ -300,6 +301,37 @@ ORDER BY br.Id, l.CurrencyCode;";
         return result;
     }
 
+    public async Task<IReadOnlyList<RateInfo>> GetRatesAtAsync(int branchId, DateTime asOf, CancellationToken ct = default)
+    {
+        const string sql = @"
+WITH LatestRates AS
+(
+    SELECT r.BranchId, r.CurrencyCode, r.BuyRateIrr, r.SellRateIrr, r.CreatedAt,
+           ROW_NUMBER() OVER (PARTITION BY r.BranchId, r.CurrencyCode ORDER BY r.CreatedAt DESC, r.Id DESC) AS RowNo
+    FROM dbo.ExchangeRates r
+    WHERE r.BranchId = @branchId AND r.CreatedAt <= @asOf
+)
+SELECT l.BranchId, br.Name, l.CurrencyCode, c.Name, l.BuyRateIrr, l.SellRateIrr, l.CreatedAt
+FROM LatestRates l
+INNER JOIN dbo.Branches br ON br.Id = l.BranchId
+INNER JOIN dbo.Currencies c ON c.Code = l.CurrencyCode
+WHERE l.RowNo = 1
+ORDER BY l.CurrencyCode;";
+        var result = new List<RateInfo>();
+        await using var conn = await OpenAsync(ct);
+        await using var cmd = new SqlCommand(sql, conn);
+        cmd.Parameters.Add(new SqlParameter("@branchId", branchId));
+        cmd.Parameters.Add(new SqlParameter("@asOf", asOf));
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+        {
+            result.Add(new RateInfo(
+                reader.GetInt32(0), reader.GetString(1), reader.GetString(2).Trim(), reader.GetString(3),
+                reader.GetDecimal(4), reader.GetDecimal(5), reader.GetDateTime(6)));
+        }
+        return result;
+    }
+
     public async Task AddRateAsync(int branchId, string currencyCode, decimal buyRateIrr, decimal sellRateIrr, int userId, DateTime now, CancellationToken ct = default)
     {
         await using var conn = await OpenAsync(ct);
@@ -309,7 +341,7 @@ ORDER BY br.Id, l.CurrencyCode;";
             new SqlParameter("@code", currencyCode),
             Money("@buy", buyRateIrr),
             Money("@sell", sellRateIrr),
-            new SqlParameter("@now", now),
+            new SqlParameter("@now", OccurrenceRules.Truncate(now)),
             new SqlParameter("@userId", userId));
     }
 
@@ -912,18 +944,22 @@ WHERE Id = @id AND BranchId = @branchId AND SourceType = N'MANUAL' AND IsVoided 
             _ => "e.Id = @docId AND e.SourceType = N'MANUAL'",
         };
         var sql = $@"
-INSERT INTO dbo.JournalLines (JournalEntryId, LineNumber, AccountCode, Debit, Credit, CustomerId)
-SELECT @entryId, ROW_NUMBER() OVER (ORDER BY n.AccountCode, n.CustomerId), n.AccountCode,
+INSERT INTO dbo.JournalLines
+    (JournalEntryId, LineNumber, AccountCode, Debit, Credit, CustomerId, CustomerBalanceCurrencyCode, CustomerBalanceDelta)
+SELECT @entryId, ROW_NUMBER() OVER (ORDER BY n.AccountCode, n.CustomerId, n.CustomerBalanceCurrencyCode), n.AccountCode,
        CASE WHEN n.Net < 0 THEN -n.Net ELSE 0 END,
        CASE WHEN n.Net > 0 THEN n.Net ELSE 0 END,
-       n.CustomerId
+       n.CustomerId, n.CustomerBalanceCurrencyCode,
+       CASE WHEN n.CustomerBalanceDelta IS NULL THEN NULL ELSE -n.CustomerBalanceDelta END
 FROM
 (
-    SELECT l.AccountCode, l.CustomerId, SUM(l.Debit - l.Credit) AS Net
+    SELECT l.AccountCode, l.CustomerId, l.CustomerBalanceCurrencyCode,
+           SUM(l.Debit - l.Credit) AS Net,
+           SUM(l.CustomerBalanceDelta) AS CustomerBalanceDelta
     FROM dbo.JournalLines l
     INNER JOIN dbo.JournalEntries e ON e.Id = l.JournalEntryId
     WHERE e.BranchId = @branchId AND {filter}
-    GROUP BY l.AccountCode, l.CustomerId
+    GROUP BY l.AccountCode, l.CustomerId, l.CustomerBalanceCurrencyCode
 ) n
 WHERE n.Net <> 0;";
         await ExecuteAsync(conn, tx, ct, sql,
@@ -941,14 +977,21 @@ WHERE n.Net <> 0;";
         foreach (var line in journal.Lines)
         {
             lineNo++;
+            var isCustomerControl = line.CustomerId is not null
+                && (line.AccountCode == AccountCodes.CustomerReceivable || line.AccountCode == AccountCodes.CustomerPayable);
+            var balanceCurrency = line.CustomerBalanceCurrencyCode ?? (isCustomerControl ? CurrencyCodes.Irr : null);
+            var balanceDelta = line.CustomerBalanceDelta ?? (isCustomerControl ? line.Debit - line.Credit : (decimal?)null);
             await ExecuteAsync(conn, tx, ct,
-                "INSERT INTO dbo.JournalLines (JournalEntryId, LineNumber, AccountCode, Debit, Credit, CustomerId) VALUES (@entryId, @lineNo, @account, @debit, @credit, @customerId);",
+                "INSERT INTO dbo.JournalLines (JournalEntryId, LineNumber, AccountCode, Debit, Credit, CustomerId, CustomerBalanceCurrencyCode, CustomerBalanceDelta) " +
+                "VALUES (@entryId, @lineNo, @account, @debit, @credit, @customerId, @balanceCurrency, @balanceDelta);",
                 new SqlParameter("@entryId", entryId),
                 new SqlParameter("@lineNo", lineNo),
                 new SqlParameter("@account", line.AccountCode),
                 Money("@debit", line.Debit),
                 Money("@credit", line.Credit),
-                NullableInt("@customerId", line.CustomerId));
+                NullableInt("@customerId", line.CustomerId),
+                new SqlParameter("@balanceCurrency", (object?)balanceCurrency ?? DBNull.Value),
+                MoneyOrNull("@balanceDelta", balanceDelta));
         }
         return entryId;
     }
@@ -1059,17 +1102,19 @@ VALUES (@tradeId, @lineNumber, @direction, @currencyCode, @amount, @rateIrr, @ir
     {
         const string sql = @"
 INSERT INTO dbo.CashTransactions
-    (BranchId, Direction, CustomerId, CurrencyCode, Amount, RateMode, RateIrr, IrrAmount, CostIrr, ProfitIrr, Note,
-     OccurredAt, CreatedBy, CreatedAt, ReplacesId)
+    (BranchId, Direction, CustomerId, CurrencyCode, Amount, BalanceCurrencyCode, BalanceAmount,
+     RateMode, RateIrr, IrrAmount, CostIrr, ProfitIrr, Note, OccurredAt, CreatedBy, CreatedAt, ReplacesId)
 OUTPUT INSERTED.Id
-VALUES (@branchId, @direction, @customerId, @currencyCode, @amount, @rateMode, @rateIrr, @irrAmount, @costIrr, @profitIrr,
-        @note, @occurredAt, @userId, @createdAt, @replacesId);";
+VALUES (@branchId, @direction, @customerId, @currencyCode, @amount, @balanceCurrencyCode, @balanceAmount,
+        @rateMode, @rateIrr, @irrAmount, @costIrr, @profitIrr, @note, @occurredAt, @userId, @createdAt, @replacesId);";
         await using var cmd = new SqlCommand(sql, conn, tx);
         cmd.Parameters.Add(new SqlParameter("@branchId", branchId));
         cmd.Parameters.Add(new SqlParameter("@direction", transaction.Direction == CashTransactionDirection.Receipt ? "RECEIVE" : "PAY"));
         cmd.Parameters.Add(new SqlParameter("@customerId", transaction.CustomerId));
         cmd.Parameters.Add(new SqlParameter("@currencyCode", transaction.CurrencyCode));
         cmd.Parameters.Add(Money("@amount", transaction.Amount));
+        cmd.Parameters.Add(new SqlParameter("@balanceCurrencyCode", transaction.BalanceCurrencyCode));
+        cmd.Parameters.Add(Money("@balanceAmount", transaction.BalanceAmount));
         cmd.Parameters.Add(new SqlParameter("@rateMode", transaction.RateMode == TradeRateMode.Direct ? "DIRECT" : "DERIVED"));
         cmd.Parameters.Add(Money("@rateIrr", transaction.RateIrr));
         cmd.Parameters.Add(Money("@irrAmount", transaction.IrrAmount));
@@ -1368,13 +1413,13 @@ ORDER BY LineNumber;";
     FROM dbo.CurrencyTransactions parent
     INNER JOIN TradeLineage child ON child.ReplacesId = parent.Id
 )
-SELECT COALESCE(SUM(CASE WHEN l.AccountCode = N'1201' THEN l.Debit - l.Credit ELSE 0 END), 0),
-       COALESCE(SUM(CASE WHEN l.AccountCode = N'2101' THEN l.Credit - l.Debit ELSE 0 END), 0)
+SELECT COALESCE(SUM(l.CustomerBalanceDelta), 0)
 FROM dbo.JournalLines l
 INNER JOIN dbo.JournalEntries e ON e.Id = l.JournalEntryId
 WHERE e.BranchId = @branchId AND e.OccurredAt <= @asOf
   AND l.CustomerId = @customerId
-  AND l.AccountCode IN (N'1201', N'2101')
+  AND l.CustomerBalanceCurrencyCode = N'IRR'
+  AND l.CustomerBalanceDelta IS NOT NULL
   AND NOT EXISTS
   (
       SELECT 1
@@ -1390,12 +1435,68 @@ OPTION (MAXRECURSION 32767);";
         cmd.Parameters.Add(new SqlParameter("@asOf", asOf));
         cmd.Parameters.Add(RefIdParam("@excludeTradeId", excludeTradeId));
         cmd.Parameters.Add(RefIdParam("@excludeCashTransactionId", excludeCashTransactionId));
+        var value = Convert.ToDecimal(await cmd.ExecuteScalarAsync(ct), CultureInfo.InvariantCulture);
+        return new CustomerAccountBalance(branchId, customerId, Math.Max(0m, value), Math.Max(0m, -value));
+    }
+
+    public async Task<IReadOnlyList<CustomerCurrencyBalance>> GetCustomerCurrencyBalancesAsync(
+        int branchId,
+        int customerId,
+        DateTime asOf,
+        long? excludeTradeId = null,
+        long? excludeCashTransactionId = null,
+        CancellationToken ct = default)
+    {
+        const string sql = @"
+;WITH TradeLineage AS
+(
+    SELECT Id, ReplacesId
+    FROM dbo.CurrencyTransactions
+    WHERE Id = @excludeTradeId
+    UNION ALL
+    SELECT parent.Id, parent.ReplacesId
+    FROM dbo.CurrencyTransactions parent
+    INNER JOIN TradeLineage child ON child.ReplacesId = parent.Id
+)
+SELECT l.CustomerBalanceCurrencyCode, c.Name, c.DecimalPlaces, SUM(l.CustomerBalanceDelta)
+FROM dbo.JournalLines l
+INNER JOIN dbo.JournalEntries e ON e.Id = l.JournalEntryId
+INNER JOIN dbo.Currencies c ON c.Code = l.CustomerBalanceCurrencyCode
+WHERE e.BranchId = @branchId AND e.OccurredAt <= @asOf
+  AND l.CustomerId = @customerId
+  AND l.CustomerBalanceCurrencyCode IS NOT NULL
+  AND l.CustomerBalanceDelta IS NOT NULL
+  AND NOT EXISTS
+  (
+      SELECT 1
+      FROM TradeLineage lineage
+      WHERE e.SourceId = lineage.Id AND e.SourceType IN (N'TRADE', N'ADJUST', N'VOID')
+  )
+  AND (@excludeCashTransactionId IS NULL OR NOT (e.SourceId = @excludeCashTransactionId AND e.SourceType IN (N'CASH_RECEIPT', N'CASH_PAYMENT')))
+GROUP BY l.CustomerBalanceCurrencyCode, c.Name, c.DecimalPlaces
+HAVING SUM(l.CustomerBalanceDelta) <> 0
+ORDER BY l.CustomerBalanceCurrencyCode
+OPTION (MAXRECURSION 32767);";
+        var result = new List<CustomerCurrencyBalance>();
+        await using var conn = await OpenAsync(ct);
+        await using var cmd = new SqlCommand(sql, conn);
+        cmd.Parameters.Add(new SqlParameter("@branchId", branchId));
+        cmd.Parameters.Add(new SqlParameter("@customerId", customerId));
+        cmd.Parameters.Add(new SqlParameter("@asOf", asOf));
+        cmd.Parameters.Add(RefIdParam("@excludeTradeId", excludeTradeId));
+        cmd.Parameters.Add(RefIdParam("@excludeCashTransactionId", excludeCashTransactionId));
         await using var reader = await cmd.ExecuteReaderAsync(ct);
-        if (!await reader.ReadAsync(ct))
+        while (await reader.ReadAsync(ct))
         {
-            return new CustomerAccountBalance(branchId, customerId, 0m, 0m);
+            result.Add(new CustomerCurrencyBalance(
+                branchId,
+                customerId,
+                reader.GetString(0).Trim(),
+                reader.GetString(1),
+                reader.GetByte(2),
+                reader.GetDecimal(3)));
         }
-        return new CustomerAccountBalance(branchId, customerId, reader.GetDecimal(0), reader.GetDecimal(1));
+        return result;
     }
 
     public async Task<IReadOnlyList<CustomerBalanceReportRow>> GetCustomerBalancesAsync(
@@ -2244,18 +2345,20 @@ WHERE Id = @id;";
         reader.GetString(9),
         reader.GetByte(10),
         reader.GetDecimal(11),
-        ParseRateMode(reader.GetString(12)),
+        reader.GetString(12).Trim(),
         reader.GetDecimal(13),
-        reader.GetDecimal(14),
+        ParseRateMode(reader.GetString(14)),
         reader.GetDecimal(15),
         reader.GetDecimal(16),
-        ReadNullableString(reader, 17),
-        reader.GetDateTime(18),
-        reader.GetString(19),
-        reader.GetBoolean(20),
-        reader.IsDBNull(21) ? (DateTime?)null : reader.GetDateTime(21),
-        ReadNullableString(reader, 22),
-        ReadNullableString(reader, 23));
+        reader.GetDecimal(17),
+        reader.GetDecimal(18),
+        ReadNullableString(reader, 19),
+        reader.GetDateTime(20),
+        reader.GetString(21),
+        reader.GetBoolean(22),
+        reader.IsDBNull(23) ? (DateTime?)null : reader.GetDateTime(23),
+        ReadNullableString(reader, 24),
+        ReadNullableString(reader, 25));
 
     private static TradeInfo ReadTrade(SqlDataReader reader)
     {

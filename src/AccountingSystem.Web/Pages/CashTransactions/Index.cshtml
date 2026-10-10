@@ -5,7 +5,7 @@
 }
 
 <h1>دریافت و پرداخت</h1>
-<p class="hint">این بخش مستقل از معامله است و برای تسویه‌ی مانده‌ی حساب مشتری استفاده می‌شود. هر رسید، مانده‌ی دریافتنی و هر پرداخت، مانده‌ی پرداختنی همان مشتری را کاهش می‌دهد.</p>
+<p class="hint">این بخش مستقل از معامله است. صندوق فقط به ارز انتخاب‌شده تغییر می‌کند؛ ارز حساب مشتری جداگانه انتخاب می‌شود. تسویه با ارز یکسان ۱:۱ است و با ارز متفاوت طبق نرخ شعبه در تاریخ تسویه تبدیل می‌شود. نرخ ورود اختیاری و صرفاً اطلاع‌رسانی است.</p>
 
 @if (TempData["Success"] is string successMessage)
 {
@@ -65,20 +65,22 @@
                 <select id="currency" name="Input.CurrencyCode" required>
                     @foreach (var currency in Model.Currencies)
                     {
-                        <option value="@currency.Code" selected="@(currency.Code == Model.Input.CurrencyCode)">@currency.Code - @currency.Name</option>
+                        <option value="@currency.Code" data-decimals="@currency.DecimalPlaces" selected="@(currency.Code == Model.Input.CurrencyCode)">@currency.Code - @currency.Name</option>
                     }
                 </select>
             </label>
-            <label>مقدار
-                <input id="amount" name="Input.Amount" value="@Model.Input.Amount" dir="ltr" inputmode="decimal" required />
-            </label>
-            <label>روش نرخ
-                <select id="rateMode" name="Input.RateMode">
-                    <option value="DERIVED" selected="@(Model.Input.RateMode == "DERIVED")">نرخ روز شعبه</option>
-                    <option value="DIRECT" selected="@(Model.Input.RateMode == "DIRECT")">نرخ توافقی</option>
+            <label>ارز مانده‌ی حساب مشتری
+                <select id="balanceCurrency" name="Input.BalanceCurrencyCode" required>
+                    @foreach (var currency in Model.Currencies)
+                    {
+                        <option value="@currency.Code" data-decimals="@currency.DecimalPlaces" selected="@(currency.Code == Model.Input.BalanceCurrencyCode)">@currency.Code - @currency.Name</option>
+                    }
                 </select>
             </label>
-            <label id="rateField">نرخ توافقی (ریال به‌ازای یک واحد ارز)
+            <label>مقدار صندوق
+                <input id="amount" name="Input.Amount" value="@Model.Input.Amount" dir="ltr" inputmode="decimal" required />
+            </label>
+            <label id="rateField">نرخ اطلاع‌رسانی، اختیاری (ریال به‌ازای یک واحد ارز)
                 <input id="rateIrr" name="Input.RateIrr" value="@Model.Input.RateIrr" dir="ltr" inputmode="decimal" />
             </label>
             <label>تاریخ (شمسی، خالی = امروز)
@@ -88,7 +90,7 @@
                 <input name="Input.Note" value="@Model.Input.Note" maxlength="250" />
             </label>
         </div>
-        <p id="rateHint" class="hint">در نرخ روز، دریافت با نرخ خرید و پرداخت با نرخ فروش همان ارز و شعبه محاسبه می‌شود.</p>
+        <p id="rateHint" class="hint">نرخ ورودی صرفاً یادداشت است؛ محاسبه از نرخ معتبر شعبه در تاریخ سند انجام می‌شود.</p>
         <p id="valuePreview" class="hint"></p>
         <p>
             <button type="submit">@(Model.IsEditing ? "ذخیره‌ی ویرایش" : "ثبت دریافت/پرداخت")</button>
@@ -142,9 +144,9 @@ else if (Model.Branches.Count == 0)
                 <th>شعبه</th>
                 <th>نوع</th>
                 <th>مشتری</th>
-                <th>ارز و مقدار</th>
-                <th>روش / نرخ</th>
-                <th>ارزش ریالی</th>
+                <th>ارز و مقدار صندوق</th>
+                <th>تسویه‌ی حساب مشتری</th>
+                <th>نرخ و ارزش ریالی صندوق</th>
                 <th>ثبت‌کننده</th>
                 <th>وضعیت و عملیات</th>
             </tr>
@@ -159,11 +161,11 @@ else if (Model.Branches.Count == 0)
                     <td>@(transaction.Direction == CashTransactionDirection.Receipt ? "دریافت" : "پرداخت")</td>
                     <td>@transaction.CustomerName<br /><small>@transaction.CustomerCode</small></td>
                     <td>@MoneyMath.FormatAmount(transaction.Amount, transaction.DecimalPlaces) @transaction.CurrencyCode</td>
+                    <td>@MoneyMath.FormatAmount(transaction.BalanceAmount, Model.Currencies.FirstOrDefault(c => c.Code == transaction.BalanceCurrencyCode)?.DecimalPlaces ?? 4) @transaction.BalanceCurrencyCode</td>
                     <td>
-                        @(transaction.RateMode == TradeRateMode.Derived ? "نرخ روز" : "توافقی")
-                        <br /><small>@MoneyMath.FormatRate(transaction.RateIrr)</small>
+                        <small>@(transaction.RateMode == TradeRateMode.Derived ? "نرخ شعبه" : "نرخ اطلاع‌رسانی") · @MoneyMath.FormatRate(transaction.RateIrr)</small>
+                        <br />@MoneyMath.FormatAmount(transaction.IrrAmount, 0) ریال
                     </td>
-                    <td>@MoneyMath.FormatAmount(transaction.IrrAmount, 0) ریال</td>
                     <td>@transaction.CreatedBy</td>
                     <td>
                         @if (transaction.IsVoided)
@@ -191,7 +193,7 @@ else if (Model.Branches.Count == 0)
             }
             @if (Model.Transactions.Count == 0)
             {
-                <tr><td colspan="10" class="muted">در این بازه سندی ثبت نشده است.</td></tr>
+                <tr><td colspan="11" class="muted">در این بازه سندی ثبت نشده است.</td></tr>
             }
         </tbody>
     </table>
@@ -202,14 +204,15 @@ else if (Model.Branches.Count == 0)
     const rates = @Html.Raw(Model.RatesJson);
     const branch = document.querySelector('select[name="Input.BranchId"]');
     const currency = document.getElementById('currency');
+    const balanceCurrency = document.getElementById('balanceCurrency');
     const directionInputs = document.querySelectorAll('input[name="Input.Direction"]');
-    const mode = document.getElementById('rateMode');
     const rateField = document.getElementById('rateField');
     const rateInput = document.getElementById('rateIrr');
     const amount = document.getElementById('amount');
     const hint = document.getElementById('rateHint');
     const preview = document.getElementById('valuePreview');
     const editingBranch = '@Model.Input.BranchId';
+    let balanceWasChosen = @(Model.IsEditing || !string.IsNullOrWhiteSpace(Model.Input.Amount) ? "true" : "false");
 
     function selectedDirection() {
         return document.querySelector('input[name="Input.Direction"]:checked')?.value || 'Receipt';
@@ -217,41 +220,57 @@ else if (Model.Branches.Count == 0)
     function selectedBranch() {
         return branch?.value || editingBranch;
     }
-    function update() {
-        if (!currency || !mode) return;
-        const isIrr = currency.value === 'IRR';
-        mode.disabled = isIrr;
-        if (isIrr) mode.value = 'DERIVED';
-        const direct = !isIrr && mode.value === 'DIRECT';
-        rateField.hidden = !direct;
-        rateInput.required = direct;
-        if (!direct && !isIrr) {
-            const quote = rates.find(r => String(r.branchId) === String(selectedBranch()) && r.code === currency.value);
-            const receipt = selectedDirection() === 'Receipt';
-            const derived = quote ? (receipt ? quote.buy : quote.sell) : null;
-            hint.textContent = derived == null
-                ? 'برای این ارز و شعبه هنوز نرخ روز ثبت نشده است.'
-                : `نرخ روز ${receipt ? 'خرید' : 'فروش'} این شعبه: ${Number(derived).toLocaleString('fa-IR')} ریال`;
-            showPreview(derived);
-        } else if (isIrr) {
-            hint.textContent = 'نرخ ریال ثابت و برابر یک است.';
-            showPreview(1);
-        } else {
-            hint.textContent = 'نرخ توافقی را دستی وارد کنید.';
-            showPreview(Number(rateInput.value.replaceAll(',', '')) || null);
-        }
+    function selectedRate(code) {
+        if (code === 'IRR') return 1;
+        const quote = rates.find(r => String(r.branchId) === String(selectedBranch()) && r.code === code);
+        if (!quote) return null;
+        return selectedDirection() === 'Receipt' ? Number(quote.buy) : Number(quote.sell);
     }
-    function showPreview(rate) {
-        const rawAmount = Number((amount?.value || '').replaceAll(',', ''));
-        if (!preview || !Number.isFinite(rawAmount) || rawAmount <= 0 || !rate || !Number.isFinite(rate)) {
-            if (preview) preview.textContent = '';
+    function decimals(select) {
+        return Number(select?.selectedOptions?.[0]?.dataset?.decimals ?? 4);
+    }
+    function round(value, places) {
+        const scale = 10 ** places;
+        return Math.round(value * scale + Number.EPSILON) / scale;
+    }
+    function parseAmount(value) {
+        const text = String(value || '').replaceAll(',', '')
+            .replace(/[۰-۹]/g, digit => String('۰۱۲۳۴۵۶۷۸۹'.indexOf(digit)))
+            .replace(/[٠-٩]/g, digit => String('٠١٢٣٤٥٦٧٨٩'.indexOf(digit)));
+        return Number(text);
+    }
+    function update() {
+        if (!currency || !balanceCurrency) return;
+        if (!balanceWasChosen) balanceCurrency.value = currency.value;
+        const isIrr = currency.value === 'IRR';
+        rateField.hidden = isIrr;
+        if (isIrr) rateInput.value = '';
+
+        const cashRate = selectedRate(currency.value);
+        const accountRate = selectedRate(balanceCurrency.value);
+        const receipt = selectedDirection() === 'Receipt';
+        hint.textContent = isIrr
+            ? 'نرخ ریال ثابت است؛ نرخ اطلاع‌رسانی برای اسناد ریالی نمایش داده نمی‌شود.'
+            : `نرخ ورودی اختیاری و صرفاً اطلاع‌رسانی است. ارزش‌گذاری با نرخ روز شعبه‌ی ${receipt ? 'خرید' : 'فروش'} در تاریخ سند انجام می‌شود.`;
+
+        const rawAmount = parseAmount(amount?.value);
+        if (!Number.isFinite(rawAmount) || rawAmount <= 0 || cashRate == null || accountRate == null) {
+            preview.textContent = rawAmount > 0 && (cashRate == null || accountRate == null)
+                ? 'برای ارز صندوق یا ارز حساب مشتری در این شعبه نرخ معتبر روز موجود نیست.'
+                : '';
             return;
         }
-        const value = Math.round(rawAmount * rate);
-        preview.textContent = `ارزش تقریبی این سند: ${value.toLocaleString('fa-IR')} ریال`;
+        const cashIrr = Math.round(rawAmount * cashRate);
+        const accountAmount = currency.value === balanceCurrency.value
+            ? rawAmount
+            : round(cashIrr / accountRate, decimals(balanceCurrency));
+        preview.textContent = `اثر صندوق: ${cashIrr.toLocaleString('fa-IR')} ریال؛ تسویه‌ی مانده‌ی مشتری: ${accountAmount.toLocaleString('fa-IR', { maximumFractionDigits: decimals(balanceCurrency) })} ${balanceCurrency.value}`;
     }
-    [currency, mode, branch, rateInput, amount].filter(Boolean).forEach(el => el.addEventListener('input', update));
-    [currency, mode, branch].filter(Boolean).forEach(el => el.addEventListener('change', update));
+
+    currency?.addEventListener('change', update);
+    balanceCurrency?.addEventListener('change', () => { balanceWasChosen = true; update(); });
+    branch?.addEventListener('change', update);
+    amount?.addEventListener('input', update);
     directionInputs.forEach(el => el.addEventListener('change', update));
     update();
 })();

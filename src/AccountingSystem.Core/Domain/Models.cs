@@ -152,8 +152,17 @@ public sealed record TradeSettlementInfo(
     decimal CostIrr,
     decimal ProfitIrr);
 
-/// <summary>مانده‌ی تفصیلی حساب مشتری در یک شعبه، به ریال.</summary>
+/// <summary>مانده‌ی خالص مشتری در یک شعبه، به ریال (مثبت: مشتری بدهکار؛ منفی: بستانکار).</summary>
 public sealed record CustomerAccountBalance(int BranchId, int CustomerId, decimal ReceivableIrr, decimal PayableIrr);
+
+/// <summary>مانده‌ی امضاشده‌ی مشتری به تفکیک ارز (مثبت: مشتری بدهکار؛ منفی: بستانکار).</summary>
+public sealed record CustomerCurrencyBalance(
+    int BranchId,
+    int CustomerId,
+    string CurrencyCode,
+    string CurrencyName,
+    int DecimalPlaces,
+    decimal BalanceAmount);
 
 /// <summary>رسید دریافت یا پرداخت مستقل از معامله، ثبت‌شده روی صندوق و حساب مشتری.</summary>
 public sealed record CashTransactionInfo(
@@ -169,6 +178,8 @@ public sealed record CashTransactionInfo(
     string CurrencyName,
     int DecimalPlaces,
     decimal Amount,
+    string BalanceCurrencyCode,
+    decimal BalanceAmount,
     TradeRateMode RateMode,
     decimal RateIrr,
     decimal IrrAmount,

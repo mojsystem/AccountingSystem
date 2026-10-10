@@ -84,22 +84,18 @@ public class IndexModel : PageModel
         try
         {
             var amount = ParseAmount(Input.Amount, "مبلغ");
-            var rateMode = Input.CurrencyCode == CurrencyCodes.Irr
-                ? TradeRateMode.Derived
-                : ParseRateMode(Input.RateMode);
-            decimal? rate = null;
-            if (Input.CurrencyCode != CurrencyCodes.Irr && rateMode == TradeRateMode.Direct)
+            if (string.IsNullOrWhiteSpace(Input.CurrencyCode))
             {
-                rate = ParseAmount(Input.RateIrr, "نرخ توافقی");
+                throw new BusinessRuleException("ارز صندوق را انتخاب کنید.");
             }
+            decimal? rate = string.IsNullOrWhiteSpace(Input.RateIrr)
+                ? null
+                : ParseAmount(Input.RateIrr, "نرخ اطلاع‌رسانی");
+            var rateMode = rate is null ? TradeRateMode.Derived : TradeRateMode.Direct;
 
             if (!Enum.TryParse<CashTransactionDirection>(Input.Direction, ignoreCase: true, out var direction))
             {
                 throw new BusinessRuleException("نوع دریافت یا پرداخت را انتخاب کنید.");
-            }
-            if (string.IsNullOrWhiteSpace(Input.CurrencyCode))
-            {
-                throw new BusinessRuleException("ارز را انتخاب کنید.");
             }
             DateTime? occurredOn = ParseDate(Input.OccurredOn);
             var user = User.ToCurrentUser();
@@ -109,9 +105,10 @@ public class IndexModel : PageModel
                 Input.CustomerId ?? 0,
                 Input.CurrencyCode,
                 amount,
-                Input.CurrencyCode == CurrencyCodes.Irr ? TradeRateMode.Derived : rateMode,
+                rateMode,
                 rate,
-                Input.Note);
+                Input.Note,
+                Input.BalanceCurrencyCode);
 
             if (EditId is > 0)
             {
@@ -184,9 +181,11 @@ public class IndexModel : PageModel
                         Direction = transaction.Direction == CashTransactionDirection.Receipt ? "Receipt" : "Payment",
                         CustomerId = transaction.CustomerId,
                         CurrencyCode = transaction.CurrencyCode,
+                        BalanceCurrencyCode = transaction.BalanceCurrencyCode,
                         Amount = transaction.Amount.ToString("0.####", System.Globalization.CultureInfo.InvariantCulture),
-                        RateMode = transaction.RateMode == TradeRateMode.Direct ? "DIRECT" : "DERIVED",
-                        RateIrr = transaction.RateIrr.ToString("0.####", System.Globalization.CultureInfo.InvariantCulture),
+                        RateIrr = transaction.RateMode == TradeRateMode.Direct
+                            ? transaction.RateIrr.ToString("0.####", System.Globalization.CultureInfo.InvariantCulture)
+                            : null,
                         Note = transaction.Note,
                         OccurredOn = PersianDate.FormatDate(transaction.OccurredAt),
                     };
@@ -239,13 +238,6 @@ public class IndexModel : PageModel
         return value;
     }
 
-    private static TradeRateMode ParseRateMode(string? value) => value switch
-    {
-        "DIRECT" => TradeRateMode.Direct,
-        "DERIVED" => TradeRateMode.Derived,
-        _ => throw new BusinessRuleException("روش نرخ را انتخاب کنید."),
-    };
-
     private static DateTime? ParseDate(string? text)
     {
         if (string.IsNullOrWhiteSpace(text))
@@ -270,9 +262,9 @@ public sealed class CashTransactionForm
 
     public string CurrencyCode { get; set; } = CurrencyCodes.Irr;
 
-    public string? Amount { get; set; }
+    public string BalanceCurrencyCode { get; set; } = CurrencyCodes.Irr;
 
-    public string RateMode { get; set; } = "DERIVED";
+    public string? Amount { get; set; }
 
     public string? RateIrr { get; set; }
 

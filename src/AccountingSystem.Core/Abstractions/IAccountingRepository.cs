@@ -35,6 +35,9 @@ public interface IAccountingRepository
     /// <summary>آخرین نرخ هر ارز. branchId = null یعنی نرخ همه‌ی شعبه‌ها.</summary>
     Task<IReadOnlyList<RateInfo>> GetLatestRatesAsync(int? branchId, CancellationToken ct = default);
 
+    /// <summary>آخرین نرخ هر ارز تا زمان وقوع سند، برای تسویه با قیمت همان روز.</summary>
+    Task<IReadOnlyList<RateInfo>> GetRatesAtAsync(int branchId, DateTime asOf, CancellationToken ct = default);
+
     Task AddRateAsync(int branchId, string currencyCode, decimal buyRateIrr, decimal sellRateIrr, int userId, DateTime now, CancellationToken ct = default);
 
     Task<IReadOnlyList<CashBoxInfo>> GetCashBoxesAsync(int? branchId, CancellationToken ct = default);
@@ -67,6 +70,14 @@ public interface IAccountingRepository
 
     /// <summary>مانده‌ی دریافتنی و پرداختنی مشتری تا تاریخ سند؛ شناسه‌ی ویرایش را برای محاسبه‌ی مبلغ قبل از همان سند کنار می‌گذارد.</summary>
     Task<CustomerAccountBalance> GetCustomerAccountBalanceAsync(
+        int branchId,
+        int customerId,
+        DateTime asOf,
+        long? excludeTradeId = null,
+        long? excludeCashTransactionId = null,
+        CancellationToken ct = default);
+
+    Task<IReadOnlyList<CustomerCurrencyBalance>> GetCustomerCurrencyBalancesAsync(
         int branchId,
         int customerId,
         DateTime asOf,

@@ -10,7 +10,7 @@ internal sealed class CashTransactionsTab : UserControl, IRefreshable
 {
     private static readonly string[] Headers =
     {
-        "شماره", "تاریخ (شمسی)", "شعبه", "نوع", "مشتری", "ارز", "مقدار", "روش نرخ", "ارزش ریالی", "ثبت‌کننده", "وضعیت",
+        "شماره", "تاریخ (شمسی)", "شعبه", "نوع", "مشتری", "ارز صندوق", "مقدار صندوق", "تسویه‌ی حساب مشتری", "نرخ / ارزش ریالی", "ثبت‌کننده", "وضعیت",
     };
 
     private readonly AppServices _services;
@@ -25,10 +25,10 @@ internal sealed class CashTransactionsTab : UserControl, IRefreshable
         AutoCompleteSource = AutoCompleteSource.ListItems,
     };
     private readonly ComboBox _currency = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 150 };
+    private readonly ComboBox _balanceCurrency = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 150 };
     private readonly TextBox _amount = new() { Width = 105 };
-    private readonly ComboBox _rateMode = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 145 };
     private readonly TextBox _rate = new() { Width = 110 };
-    private readonly Label _rateLabel = UiHelpers.MakeLabel("نرخ توافقی:");
+    private readonly Label _rateLabel = UiHelpers.MakeLabel("نرخ اطلاع‌رسانی (اختیاری):");
     private readonly TextBox _occurredOn = new() { Width = 110, PlaceholderText = "امروز" };
     private readonly TextBox _note = new() { Width = 165 };
     private readonly Label _preview = UiHelpers.MakeLabel(string.Empty);
@@ -54,6 +54,7 @@ internal sealed class CashTransactionsTab : UserControl, IRefreshable
     private int? _editingBranchId;
     private bool _canCreateSomewhere;
     private bool _filling;
+    private bool _balanceCurrencyTouched;
 
     public CashTransactionsTab(AppServices services, CurrentUser user)
     {
@@ -64,22 +65,16 @@ internal sealed class CashTransactionsTab : UserControl, IRefreshable
             new ComboItem("Receipt", "دریافت از مشتری"),
             new ComboItem("Payment", "پرداخت به مشتری"),
         });
-        _rateMode.Items.AddRange(new object[]
-        {
-            new ComboItem("DERIVED", "نرخ روز شعبه"),
-            new ComboItem("DIRECT", "نرخ توافقی"),
-        });
         _direction.SelectedIndex = 0;
-        _rateMode.SelectedIndex = 0;
 
         _inputPanel.Controls.AddRange(new Control[]
         {
             UiHelpers.MakeLabel("شعبه:"), _branch,
             UiHelpers.MakeLabel("نوع سند:"), _direction,
             UiHelpers.MakeLabel("مشتری:"), _customer,
-            UiHelpers.MakeLabel("ارز:"), _currency,
-            UiHelpers.MakeLabel("مقدار:"), _amount,
-            UiHelpers.MakeLabel("روش نرخ:"), _rateMode,
+            UiHelpers.MakeLabel("ارز صندوق:"), _currency,
+            UiHelpers.MakeLabel("ارز حساب مشتری:"), _balanceCurrency,
+            UiHelpers.MakeLabel("مقدار صندوق:"), _amount,
             _rateLabel, _rate,
             UiHelpers.MakeLabel("تاریخ (شمسی):"), _occurredOn,
             UiHelpers.MakeLabel("توضیحات:"), _note,
@@ -104,9 +99,16 @@ internal sealed class CashTransactionsTab : UserControl, IRefreshable
         _branch.SelectedIndexChanged += (_, _) => UpdateRateAndPreview();
         _direction.SelectedIndexChanged += (_, _) => UpdateRateAndPreview();
         _currency.SelectedIndexChanged += (_, _) => UpdateRateAndPreview();
-        _rateMode.SelectedIndexChanged += (_, _) => UpdateRateAndPreview();
+        _balanceCurrency.SelectedIndexChanged += (_, _) =>
+        {
+            if (!_filling)
+            {
+                _balanceCurrencyTouched = true;
+                UpdateRateAndPreview();
+            }
+        };
         _amount.TextChanged += (_, _) => UpdateRateAndPreview();
-        _rate.TextChanged += (_, _) => UpdatePreview();
+        _rate.TextChanged += (_, _) => UpdateRateAndPreview();
         _submit.Click += async (_, _) => await SubmitAsync();
         _cancelEdit.Click += (_, _) => CancelEdit();
         _show.Click += async (_, _) => await SafeRefreshAsync();
@@ -159,6 +161,11 @@ internal sealed class CashTransactionsTab : UserControl, IRefreshable
 
         var selectedBranch = (_branch.SelectedItem as ComboItem)?.Value;
         var selectedCurrency = (_currency.SelectedItem as ComboItem)?.Value;
+        var selectedBalanceCurrency = (_balanceCurrency.SelectedItem as ComboItem)?.Value;
+        if (_editingId is not null)
+        {
+            _balanceCurrencyTouched = true;
+        }
         _filling = true;
         try
         {
@@ -172,6 +179,13 @@ internal sealed class CashTransactionsTab : UserControl, IRefreshable
                 _currency.Items.Add(new ComboItem(currency.Code, $"{currency.Code} - {currency.Name}"));
             }
             UiHelpers.SelectByValue(_currency, selectedCurrency ?? CurrencyCodes.Irr);
+
+            _balanceCurrency.Items.Clear();
+            foreach (var currency in _currencies)
+            {
+                _balanceCurrency.Items.Add(new ComboItem(currency.Code, $"{currency.Code} - {currency.Name}"));
+            }
+            UiHelpers.SelectByValue(_balanceCurrency, selectedBalanceCurrency ?? selectedCurrency ?? CurrencyCodes.Irr);
 
             var previousCustomer = (_customer.SelectedItem as ComboItem)?.Value;
             _customer.Items.Clear();
@@ -208,8 +222,10 @@ internal sealed class CashTransactionsTab : UserControl, IRefreshable
             transaction.CustomerName,
             transaction.CurrencyCode,
             MoneyMath.FormatAmount(transaction.Amount, transaction.DecimalPlaces),
-            transaction.RateMode == TradeRateMode.Derived ? "نرخ روز" : "توافقی " + MoneyMath.FormatRate(transaction.RateIrr),
-            MoneyMath.FormatAmount(transaction.IrrAmount, 0),
+            MoneyMath.FormatAmount(transaction.BalanceAmount,
+                _currencies.FirstOrDefault(c => c.Code == transaction.BalanceCurrencyCode)?.DecimalPlaces ?? 4) + " " + transaction.BalanceCurrencyCode,
+            (transaction.RateMode == TradeRateMode.Derived ? "نرخ شعبه " : "اطلاع‌رسانی ") +
+                MoneyMath.FormatRate(transaction.RateIrr) + "؛ " + MoneyMath.FormatAmount(transaction.IrrAmount, 0) + " ریال",
             transaction.CreatedBy,
             transaction.IsVoided ? "باطل شد: " + transaction.VoidReason : "فعال",
         });
@@ -255,10 +271,13 @@ internal sealed class CashTransactionsTab : UserControl, IRefreshable
             UiHelpers.SelectByValue(_branch, transaction.BranchId.ToString(CultureInfo.InvariantCulture));
             UiHelpers.SelectByValue(_direction, transaction.Direction.ToString());
             UiHelpers.SelectByValue(_currency, transaction.CurrencyCode);
+            UiHelpers.SelectByValue(_balanceCurrency, transaction.BalanceCurrencyCode);
+            _balanceCurrencyTouched = true;
             SelectCustomer(transaction.CustomerId, transaction.CustomerName, transaction.CustomerCode);
             _amount.Text = transaction.Amount.ToString("0.####", CultureInfo.InvariantCulture);
-            UiHelpers.SelectByValue(_rateMode, transaction.RateMode == TradeRateMode.Direct ? "DIRECT" : "DERIVED");
-            _rate.Text = transaction.RateIrr.ToString("0.####", CultureInfo.InvariantCulture);
+            _rate.Text = transaction.RateMode == TradeRateMode.Direct
+                ? transaction.RateIrr.ToString("0.####", CultureInfo.InvariantCulture)
+                : string.Empty;
             _occurredOn.Text = PersianDate.FormatDate(transaction.OccurredAt);
             _note.Text = transaction.Note ?? string.Empty;
         }
@@ -284,10 +303,19 @@ internal sealed class CashTransactionsTab : UserControl, IRefreshable
         _rate.Clear();
         _occurredOn.Clear();
         _note.Clear();
-        UiHelpers.SelectByValue(_direction, "Receipt");
-        UiHelpers.SelectByValue(_rateMode, "DERIVED");
-        UiHelpers.SelectByValue(_currency, CurrencyCodes.Irr);
-        _customer.SelectedIndex = -1;
+        _filling = true;
+        try
+        {
+            UiHelpers.SelectByValue(_direction, "Receipt");
+            UiHelpers.SelectByValue(_currency, CurrencyCodes.Irr);
+            UiHelpers.SelectByValue(_balanceCurrency, CurrencyCodes.Irr);
+            _customer.SelectedIndex = -1;
+        }
+        finally
+        {
+            _filling = false;
+            _balanceCurrencyTouched = false;
+        }
         UpdateRateAndPreview();
     }
 
@@ -298,54 +326,71 @@ internal sealed class CashTransactionsTab : UserControl, IRefreshable
             return;
         }
         var code = SelectedValue(_currency);
+        if (!_balanceCurrencyTouched && code is not null)
+        {
+            _filling = true;
+            UiHelpers.SelectByValue(_balanceCurrency, code);
+            _filling = false;
+        }
+
         var isIrr = code == CurrencyCodes.Irr;
-        _rateMode.Enabled = !isIrr;
+        _rate.Visible = !isIrr;
+        _rateLabel.Text = isIrr ? "نرخ ریال ثابت است (۱):" : "نرخ اطلاع‌رسانی (اختیاری):";
         if (isIrr)
         {
-            UiHelpers.SelectByValue(_rateMode, "DERIVED");
-            _rateLabel.Text = "نرخ ریال: ۱";
-            _rate.Visible = false;
-            _rateLabel.Visible = true;
-            _preview.Text = string.Empty;
-            UpdatePreview(1m);
-            return;
+            _rate.Clear();
         }
+        UpdatePreview();
+    }
 
-        if (SelectedValue(_rateMode) == "DIRECT")
-        {
-            _rateLabel.Text = "نرخ توافقی:";
-            _rate.Visible = true;
-            UpdatePreview(InputParser.TryParseDecimal(_rate.Text, out var directRate) ? directRate : null);
-            return;
-        }
-
-        _rate.Visible = false;
+    private void UpdatePreview()
+    {
+        var code = SelectedValue(_currency);
+        var balanceCode = SelectedValue(_balanceCurrency);
         var branchId = _editingBranchId ?? UiHelpers.SelectedBranchId(_branch);
+        if (code is null || balanceCode is null || branchId is null)
+        {
+            _preview.Text = string.Empty;
+            return;
+        }
+        if (!InputParser.TryParseDecimal(_amount.Text, out var amount) || amount <= 0m)
+        {
+            _preview.Text = string.Empty;
+            return;
+        }
+
+        var direction = SelectedValue(_direction) == "Payment"
+            ? CashTransactionDirection.Payment
+            : CashTransactionDirection.Receipt;
+        var cashRate = RateFor(code, branchId.Value, direction);
+        var balanceRate = RateFor(balanceCode, branchId.Value, direction);
+        if (cashRate is null || balanceRate is null)
+        {
+            _preview.Text = "برای ارز صندوق یا ارز حساب مشتری در این شعبه نرخ معتبر روز ثبت نشده است.";
+            return;
+        }
+
+        var irrAmount = code == CurrencyCodes.Irr ? MoneyMath.RoundIrr(amount) : MoneyMath.RoundIrr(amount * cashRate.Value);
+        var balanceCurrency = _currencies.FirstOrDefault(c => c.Code == balanceCode);
+        var decimals = balanceCurrency?.DecimalPlaces ?? 4;
+        var balanceAmount = code == balanceCode
+            ? amount
+            : MoneyMath.RoundTo(irrAmount / balanceRate.Value, decimals);
+        _preview.Text = $"اثر صندوق: {MoneyMath.FormatAmount(irrAmount, 0)} ریال؛ تسویه‌ی مانده: {MoneyMath.FormatAmount(balanceAmount, decimals)} {balanceCode}";
+    }
+
+    private decimal? RateFor(string code, int branchId, CashTransactionDirection direction)
+    {
+        if (code == CurrencyCodes.Irr)
+        {
+            return 1m;
+        }
         var quote = _rates.FirstOrDefault(r => r.BranchId == branchId && r.CurrencyCode == code);
         if (quote is null)
         {
-            _rateLabel.Text = "برای این شعبه نرخ روز ثبت نشده است.";
-            UpdatePreview(null);
-            return;
+            return null;
         }
-        var rate = SelectedValue(_direction) == "Receipt" ? quote.BuyRateIrr : quote.SellRateIrr;
-        _rateLabel.Text = $"نرخ روز: {MoneyMath.FormatRate(rate)} ریال";
-        UpdatePreview(rate);
-    }
-
-    private void UpdatePreview(decimal? rate = null)
-    {
-        if (rate is null && SelectedValue(_rateMode) == "DIRECT" && InputParser.TryParseDecimal(_rate.Text, out var directRate))
-        {
-            rate = directRate;
-        }
-        if (rate is null || !InputParser.TryParseDecimal(_amount.Text, out var amount) || amount <= 0)
-        {
-            _preview.Text = string.Empty;
-            return;
-        }
-        var irr = MoneyMath.RoundIrr(amount * rate.Value);
-        _preview.Text = $"ارزش ریالی تقریبی: {MoneyMath.FormatAmount(irr, 0)} ریال";
+        return direction == CashTransactionDirection.Receipt ? quote.BuyRateIrr : quote.SellRateIrr;
     }
 
     private async Task SubmitAsync()
@@ -366,18 +411,18 @@ internal sealed class CashTransactionsTab : UserControl, IRefreshable
                 throw new BusinessRuleException("مشتری را انتخاب کنید.");
             }
 
-            var rateMode = code == CurrencyCodes.Irr || SelectedValue(_rateMode) != "DIRECT"
-                ? TradeRateMode.Derived
-                : TradeRateMode.Direct;
+            var balanceCode = SelectedValue(_balanceCurrency)
+                ?? throw new BusinessRuleException("ارز مانده‌ی حساب مشتری را انتخاب کنید.");
             decimal? rate = null;
-            if (rateMode == TradeRateMode.Direct)
+            if (!string.IsNullOrWhiteSpace(_rate.Text))
             {
-                if (!InputParser.TryParseDecimal(_rate.Text, out var directRate))
+                if (!InputParser.TryParseDecimal(_rate.Text, out var informativeRate))
                 {
-                    throw new BusinessRuleException("نرخ توافقی را وارد کنید.");
+                    throw new BusinessRuleException("نرخ اطلاع‌رسانی را به‌درستی وارد کنید.");
                 }
-                rate = directRate;
+                rate = informativeRate;
             }
+            var rateMode = rate is null ? TradeRateMode.Derived : TradeRateMode.Direct;
 
             DateTime? occurredOn = null;
             if (!string.IsNullOrWhiteSpace(_occurredOn.Text))
@@ -389,7 +434,7 @@ internal sealed class CashTransactionsTab : UserControl, IRefreshable
                 occurredOn = parsedDate;
             }
 
-            var input = new CashTransactionInput(branchId, direction, customerId, code, amount, rateMode, rate, _note.Text);
+            var input = new CashTransactionInput(branchId, direction, customerId, code, amount, rateMode, rate, _note.Text, balanceCode);
             if (_editingId is { } id)
             {
                 await _services.CashTransactions.EditAsync(_user, id, input, occurredOn, DateTime.Now);

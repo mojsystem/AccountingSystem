@@ -123,7 +123,8 @@ public static class LedgerPlanner
             }
 
             var lineNumber = index + 1;
-            var lineDraft = new TradeSettlementDraft(lineNumber, direction, settlementCode, line.Amount, line.RateIrr, lineValueIrr);
+            var lineDraft = new TradeSettlementDraft(lineNumber, direction, settlementCode, line.Amount, line.RateIrr, lineValueIrr,
+                DecimalPlaces: line.DecimalPlaces);
             settlements.Add(lineDraft);
             var seq = NewEventSeq + lineNumber;
             if (settlementCode == CurrencyCodes.Irr)
@@ -139,6 +140,32 @@ public static class LedgerPlanner
                     line.Amount, lineValueIrr, 0m, 0m, 0m, 0m, lineNumber));
             }
         }
+
+        var customerBalanceCurrencyCode = (input.CustomerBalanceCurrencyCode
+            ?? input.SettlementCurrencyCode
+            ?? settlementInputs.FirstOrDefault()?.CurrencyCode
+            ?? CurrencyCodes.Irr).Trim().ToUpperInvariant();
+        if (customerBalanceCurrencyCode.Length != 3)
+        {
+            throw new BusinessRuleException("ارز مانده‌ی حساب مشتری نامعتبر است.");
+        }
+        var balanceCurrencySettlement = settlementInputs.FirstOrDefault(line =>
+            string.Equals(line.CurrencyCode, customerBalanceCurrencyCode, StringComparison.OrdinalIgnoreCase));
+        var customerBalanceRateIrr = customerBalanceCurrencyCode == CurrencyCodes.Irr
+            ? 1m
+            : input.CustomerBalanceRateIrr ?? balanceCurrencySettlement?.RateIrr ?? rate;
+        TradePlanner.ValidateRate(customerBalanceRateIrr);
+        var customerBalanceDecimalPlaces = input.CustomerBalanceDecimalPlaces
+            ?? balanceCurrencySettlement?.DecimalPlaces
+            ?? (customerBalanceCurrencyCode == CurrencyCodes.Irr ? 0 : 4);
+        if (customerBalanceDecimalPlaces is < 0 or > 4)
+        {
+            throw new BusinessRuleException("تعداد رقم اعشار ارز مانده‌ی حساب مشتری نامعتبر است.");
+        }
+        var customerOffsetCurrencyCode = input.CustomerOffsetCurrencyCode ?? CurrencyCodes.Irr;
+        var customerOffsetAmount = input.CustomerOffsetCurrencyCode is null
+            ? input.CustomerOffsetIrr
+            : input.CustomerOffsetAmount;
 
         var amountText = MoneyMath.FormatAmount(input.Amount, currency.DecimalPlaces);
         var description = type == TradeType.Buy
@@ -183,14 +210,22 @@ public static class LedgerPlanner
                     return line with { CostIrr = line.IrrAmount };
                 }).ToList();
                 var profit = baseProfit + completedSettlements.Sum(s => s.ProfitIrr);
+                var balanceComponents = CustomerBalanceComponents(
+                    customerDue,
+                    input.CustomerOffsetIrr,
+                    customerOffsetCurrencyCode,
+                    customerOffsetAmount,
+                    customerBalanceCurrencyCode,
+                    customerBalanceRateIrr,
+                    customerBalanceDecimalPlaces,
+                    completedSettlements);
                 var trade = new TradeDraft(type, code, input.Amount, rate, irr, cost, profit, fee,
                     input.CustomerId, customer, nationalCode, note, occurredAt, userId, ReplacedId(replaces),
                     mode, rateMode, crossRate, input.CustomerOffsetIrr, completedSettlements,
-                    mode == TradeSettlementMode.Direct
-                        ? input.SettlementCurrencyCode ?? completedSettlements.FirstOrDefault()?.CurrencyCode
-                        : null);
+                    customerBalanceCurrencyCode);
                 var lines = TradeJournalLines(code, irr, fee, cost, baseProfit, input.CustomerId,
-                    input.CustomerOffsetIrr, completedSettlements, type);
+                    input.CustomerOffsetIrr, customerOffsetCurrencyCode, customerOffsetAmount,
+                    completedSettlements, balanceComponents, type);
                 var journal = new JournalDraft(description, occurredAt, lines, SourceTypes.Trade, tradeRef);
                 return new NewDocumentResult(trade, null, null, new[] { journal });
             });
@@ -204,27 +239,32 @@ public static class LedgerPlanner
         decimal baseProfit,
         int? customerId,
         decimal customerOffsetIrr,
+        string customerOffsetCurrencyCode,
+        decimal customerOffsetAmount,
         IReadOnlyList<TradeSettlementDraft> settlements,
+        IReadOnlyList<CustomerBalanceComponent> balanceComponents,
         TradeType type)
     {
         var lines = new List<JournalLineDraft>();
         if (type == TradeType.Buy)
         {
             lines.Add(new JournalLineDraft(AccountCodes.ForeignCash(currencyCode), irr, 0m));
-            lines.Add(new JournalLineDraft(AccountCodes.CustomerPayable, 0m, irr - fee, customerId));
+            AddCustomerBalanceComponents(lines, AccountCodes.CustomerPayable, customerId, balanceComponents, liability: true);
             if (fee > 0m)
             {
                 lines.Add(new JournalLineDraft(AccountCodes.FeeIncome, 0m, fee));
             }
             if (customerOffsetIrr > 0m)
             {
-                lines.Add(new JournalLineDraft(AccountCodes.CustomerPayable, customerOffsetIrr, 0m, customerId));
-                lines.Add(new JournalLineDraft(AccountCodes.CustomerReceivable, 0m, customerOffsetIrr, customerId));
+                lines.Add(new JournalLineDraft(AccountCodes.CustomerPayable, customerOffsetIrr, 0m, customerId,
+                    customerOffsetCurrencyCode, customerOffsetAmount));
+                lines.Add(new JournalLineDraft(AccountCodes.CustomerReceivable, 0m, customerOffsetIrr, customerId,
+                    customerOffsetCurrencyCode, -customerOffsetAmount));
             }
         }
         else
         {
-            lines.Add(new JournalLineDraft(AccountCodes.CustomerReceivable, irr + fee, 0m, customerId));
+            AddCustomerBalanceComponents(lines, AccountCodes.CustomerReceivable, customerId, balanceComponents, liability: false);
             if (cost > 0m)
             {
                 lines.Add(new JournalLineDraft(AccountCodes.ForeignCash(currencyCode), 0m, cost));
@@ -236,8 +276,10 @@ public static class LedgerPlanner
             }
             if (customerOffsetIrr > 0m)
             {
-                lines.Add(new JournalLineDraft(AccountCodes.CustomerReceivable, 0m, customerOffsetIrr, customerId));
-                lines.Add(new JournalLineDraft(AccountCodes.CustomerPayable, customerOffsetIrr, 0m, customerId));
+                lines.Add(new JournalLineDraft(AccountCodes.CustomerReceivable, 0m, customerOffsetIrr, customerId,
+                    customerOffsetCurrencyCode, -customerOffsetAmount));
+                lines.Add(new JournalLineDraft(AccountCodes.CustomerPayable, customerOffsetIrr, 0m, customerId,
+                    customerOffsetCurrencyCode, customerOffsetAmount));
             }
         }
 
@@ -249,11 +291,13 @@ public static class LedgerPlanner
             if (settlement.Direction == TradeSettlementDirection.Receipt)
             {
                 lines.Add(new JournalLineDraft(cashAccount, settlement.IrrAmount, 0m));
-                lines.Add(new JournalLineDraft(AccountCodes.CustomerReceivable, 0m, settlement.IrrAmount, customerId));
+                lines.Add(new JournalLineDraft(AccountCodes.CustomerReceivable, 0m, settlement.IrrAmount, customerId,
+                    settlement.CurrencyCode, -settlement.Amount));
             }
             else
             {
-                lines.Add(new JournalLineDraft(AccountCodes.CustomerPayable, settlement.IrrAmount, 0m, customerId));
+                lines.Add(new JournalLineDraft(AccountCodes.CustomerPayable, settlement.IrrAmount, 0m, customerId,
+                    settlement.CurrencyCode, settlement.Amount));
                 if (settlement.CostIrr > 0m)
                 {
                     lines.Add(new JournalLineDraft(cashAccount, 0m, settlement.CostIrr));
@@ -264,6 +308,75 @@ public static class LedgerPlanner
 
         return lines;
     }
+
+    private static void AddCustomerBalanceComponents(
+        List<JournalLineDraft> lines,
+        string accountCode,
+        int? customerId,
+        IReadOnlyList<CustomerBalanceComponent> components,
+        bool liability)
+    {
+        foreach (var component in components)
+        {
+            if (component.IrrAmount <= 0m)
+            {
+                continue;
+            }
+            var delta = liability ? -component.Amount : component.Amount;
+            lines.Add(liability
+                ? new JournalLineDraft(accountCode, 0m, component.IrrAmount, customerId, component.CurrencyCode, delta)
+                : new JournalLineDraft(accountCode, component.IrrAmount, 0m, customerId, component.CurrencyCode, delta));
+        }
+    }
+
+    private static IReadOnlyList<CustomerBalanceComponent> CustomerBalanceComponents(
+        decimal customerDueIrr,
+        decimal offsetIrr,
+        string offsetCurrencyCode,
+        decimal offsetAmount,
+        string accountCurrencyCode,
+        decimal accountRateIrr,
+        int accountDecimalPlaces,
+        IReadOnlyList<TradeSettlementDraft> settlements)
+    {
+        var components = new List<CustomerBalanceComponent>();
+        var remainingIrr = customerDueIrr;
+        if (offsetIrr > 0m)
+        {
+            components.Add(new CustomerBalanceComponent(offsetCurrencyCode, offsetAmount, offsetIrr));
+            remainingIrr -= offsetIrr;
+        }
+
+        foreach (var settlement in settlements)
+        {
+            if (remainingIrr <= 0m)
+            {
+                break;
+            }
+            var allocatedIrr = Math.Min(remainingIrr, settlement.IrrAmount);
+            if (allocatedIrr <= 0m)
+            {
+                continue;
+            }
+            var amount = allocatedIrr == settlement.IrrAmount
+                ? settlement.Amount
+                : MoneyMath.RoundTo(allocatedIrr / settlement.RateIrr, settlement.DecimalPlaces);
+            amount = Math.Min(settlement.Amount, amount);
+            components.Add(new CustomerBalanceComponent(settlement.CurrencyCode, amount, allocatedIrr));
+            remainingIrr -= allocatedIrr;
+        }
+
+        if (remainingIrr > 0m)
+        {
+            var amount = accountCurrencyCode == CurrencyCodes.Irr
+                ? MoneyMath.RoundIrr(remainingIrr)
+                : MoneyMath.RoundTo(remainingIrr / accountRateIrr, accountDecimalPlaces);
+            components.Add(new CustomerBalanceComponent(accountCurrencyCode, amount, remainingIrr));
+        }
+        return components;
+    }
+
+    private sealed record CustomerBalanceComponent(string CurrencyCode, decimal Amount, decimal IrrAmount);
 
     private static void AddProfitLoss(List<JournalLineDraft> lines, decimal profit)
     {
@@ -419,8 +532,11 @@ public static class LedgerPlanner
     public static PostingDraft PlanCashTransaction(
         BranchLedger ledger,
         CurrencyInfo currency,
+        CurrencyInfo balanceCurrency,
         CashTransactionInput input,
-        decimal rateIrr,
+        decimal accountingRateIrr,
+        decimal balanceAmount,
+        decimal balanceBefore,
         DateTime occurredAt,
         int userId,
         DateTime now,
@@ -437,34 +553,50 @@ public static class LedgerPlanner
         }
         if (!Enum.IsDefined(input.Direction) || !Enum.IsDefined(input.RateMode))
         {
-            throw new BusinessRuleException("نوع یا روش نرخ دریافت/پرداخت نامعتبر است.");
+            throw new BusinessRuleException("نوع یا روش نرخ اطلاع‌رسانی نامعتبر است.");
         }
-        if (!currency.IsActive)
+        if (!currency.IsActive || !balanceCurrency.IsActive)
         {
-            throw new BusinessRuleException("این ارز غیرفعال است.");
+            throw new BusinessRuleException("ارز صندوق یا ارز حساب مشتری غیرفعال است.");
         }
         TradePlanner.ValidateQuantity(input.Amount, currency);
+        TradePlanner.ValidateQuantity(balanceAmount, balanceCurrency);
 
         var code = currency.Code;
         if (code == CurrencyCodes.Irr)
         {
-            if (input.RateMode != TradeRateMode.Derived)
-            {
-                throw new BusinessRuleException("نرخ ریال همیشه یک است و نرخ توافقی برای آن وارد نمی‌شود.");
-            }
-            rateIrr = 1m;
+            accountingRateIrr = 1m;
         }
         else
         {
-            TradePlanner.ValidateRate(rateIrr);
+            TradePlanner.ValidateRate(accountingRateIrr);
+        }
+
+        var balanceCode = balanceCurrency.Code;
+        if (!string.IsNullOrWhiteSpace(input.BalanceCurrencyCode)
+            && !string.Equals(input.BalanceCurrencyCode, balanceCode, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new BusinessRuleException("ارز مانده‌ی مشتری با ارز انتخاب‌شده همخوانی ندارد.");
+        }
+        if (code == balanceCode && balanceAmount != input.Amount)
+        {
+            throw new BusinessRuleException("وقتی ارز صندوق و حساب مشتری یکسان است، تسویه باید ۱:۱ باشد.");
+        }
+        if (code != CurrencyCodes.Irr && input.RateIrr is { } informationRate)
+        {
+            TradePlanner.ValidateRate(informationRate);
+        }
+        if (balanceAmount <= 0m)
+        {
+            throw new BusinessRuleException("مبلغ حساب مشتری باید بزرگ‌تر از صفر باشد.");
         }
 
         var irrAmount = code == CurrencyCodes.Irr
             ? MoneyMath.RoundIrr(input.Amount)
-            : MoneyMath.RoundIrr(input.Amount * rateIrr);
+            : MoneyMath.RoundIrr(input.Amount * accountingRateIrr);
         if (irrAmount <= 0m)
         {
-            throw new BusinessRuleException("ارزش ریالی دریافت/پرداخت صفر است؛ مقدار و نرخ را بررسی کنید.");
+            throw new BusinessRuleException("ارزش دفتری دریافت/پرداخت صفر است.");
         }
 
         var note = TradePlanner.CleanDetails(null, null, input.Note).Note;
@@ -486,6 +618,10 @@ public static class LedgerPlanner
 
         var description = $"{(isReceipt ? "دریافت از مشتری" : "پرداخت به مشتری")}؛ " +
             $"{MoneyMath.FormatAmount(input.Amount, currency.DecimalPlaces)} {code}";
+        if (balanceCode != code)
+        {
+            description += $"؛ تسویه‌ی حساب به ارز {balanceCode} ({MoneyMath.FormatAmount(balanceAmount, balanceCurrency.DecimalPlaces)})";
+        }
         if (note is not null)
         {
             description += "؛ " + note;
@@ -514,13 +650,16 @@ public static class LedgerPlanner
                     : default;
                 var costIrr = !isReceipt && code != CurrencyCodes.Irr ? disposal.CostIrr : irrAmount;
                 var profitIrr = !isReceipt && code != CurrencyCodes.Irr ? disposal.ProfitIrr : 0m;
+                var rateInfo = code == CurrencyCodes.Irr ? 1m : (input.RateIrr ?? accountingRateIrr);
                 var transaction = new CashTransactionDraft(
                     input.Direction,
                     input.CustomerId,
                     code,
                     input.Amount,
+                    balanceCode,
+                    balanceAmount,
                     input.RateMode,
-                    rateIrr,
+                    rateInfo,
                     irrAmount,
                     costIrr,
                     profitIrr,
@@ -530,34 +669,74 @@ public static class LedgerPlanner
                     ReplacedId(replaces));
 
                 var cashAccount = code == CurrencyCodes.Irr ? AccountCodes.IrrCash : AccountCodes.ForeignCash(code);
-                var lines = isReceipt
-                    ? new[]
-                    {
-                        new JournalLineDraft(cashAccount, irrAmount, 0m),
-                        new JournalLineDraft(AccountCodes.CustomerReceivable, 0m, irrAmount, input.CustomerId),
-                    }
-                    : CashPaymentJournalLines(cashAccount, irrAmount, costIrr, profitIrr, input.CustomerId);
+                var lines = CashTransactionJournalLines(
+                    cashAccount,
+                    input.Direction,
+                    input.CustomerId,
+                    balanceCode,
+                    balanceAmount,
+                    balanceBefore,
+                    irrAmount,
+                    costIrr,
+                    profitIrr);
                 var journal = new JournalDraft(description, occurredAt, lines, sourceType, reference);
                 return new NewDocumentResult(null, null, transaction, new[] { journal });
             });
     }
 
-    private static IReadOnlyList<JournalLineDraft> CashPaymentJournalLines(
+    private static IReadOnlyList<JournalLineDraft> CashTransactionJournalLines(
         string cashAccount,
+        CashTransactionDirection direction,
+        int customerId,
+        string balanceCurrencyCode,
+        decimal balanceAmount,
+        decimal balanceBefore,
         decimal irrAmount,
         decimal costIrr,
-        decimal profitIrr,
-        int customerId)
+        decimal profitIrr)
     {
-        var lines = new List<JournalLineDraft>
+        var lines = new List<JournalLineDraft>();
+        if (direction == CashTransactionDirection.Receipt)
         {
-            new(AccountCodes.CustomerPayable, irrAmount, 0m, customerId),
-        };
-        if (costIrr > 0m)
-        {
-            lines.Add(new JournalLineDraft(cashAccount, 0m, costIrr));
+            lines.Add(new JournalLineDraft(cashAccount, irrAmount, 0m));
+            var receivableAmount = Math.Min(balanceAmount, Math.Max(0m, balanceBefore));
+            var payableAmount = balanceAmount - receivableAmount;
+            var receivableIrr = MoneyMath.RoundIrr(irrAmount * receivableAmount / balanceAmount);
+            var payableIrr = irrAmount - receivableIrr;
+            if (receivableAmount > 0m)
+            {
+                lines.Add(new JournalLineDraft(AccountCodes.CustomerReceivable, 0m, receivableIrr,
+                    customerId, balanceCurrencyCode, -receivableAmount));
+            }
+            if (payableAmount > 0m)
+            {
+                lines.Add(new JournalLineDraft(AccountCodes.CustomerPayable, 0m, payableIrr,
+                    customerId, balanceCurrencyCode, -payableAmount));
+            }
         }
-        AddProfitLoss(lines, profitIrr);
+        else
+        {
+            var payableAmount = Math.Min(balanceAmount, Math.Max(0m, -balanceBefore));
+            var receivableAmount = balanceAmount - payableAmount;
+            var payableIrr = MoneyMath.RoundIrr(irrAmount * payableAmount / balanceAmount);
+            var receivableIrr = irrAmount - payableIrr;
+            if (payableAmount > 0m)
+            {
+                lines.Add(new JournalLineDraft(AccountCodes.CustomerPayable, payableIrr, 0m,
+                    customerId, balanceCurrencyCode, payableAmount));
+            }
+            if (receivableAmount > 0m)
+            {
+                lines.Add(new JournalLineDraft(AccountCodes.CustomerReceivable, receivableIrr, 0m,
+                    customerId, balanceCurrencyCode, receivableAmount));
+            }
+            if (costIrr > 0m)
+            {
+                lines.Add(new JournalLineDraft(cashAccount, 0m, costIrr));
+            }
+            AddProfitLoss(lines, profitIrr);
+        }
+
         return lines;
     }
 

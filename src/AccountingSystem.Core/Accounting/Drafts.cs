@@ -23,10 +23,15 @@ public sealed record TradeInput(
     IReadOnlyList<TradeSettlementInput>? SettlementLines = null,
     bool ApplyCustomerOffset = false,
     decimal? ValuationIrr = null,
-    decimal CustomerOffsetIrr = 0m);
+    decimal CustomerOffsetIrr = 0m,
+    string? CustomerBalanceCurrencyCode = null,
+    decimal? CustomerBalanceRateIrr = null,
+    int? CustomerBalanceDecimalPlaces = null,
+    string? CustomerOffsetCurrencyCode = null,
+    decimal CustomerOffsetAmount = 0m);
 
 /// <summary>یک سطر تسویه‌ی پولی که کاربر در فرم دریافت/پرداخت معامله وارد می‌کند.</summary>
-public sealed record TradeSettlementInput(string CurrencyCode, decimal Amount, decimal RateIrr = 1m);
+public sealed record TradeSettlementInput(string CurrencyCode, decimal Amount, decimal RateIrr = 1m, int DecimalPlaces = 4);
 
 /// <summary>ورودی یک رسید یا پرداخت مستقل از معامله، به طرفیت حساب مشتری.</summary>
 public sealed record CashTransactionInput(
@@ -37,7 +42,8 @@ public sealed record CashTransactionInput(
     decimal Amount,
     TradeRateMode RateMode = TradeRateMode.Derived,
     decimal? RateIrr = null,
-    string? Note = null);
+    string? Note = null,
+    string? BalanceCurrencyCode = null);
 
 /// <summary>رسید/پرداخت آماده‌ی ثبت؛ نرخ و ارزش ریالی در سرویس تعیین شده‌اند.</summary>
 public sealed record CashTransactionDraft(
@@ -45,6 +51,8 @@ public sealed record CashTransactionDraft(
     int CustomerId,
     string CurrencyCode,
     decimal Amount,
+    string BalanceCurrencyCode,
+    decimal BalanceAmount,
     TradeRateMode RateMode,
     decimal RateIrr,
     decimal IrrAmount,
@@ -91,7 +99,8 @@ public sealed record TradeSettlementDraft(
     decimal RateIrr,
     decimal IrrAmount,
     decimal CostIrr = 0m,
-    decimal ProfitIrr = 0m);
+    decimal ProfitIrr = 0m,
+    int DecimalPlaces = 4);
 
 /// <summary>موجودی افتتاحیه‌ی آماده‌ی ذخیره.</summary>
 public sealed record OpeningDraft(
@@ -109,7 +118,13 @@ public sealed record OpeningDraft(
 /// </summary>
 public sealed record VoidDraft(DocRef Doc, string Reason, string Description, DateTime OccurredAt);
 
-public sealed record JournalLineDraft(string AccountCode, decimal Debit, decimal Credit, int? CustomerId = null);
+public sealed record JournalLineDraft(
+    string AccountCode,
+    decimal Debit,
+    decimal Credit,
+    int? CustomerId = null,
+    string? CustomerBalanceCurrencyCode = null,
+    decimal? CustomerBalanceDelta = null);
 
 /// <summary>
 /// سند حسابداری آماده‌ی ذخیره؛ سازنده فقط سند متوازن و معتبر را می‌پذیرد.
