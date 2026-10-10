@@ -334,6 +334,119 @@ WHERE e.BranchId = @branchId AND l.AccountCode = @accountCode;",
     }
 
     [Fact]
+    public async Task Account_cashbox_and_bank_reports_support_snapshots_ranges_and_rollup()
+    {
+        if (!_fixture.IsEnabled)
+        {
+            return;
+        }
+
+        var repo = new SqlAccountingRepository(_fixture.ConnectionString!);
+        var admin = new CurrencyAdminService(repo);
+        var trades = new CurrencyTradeService(repo);
+        var bankAccounts = new BankAccountService(repo);
+        var reports = new ReportService(repo);
+        var now = DateTime.Now;
+        var user = await EnsureAdminAsync(repo, now);
+        var branchId = await MainBranchIdAsync(repo);
+        var tradedCode = await NewCurrencyCodeAsync(repo);
+        var bankCode = await NewCurrencyCodeAsync(repo);
+        while (bankCode == tradedCode)
+        {
+            bankCode = await NewCurrencyCodeAsync(repo);
+        }
+
+        await admin.AddCurrencyAsync(user, tradedCode, "ارز آزمون گزارش دفتر", 2, now);
+        await admin.AddCurrencyAsync(user, bankCode, "ارز آزمون گزارش بانک", 2, now);
+        await admin.SetRateAsync(user, branchId, tradedCode, 1_000_000m, 1_100_000m, now);
+        await admin.SetRateAsync(user, branchId, bankCode, 500_000m, 550_000m, now);
+
+        var openingId = await admin.RecordOpeningAsync(
+            user, branchId, CurrencyCodes.Irr, 4_321m, null, now, now.Date);
+        Assert.NotNull(openingId);
+
+        var rangeStart = now.Date;
+        var rangeEnd = rangeStart.AddDays(1);
+        var directParentBalance = await reports.GetAccountBalanceReportAsync(
+            user, branchId, "10", includeDescendants: false, asOf: rangeStart);
+        var rolledParentBalance = await reports.GetAccountBalanceReportAsync(
+            user, branchId, "10", includeDescendants: true, asOf: rangeStart);
+        var leafBalance = await reports.GetAccountBalanceReportAsync(
+            user, branchId, "1001", includeDescendants: false, asOf: rangeStart);
+        Assert.Equal(0m, directParentBalance.BalanceIrr);
+        Assert.True(rolledParentBalance.BalanceIrr >= leafBalance.BalanceIrr);
+        Assert.True(leafBalance.BalanceIrr >= 4_321m);
+
+        var accountRange = await reports.GetAccountLedgerReportAsync(
+            user, branchId, "10", includeDescendants: true, fromInclusive: rangeStart, toExclusive: rangeEnd);
+        Assert.Contains(accountRange.Lines, line =>
+            line.SourceId == openingId && line.AccountCode == "1001" && line.Debit == 4_321m);
+        Assert.Equal(rolledParentBalance.BalanceIrr, accountRange.ClosingBalanceIrr);
+        Assert.Equal(accountRange.ClosingBalanceIrr, accountRange.Lines[^1].BalanceIrr);
+
+        var cashBoxes = await repo.GetCashBoxesAsync(branchId);
+        var cashRangeReports = await reports.GetCashBoxLedgerReportsAsync(
+            user, branchId, cashBoxId: null, fromInclusive: rangeStart, toExclusive: rangeEnd);
+        Assert.Equal(cashBoxes.Count, cashRangeReports.Count);
+        var irrCashRange = Assert.Single(cashRangeReports, item => item.CashBox.CurrencyCode == CurrencyCodes.Irr);
+        var openingMovement = Assert.Single(irrCashRange.Lines, line =>
+            line.SourceType == SourceTypes.Opening && line.ReferenceId == openingId);
+        Assert.Equal(4_321m, openingMovement.Amount);
+        var cashSnapshots = await reports.GetCashBoxLedgerReportsAsync(
+            user, branchId, cashBoxId: null, fromInclusive: null, toExclusive: rangeEnd);
+        var irrCashSnapshot = Assert.Single(cashSnapshots, item => item.CashBox.CurrencyCode == CurrencyCodes.Irr);
+        Assert.Equal(irrCashRange.ClosingBalance, irrCashSnapshot.ClosingBalance);
+        Assert.Empty(irrCashSnapshot.Lines);
+
+        var bankName = "گزارش بانک " + Guid.NewGuid().ToString("N")[..8];
+        var bankId = await bankAccounts.CreateAsync(user, branchId, bankName, bankCode,
+            openingBalance: 50m, openingRateIrr: 500_000m, now: now);
+        var tradeId = await trades.BuyFromCustomerAsync(new TradeInput(
+            branchId, tradedCode, 10m, 0m, null, null, null,
+            CustomerId: _customerId,
+            SettlementMode: TradeSettlementMode.Direct,
+            RateMode: TradeRateMode.Direct,
+            SettlementCurrencyCode: bankCode,
+            CrossRate: 2m,
+            PaymentMethod: TradePaymentMethod.BankTransfer,
+            BankAccountId: bankId), user, now);
+        await trades.VoidTradeAsync(user, tradeId, "ابطال برای آزمون معین بانک", now.AddMinutes(1));
+
+        var bankRangeReports = await reports.GetBankAccountLedgerReportsAsync(
+            user, branchId, bankId, fromInclusive: rangeStart, toExclusive: rangeEnd);
+        var bankRange = Assert.Single(bankRangeReports);
+        Assert.Collection(bankRange.Lines,
+            line =>
+            {
+                Assert.Equal(SourceTypes.BankOpening, line.SourceType);
+                Assert.Equal(50m, line.Amount);
+            },
+            line =>
+            {
+                Assert.Equal(SourceTypes.Trade, line.SourceType);
+                Assert.Equal((long?)tradeId, line.ReferenceId);
+                Assert.Equal(-20m, line.Amount);
+            },
+            line =>
+            {
+                Assert.Equal(SourceTypes.Void, line.SourceType);
+                Assert.Equal((long?)tradeId, line.ReferenceId);
+                Assert.Equal(20m, line.Amount);
+            });
+        Assert.Equal(50m, bankRange.ClosingBalance);
+
+        var bankSnapshotReports = await reports.GetBankAccountLedgerReportsAsync(
+            user, branchId, bankId, fromInclusive: null, toExclusive: rangeEnd);
+        var bankSnapshot = Assert.Single(bankSnapshotReports);
+        Assert.Equal(bankRange.ClosingBalance, bankSnapshot.ClosingBalance);
+        Assert.Empty(bankSnapshot.Lines);
+
+        var allBankAccounts = await reports.GetBankAccountLedgerReportsAsync(
+            user, branchId, bankAccountId: null, fromInclusive: null, toExclusive: rangeEnd);
+        Assert.Contains(allBankAccounts, item => item.BankAccount.Id == bankId);
+    }
+
+    [Fact]
     public async Task Independent_cash_receipts_and_payments_post_edit_void_and_update_customer_balances()
     {
         if (!_fixture.IsEnabled)

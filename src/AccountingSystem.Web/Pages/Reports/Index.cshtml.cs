@@ -7,7 +7,7 @@ using Microsoft.AspNetCore.Mvc.RazorPages;
 
 namespace AccountingSystem.Web.Pages.Reports;
 
-/// <summary>گزارش مانده‌ی اشخاص و معین تفصیلی مشتریان.</summary>
+/// <summary>گزارش مانده و معین اشخاص، همه‌ی سرفصل‌ها، حساب‌های بانکی و صندوق‌ها.</summary>
 public sealed class IndexModel : PageModel
 {
     private const string ExcelContentType = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
@@ -33,6 +33,21 @@ public sealed class IndexModel : PageModel
     public int? CustomerId { get; set; }
 
     [BindProperty(SupportsGet = true)]
+    public string? AccountCode { get; set; }
+
+    [BindProperty(SupportsGet = true)]
+    public bool IncludeDescendants { get; set; } = true;
+
+    [BindProperty(SupportsGet = true)]
+    public int? CashBoxId { get; set; }
+
+    [BindProperty(SupportsGet = true)]
+    public int? BankAccountId { get; set; }
+
+    [BindProperty(SupportsGet = true)]
+    public string? DateMode { get; set; } = "ASOF";
+
+    [BindProperty(SupportsGet = true)]
     public string? AsOf { get; set; }
 
     [BindProperty(SupportsGet = true)]
@@ -45,9 +60,23 @@ public sealed class IndexModel : PageModel
 
     public IReadOnlyList<CustomerInfo> Customers { get; private set; } = Array.Empty<CustomerInfo>();
 
+    public IReadOnlyList<AccountInfo> Accounts { get; private set; } = Array.Empty<AccountInfo>();
+
+    public IReadOnlyList<CashBoxInfo> CashBoxes { get; private set; } = Array.Empty<CashBoxInfo>();
+
+    public IReadOnlyList<BankAccountInfo> BankAccounts { get; private set; } = Array.Empty<BankAccountInfo>();
+
     public IReadOnlyList<CustomerBalanceReportRow> Balances { get; private set; } = Array.Empty<CustomerBalanceReportRow>();
 
     public CustomerLedgerReport? Ledger { get; private set; }
+
+    public AccountBalanceReport? AccountBalance { get; private set; }
+
+    public AccountLedgerReport? AccountLedger { get; private set; }
+
+    public IReadOnlyList<CashBoxLedgerReport> CashBoxLedgers { get; private set; } = Array.Empty<CashBoxLedgerReport>();
+
+    public IReadOnlyList<BankAccountLedgerReport> BankLedgers { get; private set; } = Array.Empty<BankAccountLedgerReport>();
 
     public string? Notice { get; private set; }
 
@@ -57,6 +86,16 @@ public sealed class IndexModel : PageModel
 
     public bool IsBalancesReport => string.Equals(ReportType, "BALANCES", StringComparison.Ordinal);
 
+    public bool IsCustomerLedgerReport => string.Equals(ReportType, "LEDGER", StringComparison.Ordinal);
+
+    public bool IsAccountReport => string.Equals(ReportType, "ACCOUNT", StringComparison.Ordinal);
+
+    public bool IsCashBoxReport => string.Equals(ReportType, "CASHBOX", StringComparison.Ordinal);
+
+    public bool IsBankReport => string.Equals(ReportType, "BANK", StringComparison.Ordinal);
+
+    public bool IsDateRange => string.Equals(DateMode, "RANGE", StringComparison.Ordinal);
+
     public static string SourceText(string sourceType) => sourceType switch
     {
         SourceTypes.Trade => "معامله",
@@ -65,6 +104,10 @@ public sealed class IndexModel : PageModel
         SourceTypes.Adjust => "تعدیل",
         SourceTypes.Manual => "سند دستی",
         SourceTypes.BankOpening => "افتتاحیه‌ی حساب بانکی",
+        SourceTypes.CashTransaction => "دریافت/پرداخت",
+        SourceTypes.CashReceipt => "رسید دریافت",
+        SourceTypes.CashPayment => "سند پرداخت",
+        SourceTypes.CashAdjustment => "تعدیل دریافت/پرداخت",
         _ => sourceType,
     };
 
@@ -73,25 +116,71 @@ public sealed class IndexModel : PageModel
     public async Task<IActionResult> OnGetExcelAsync(CancellationToken ct)
     {
         await LoadAsync(ct);
+        if (!string.IsNullOrWhiteSpace(ErrorMessage))
+        {
+            return Page();
+        }
+
         if (IsBalancesReport)
         {
-            var asOf = PersianDate.TryParseDate(AsOf, out var parsed) ? parsed.Date : DateTime.Now.Date;
+            var asOf = ResolveAsOf();
             return File(WorkbookBuilder.CustomerBalances(Balances), ExcelContentType,
                 $"customer-balances-{asOf:yyyyMMdd}.xlsx");
         }
 
-        if (Ledger is null)
+        if (IsCustomerLedgerReport)
         {
-            ErrorMessage = "برای خروجی معین، شخص را انتخاب کنید.";
+            if (Ledger is null)
+            {
+                ErrorMessage = "برای خروجی معین، شخص را انتخاب کنید.";
+                return Page();
+            }
+            return File(WorkbookBuilder.CustomerLedger(Ledger), ExcelContentType,
+                $"customer-ledger-{Ledger.Customer.CustomerCode}.xlsx");
+        }
+
+        if (IsAccountReport)
+        {
+            if (!IsDateRange && AccountBalance is not null)
+            {
+                return File(WorkbookBuilder.AccountBalance(AccountBalance), ExcelContentType,
+                    $"account-balance-{AccountBalance.Account.Code}-{AccountBalance.AsOf:yyyyMMdd}.xlsx");
+            }
+            if (AccountLedger is not null)
+            {
+                return File(WorkbookBuilder.AccountLedger(AccountLedger), ExcelContentType,
+                    $"account-ledger-{AccountLedger.Account.Code}-{AccountLedger.FromInclusive:yyyyMMdd}-{AccountLedger.ToExclusive.AddDays(-1):yyyyMMdd}.xlsx");
+            }
+            ErrorMessage = "برای خروجی گزارش سرفصل، یک سرفصل را انتخاب کنید.";
             return Page();
         }
-        return File(WorkbookBuilder.CustomerLedger(Ledger), ExcelContentType,
-            $"customer-ledger-{Ledger.Customer.CustomerCode}.xlsx");
+
+        if (IsCashBoxReport)
+        {
+            var suffix = ReportDateSuffix();
+            return File(WorkbookBuilder.CashBoxLedgers(CashBoxLedgers), ExcelContentType, $"cashbox-ledger-{suffix}.xlsx");
+        }
+
+        if (IsBankReport)
+        {
+            var suffix = ReportDateSuffix();
+            return File(WorkbookBuilder.BankAccountLedgers(BankLedgers), ExcelContentType, $"bank-ledger-{suffix}.xlsx");
+        }
+
+        return Page();
     }
 
     private async Task LoadAsync(CancellationToken ct)
     {
-        ReportType = string.Equals(ReportType, "LEDGER", StringComparison.Ordinal) ? "LEDGER" : "BALANCES";
+        ReportType = ReportType switch
+        {
+            "LEDGER" => "LEDGER",
+            "ACCOUNT" => "ACCOUNT",
+            "CASHBOX" => "CASHBOX",
+            "BANK" => "BANK",
+            _ => "BALANCES",
+        };
+        DateMode = string.Equals(DateMode, "RANGE", StringComparison.Ordinal) ? "RANGE" : "ASOF";
         var user = User.ToCurrentUser();
         Branches = await _permissions.GetBranchesAsync(user, null, ct);
         var access = await _permissions.GetAccessAsync(user, ct);
@@ -99,6 +188,9 @@ public sealed class IndexModel : PageModel
         Notice = notice;
         BranchFilter = scope;
         Customers = await _customers.SearchAsync(user, null, ct, 5000);
+        Accounts = await _reports.GetAccountReportOptionsAsync(user, ct);
+        CashBoxes = await _reports.GetCashBoxReportOptionsAsync(user, scope, ct);
+        BankAccounts = await _reports.GetBankAccountReportOptionsAsync(user, scope, ct);
 
         if (IsBalancesReport)
         {
@@ -107,15 +199,80 @@ public sealed class IndexModel : PageModel
             return;
         }
 
-        var (from, to) = ResolveRange();
-        if (CustomerId is not > 0)
+        if (IsCustomerLedgerReport)
         {
-            Ledger = null;
+            var (from, to) = ResolveRange();
+            if (CustomerId is not > 0)
+            {
+                Ledger = null;
+                return;
+            }
+            try
+            {
+                Ledger = await _reports.GetCustomerLedgerAsync(user, scope, CustomerId.Value, from, to, ct);
+            }
+            catch (BusinessRuleException ex)
+            {
+                ErrorMessage = ex.Message;
+            }
             return;
         }
+
+        if (IsAccountReport)
+        {
+            var accountCode = AccountCode;
+            if (string.IsNullOrWhiteSpace(accountCode))
+            {
+                return;
+            }
+            try
+            {
+                if (IsDateRange)
+                {
+                    var (from, to) = ResolveRange();
+                    AccountLedger = await _reports.GetAccountLedgerReportAsync(
+                        user, scope, accountCode, IncludeDescendants, from, to, ct);
+                }
+                else
+                {
+                    var asOf = ResolveAsOf();
+                    AccountBalance = await _reports.GetAccountBalanceReportAsync(
+                        user, scope, accountCode, IncludeDescendants, asOf, ct);
+                }
+            }
+            catch (BusinessRuleException ex)
+            {
+                ErrorMessage = ex.Message;
+            }
+            return;
+        }
+
         try
         {
-            Ledger = await _reports.GetCustomerLedgerAsync(user, scope, CustomerId.Value, from, to, ct);
+            DateTime? from;
+            DateTime to;
+            if (IsDateRange)
+            {
+                var range = ResolveRange();
+                from = range.From;
+                to = range.To;
+            }
+            else
+            {
+                from = null;
+                to = ResolveAsOf().AddDays(1);
+            }
+
+            if (IsCashBoxReport)
+            {
+                CashBoxLedgers = await _reports.GetCashBoxLedgerReportsAsync(
+                    user, scope, CashBoxId, from, to, ct);
+            }
+            else if (IsBankReport)
+            {
+                BankLedgers = await _reports.GetBankAccountLedgerReportsAsync(
+                    user, scope, BankAccountId, from, to, ct);
+            }
         }
         catch (BusinessRuleException ex)
         {
@@ -153,5 +310,16 @@ public sealed class IndexModel : PageModel
         From = PersianDate.FormatDate(fromInclusive);
         To = PersianDate.FormatDate(toExclusive.AddDays(-1));
         return (fromInclusive, toExclusive);
+    }
+
+    private string ReportDateSuffix()
+    {
+        if (!IsDateRange)
+        {
+            var asOf = ResolveAsOf();
+            return asOf.ToString("yyyyMMdd", System.Globalization.CultureInfo.InvariantCulture);
+        }
+        var (from, to) = ResolveRange();
+        return $"{from:yyyyMMdd}-{to.AddDays(-1):yyyyMMdd}";
     }
 }

@@ -42,7 +42,7 @@ internal sealed class MainForm : Form
         AddTab("صندوق‌ها", new CashTab(services, user));
         AddTab("موجودی‌های افتتاحیه", new OpeningsTab(services, user));
         AddTab("اسناد حسابداری", new JournalTab(services, user));
-        AddTab("گزارش اشخاص", new ReportsTab(services, user));
+        AddTab("گزارش‌ها", new ReportsTab(services, user));
         if (user.Role == UserRole.Admin)
         {
             AddTab("شعبه‌ها", new BranchesTab(services, user));

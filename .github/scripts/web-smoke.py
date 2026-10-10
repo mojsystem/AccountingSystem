@@ -23,7 +23,15 @@ import urllib.parse
 import urllib.request
 
 PROTECTED_PAGES = ["/", "/Trade", "/CashTransactions", "/Rates", "/Cash", "/Journal", "/Reports", "/Users", "/Branches", "/Roles", "/Accounts", "/Customers", "/Backup"]
-EXCEL_EXPORTS = ["/Trade?handler=Excel", "/Journal?handler=Excel", "/Reports?ReportType=BALANCES&handler=Excel"]
+EXCEL_EXPORTS = [
+    "/Trade?handler=Excel",
+    "/Journal?handler=Excel",
+    "/Reports?ReportType=BALANCES&handler=Excel",
+    "/Reports?ReportType=ACCOUNT&AccountCode=1001&IncludeDescendants=true&DateMode=ASOF&handler=Excel",
+    "/Reports?ReportType=ACCOUNT&AccountCode=1001&IncludeDescendants=true&DateMode=RANGE&handler=Excel",
+    "/Reports?ReportType=CASHBOX&DateMode=ASOF&handler=Excel",
+    "/Reports?ReportType=BANK&DateMode=ASOF&handler=Excel",
+]
 STYLESHEET = "/css/site.css"
 STARTUP_TIMEOUT_SECONDS = 120
 TOKEN_INPUT = re.compile(r'<input[^>]*name="__RequestVerificationToken"[^>]*>')

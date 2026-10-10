@@ -113,6 +113,183 @@ public static class WorkbookBuilder
         return XlsxWriter.Build(new[] { new WorkbookSheet("اسناد", headers, rows) });
     }
 
+    public static byte[] AccountBalance(AccountBalanceReport report)
+    {
+        var headers = new[]
+        {
+            "کد سرفصل", "نام سرفصل", "سطح", "نوع حساب", "دامنه‌ی گزارش", "تا تاریخ (شمسی)",
+            "مانده بدهکار (ریال)", "مانده بستانکار (ریال)", "مانده خالص (بدهکار + / بستانکار -)",
+        };
+        var scope = report.IncludesChildren && report.Account.HasChildren ? "با تجمیع زیرحساب‌ها" : "فقط همین سرفصل";
+        var rows = new IReadOnlyList<object?>[]
+        {
+            new object?[]
+            {
+                report.Account.Code,
+                report.Account.Name,
+                report.Account.Level,
+                report.Account.AccountType,
+                scope,
+                PersianDate.FormatDate(report.AsOf),
+                Math.Max(0m, report.BalanceIrr),
+                Math.Max(0m, -report.BalanceIrr),
+                report.BalanceIrr,
+            },
+        };
+        return XlsxWriter.Build(new[] { new WorkbookSheet("مانده سرفصل", headers, rows) });
+    }
+
+    public static byte[] AccountLedger(AccountLedgerReport report)
+    {
+        var headers = new[]
+        {
+            "زمان (شمسی)", "شعبه", "شماره سند", "منشأ", "شرح", "کد حساب ثبت‌شده", "نام حساب ثبت‌شده", "ردیف",
+            "بدهکار (ریال)", "بستانکار (ریال)", "مانده خالص (بدهکار + / بستانکار -)",
+        };
+        var rows = new List<IReadOnlyList<object?>>
+        {
+            new object?[]
+            {
+                "سرفصل", $"{report.Account.Code} · {report.Account.Name}", "سطح " + report.Account.Level,
+                report.IncludesChildren && report.Account.HasChildren ? "با تجمیع زیرحساب‌ها" : "فقط همین سرفصل",
+                null, null, null, null, null, null, null,
+            },
+            new object?[]
+            {
+                null, null, null, null, "مانده‌ی ابتدای دوره", null, null, null,
+                Math.Max(0m, report.OpeningBalanceIrr), Math.Max(0m, -report.OpeningBalanceIrr), report.OpeningBalanceIrr,
+            },
+        };
+        foreach (var line in report.Lines)
+        {
+            rows.Add(new object?[]
+            {
+                PersianDate.FormatDateTime(line.OccurredAt),
+                line.BranchName,
+                line.JournalEntryId,
+                SourceText(line.SourceType),
+                (line.IsVoided ? "[باطل‌شده] " : string.Empty) + line.Description,
+                line.AccountCode,
+                line.AccountName,
+                line.LineNo,
+                line.Debit,
+                line.Credit,
+                line.BalanceIrr,
+            });
+        }
+        rows.Add(new object?[]
+        {
+            null, null, null, null, "مانده‌ی پایان دوره", null, null, null,
+            Math.Max(0m, report.ClosingBalanceIrr), Math.Max(0m, -report.ClosingBalanceIrr), report.ClosingBalanceIrr,
+        });
+        return XlsxWriter.Build(new[] { new WorkbookSheet("معین سرفصل", headers, rows) });
+    }
+
+    public static byte[] CashBoxLedgers(IReadOnlyList<CashBoxLedgerReport> reports)
+    {
+        var headers = new[]
+        {
+            "شعبه", "صندوق", "ارز", "زمان (شمسی)", "شناسه مرجع", "منشأ", "شرح", "واریز", "برداشت", "مانده",
+        };
+        var rows = new List<IReadOnlyList<object?>>();
+        foreach (var report in reports)
+        {
+            if (report.FromInclusive is null)
+            {
+                rows.Add(new object?[]
+                {
+                    report.CashBox.BranchName, report.CashBox.Name, report.CashBox.CurrencyCode,
+                    PersianDate.FormatDate(report.ToExclusive.Date.AddDays(-1)), null, "مانده تا تاریخ", "",
+                    0m, 0m, report.ClosingBalance,
+                });
+                continue;
+            }
+
+            rows.Add(new object?[]
+            {
+                report.CashBox.BranchName, report.CashBox.Name, report.CashBox.CurrencyCode,
+                null, null, "مانده‌ی ابتدای دوره", "",
+                0m, 0m, report.OpeningBalance,
+            });
+            foreach (var line in report.Lines)
+            {
+                rows.Add(new object?[]
+                {
+                    report.CashBox.BranchName, report.CashBox.Name, report.CashBox.CurrencyCode,
+                    PersianDate.FormatDateTime(line.OccurredAt), line.ReferenceId, SourceText(line.SourceType), line.Description,
+                    Math.Max(0m, line.Amount), Math.Max(0m, -line.Amount), line.Balance,
+                });
+            }
+            rows.Add(new object?[]
+            {
+                report.CashBox.BranchName, report.CashBox.Name, report.CashBox.CurrencyCode,
+                null, null, "مانده‌ی پایان دوره", "",
+                0m, 0m, report.ClosingBalance,
+            });
+        }
+        return XlsxWriter.Build(new[] { new WorkbookSheet("معین صندوق‌ها", headers, rows) });
+    }
+
+    public static byte[] BankAccountLedgers(IReadOnlyList<BankAccountLedgerReport> reports)
+    {
+        var headers = new[]
+        {
+            "شعبه", "حساب بانکی", "ارز", "زمان (شمسی)", "شناسه مرجع", "منشأ", "شرح", "واریز", "برداشت", "مانده",
+        };
+        var rows = new List<IReadOnlyList<object?>>();
+        foreach (var report in reports)
+        {
+            if (report.FromInclusive is null)
+            {
+                rows.Add(new object?[]
+                {
+                    report.BankAccount.BranchName, report.BankAccount.Name, report.BankAccount.CurrencyCode,
+                    PersianDate.FormatDate(report.ToExclusive.Date.AddDays(-1)), null, "مانده تا تاریخ", "",
+                    0m, 0m, report.ClosingBalance,
+                });
+                continue;
+            }
+
+            rows.Add(new object?[]
+            {
+                report.BankAccount.BranchName, report.BankAccount.Name, report.BankAccount.CurrencyCode,
+                null, null, "مانده‌ی ابتدای دوره", "",
+                0m, 0m, report.OpeningBalance,
+            });
+            foreach (var line in report.Lines)
+            {
+                rows.Add(new object?[]
+                {
+                    report.BankAccount.BranchName, report.BankAccount.Name, report.BankAccount.CurrencyCode,
+                    PersianDate.FormatDateTime(line.OccurredAt), line.ReferenceId, SourceText(line.SourceType), line.Description,
+                    Math.Max(0m, line.Amount), Math.Max(0m, -line.Amount), line.Balance,
+                });
+            }
+            rows.Add(new object?[]
+            {
+                report.BankAccount.BranchName, report.BankAccount.Name, report.BankAccount.CurrencyCode,
+                null, null, "مانده‌ی پایان دوره", "",
+                0m, 0m, report.ClosingBalance,
+            });
+        }
+        return XlsxWriter.Build(new[] { new WorkbookSheet("معین بانک‌ها", headers, rows) });
+    }
+
+    private static string SourceText(string sourceType) => sourceType switch
+    {
+        SourceTypes.Trade => "معامله",
+        SourceTypes.Opening => "موجودی افتتاحیه",
+        SourceTypes.BankOpening => "افتتاحیه‌ی حساب بانکی",
+        SourceTypes.Void => "ابطال",
+        SourceTypes.Adjust => "تعدیل",
+        SourceTypes.Manual => "سند دستی",
+        SourceTypes.CashTransaction => "دریافت/پرداخت",
+        SourceTypes.CashReceipt => "رسید دریافت",
+        SourceTypes.CashPayment => "سند پرداخت",
+        SourceTypes.CashAdjustment => "تعدیل دریافت/پرداخت",
+        _ => sourceType,
+    };
+
     public static byte[] CustomerBalances(IReadOnlyList<CustomerBalanceReportRow> balances)
     {
         var headers = new[]

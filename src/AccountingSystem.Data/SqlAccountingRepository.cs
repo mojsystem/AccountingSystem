@@ -1792,6 +1792,360 @@ ORDER BY e.OccurredAt, e.Seq, e.Id, l.LineNumber;";
         return new CustomerLedgerData(openingBalance, lines);
     }
 
+    public async Task<decimal> GetAccountBalanceAsync(
+        string accountCode,
+        bool includeDescendants,
+        int? branchId,
+        DateTime toExclusive,
+        CancellationToken ct = default)
+    {
+        const string sql = @"
+;WITH AccountTree AS
+(
+    SELECT Code FROM dbo.Accounts WHERE Code = @accountCode
+    UNION ALL
+    SELECT child.Code
+    FROM dbo.Accounts child
+    INNER JOIN AccountTree parent ON child.ParentCode = parent.Code
+    WHERE @includeDescendants = 1
+)
+SELECT COALESCE(SUM(l.Debit - l.Credit), CONVERT(DECIMAL(19,4), 0))
+FROM dbo.JournalLines l
+INNER JOIN dbo.JournalEntries e ON e.Id = l.JournalEntryId
+INNER JOIN AccountTree a ON a.Code = l.AccountCode
+WHERE e.OccurredAt < @toExclusive
+  AND (@branchId IS NULL OR e.BranchId = @branchId)
+OPTION (MAXRECURSION 4);";
+        await using var conn = await OpenAsync(ct);
+        await using var cmd = new SqlCommand(sql, conn);
+        cmd.Parameters.Add(new SqlParameter("@accountCode", accountCode));
+        cmd.Parameters.Add(new SqlParameter("@includeDescendants", includeDescendants));
+        cmd.Parameters.Add(NullableInt("@branchId", branchId));
+        cmd.Parameters.Add(new SqlParameter("@toExclusive", toExclusive));
+        var value = await cmd.ExecuteScalarAsync(ct);
+        return value is null or DBNull ? 0m : Convert.ToDecimal(value, CultureInfo.InvariantCulture);
+    }
+
+    public async Task<AccountLedgerData> GetAccountLedgerAsync(
+        string accountCode,
+        bool includeDescendants,
+        int? branchId,
+        DateTime fromInclusive,
+        DateTime toExclusive,
+        CancellationToken ct = default)
+    {
+        const string sql = @"
+;WITH AccountTree AS
+(
+    SELECT Code FROM dbo.Accounts WHERE Code = @accountCode
+    UNION ALL
+    SELECT child.Code
+    FROM dbo.Accounts child
+    INNER JOIN AccountTree parent ON child.ParentCode = parent.Code
+    WHERE @includeDescendants = 1
+)
+SELECT COALESCE(SUM(l.Debit - l.Credit), CONVERT(DECIMAL(19,4), 0))
+FROM dbo.JournalLines l
+INNER JOIN dbo.JournalEntries e ON e.Id = l.JournalEntryId
+INNER JOIN AccountTree a ON a.Code = l.AccountCode
+WHERE e.OccurredAt < @fromInclusive
+  AND (@branchId IS NULL OR e.BranchId = @branchId)
+OPTION (MAXRECURSION 4);
+
+;WITH AccountTree AS
+(
+    SELECT Code FROM dbo.Accounts WHERE Code = @accountCode
+    UNION ALL
+    SELECT child.Code
+    FROM dbo.Accounts child
+    INNER JOIN AccountTree parent ON child.ParentCode = parent.Code
+    WHERE @includeDescendants = 1
+)
+SELECT e.Id, e.SourceId, e.OccurredAt, e.BranchId, b.Name, e.SourceType, e.Description,
+       l.LineNumber, l.AccountCode, a.Name, l.Debit, l.Credit, e.IsVoided
+FROM dbo.JournalLines l
+INNER JOIN dbo.JournalEntries e ON e.Id = l.JournalEntryId
+INNER JOIN dbo.Branches b ON b.Id = e.BranchId
+INNER JOIN dbo.Accounts a ON a.Code = l.AccountCode
+INNER JOIN AccountTree tree ON tree.Code = l.AccountCode
+WHERE e.OccurredAt >= @fromInclusive AND e.OccurredAt < @toExclusive
+  AND (@branchId IS NULL OR e.BranchId = @branchId)
+ORDER BY e.OccurredAt, e.Seq, e.Id, l.LineNumber
+OPTION (MAXRECURSION 4);";
+        await using var conn = await OpenAsync(ct);
+        await using var cmd = new SqlCommand(sql, conn);
+        cmd.Parameters.Add(new SqlParameter("@accountCode", accountCode));
+        cmd.Parameters.Add(new SqlParameter("@includeDescendants", includeDescendants));
+        cmd.Parameters.Add(NullableInt("@branchId", branchId));
+        cmd.Parameters.Add(new SqlParameter("@fromInclusive", fromInclusive));
+        cmd.Parameters.Add(new SqlParameter("@toExclusive", toExclusive));
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        var openingBalance = await reader.ReadAsync(ct) ? reader.GetDecimal(0) : 0m;
+        if (!await reader.NextResultAsync(ct))
+        {
+            return new AccountLedgerData(openingBalance, Array.Empty<AccountLedgerLineInfo>());
+        }
+
+        var lines = new List<AccountLedgerLineInfo>();
+        var balance = openingBalance;
+        while (await reader.ReadAsync(ct))
+        {
+            var debit = reader.GetDecimal(10);
+            var credit = reader.GetDecimal(11);
+            balance += debit - credit;
+            lines.Add(new AccountLedgerLineInfo(
+                reader.GetInt64(0),
+                reader.IsDBNull(1) ? null : reader.GetInt64(1),
+                reader.GetDateTime(2),
+                reader.GetInt32(3),
+                reader.GetString(4),
+                reader.GetString(5),
+                reader.GetString(6),
+                reader.GetInt32(7),
+                reader.GetString(8).Trim(),
+                reader.GetString(9),
+                debit,
+                credit,
+                reader.GetBoolean(12),
+                balance));
+        }
+        return new AccountLedgerData(openingBalance, lines);
+    }
+
+    public async Task<IReadOnlyList<CashBoxLedgerData>> GetCashBoxLedgersAsync(
+        int? branchId,
+        int? cashBoxId,
+        DateTime? fromInclusive,
+        DateTime toExclusive,
+        CancellationToken ct = default)
+    {
+        const string sql = @"
+SELECT b.Id, b.BranchId, br.Name, b.CurrencyCode, b.Name, b.Balance, b.UpdatedAt, c.DecimalPlaces,
+       COALESCE(SUM(m.Amount), CONVERT(DECIMAL(19,4), 0)) AS OpeningBalance
+FROM dbo.CashBoxes b
+INNER JOIN dbo.Branches br ON br.Id = b.BranchId
+INNER JOIN dbo.Currencies c ON c.Code = b.CurrencyCode
+LEFT JOIN dbo.CashMovements m
+  ON m.CashBoxId = b.Id
+ AND m.OccurredAt < @toExclusive
+ AND (@fromInclusive IS NULL OR m.OccurredAt < @fromInclusive)
+WHERE (@branchId IS NULL OR b.BranchId = @branchId)
+  AND (@cashBoxId IS NULL OR b.Id = @cashBoxId)
+GROUP BY b.Id, b.BranchId, br.Name, b.CurrencyCode, b.Name, b.Balance, b.UpdatedAt, c.DecimalPlaces
+ORDER BY b.BranchId, CASE WHEN b.CurrencyCode = N'IRR' THEN 0 ELSE 1 END, b.CurrencyCode;
+
+SELECT b.Id, m.OccurredAt, m.RefType, m.RefId, COALESCE(m.Description, N''), m.Amount
+FROM dbo.CashBoxes b
+INNER JOIN dbo.CashMovements m ON m.CashBoxId = b.Id
+WHERE @fromInclusive IS NOT NULL
+  AND m.OccurredAt >= @fromInclusive AND m.OccurredAt < @toExclusive
+  AND (@branchId IS NULL OR b.BranchId = @branchId)
+  AND (@cashBoxId IS NULL OR b.Id = @cashBoxId)
+ORDER BY b.Id, m.OccurredAt, m.Id;";
+        await using var conn = await OpenAsync(ct);
+        await using var cmd = new SqlCommand(sql, conn);
+        cmd.Parameters.Add(NullableInt("@branchId", branchId));
+        cmd.Parameters.Add(NullableInt("@cashBoxId", cashBoxId));
+        cmd.Parameters.Add(new SqlParameter("@fromInclusive", SqlDbType.DateTime2)
+        {
+            Value = (object?)fromInclusive ?? DBNull.Value,
+        });
+        cmd.Parameters.Add(new SqlParameter("@toExclusive", toExclusive));
+
+        var builders = new Dictionary<int, CashBoxLedgerBuilder>();
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+        {
+            var id = reader.GetInt32(0);
+            var box = new CashBoxInfo(
+                id,
+                reader.GetInt32(1),
+                reader.GetString(2),
+                reader.GetString(3).Trim(),
+                reader.GetString(4),
+                reader.GetDecimal(5),
+                reader.GetDateTime(6));
+            builders.Add(id, new CashBoxLedgerBuilder(box, reader.GetByte(7), reader.GetDecimal(8)));
+        }
+
+        if (await reader.NextResultAsync(ct))
+        {
+            while (await reader.ReadAsync(ct))
+            {
+                var builder = builders[reader.GetInt32(0)];
+                var amount = reader.GetDecimal(5);
+                builder.RunningBalance += amount;
+                builder.Lines.Add(new OperationalLedgerLineInfo(
+                    reader.GetDateTime(1),
+                    reader.GetString(2),
+                    reader.IsDBNull(3) ? null : reader.GetInt64(3),
+                    reader.GetString(4),
+                    amount,
+                    builder.RunningBalance));
+            }
+        }
+
+        return builders.Values
+            .OrderBy(item => item.CashBox.BranchId)
+            .ThenBy(item => item.CashBox.CurrencyCode == CurrencyCodes.Irr ? 0 : 1)
+            .ThenBy(item => item.CashBox.CurrencyCode, StringComparer.Ordinal)
+            .Select(item => new CashBoxLedgerData(item.CashBox, item.DecimalPlaces, item.OpeningBalance, item.Lines))
+            .ToList();
+    }
+
+    public async Task<IReadOnlyList<BankAccountLedgerData>> GetBankAccountLedgersAsync(
+        int? branchId,
+        int? bankAccountId,
+        DateTime? fromInclusive,
+        DateTime toExclusive,
+        CancellationToken ct = default)
+    {
+        const string sql = @"
+SET NOCOUNT ON;
+DROP TABLE IF EXISTS #BankMovements;
+CREATE TABLE #BankMovements
+(
+    BankAccountId INT NOT NULL,
+    OccurredAt DATETIME2(0) NOT NULL,
+    EventSeq BIGINT NOT NULL,
+    LineSeq INT NOT NULL,
+    SourceType NVARCHAR(20) NOT NULL,
+    ReferenceId BIGINT NULL,
+    Description NVARCHAR(250) NOT NULL,
+    Amount DECIMAL(19,4) NOT NULL
+);
+
+INSERT INTO #BankMovements (BankAccountId, OccurredAt, EventSeq, LineSeq, SourceType, ReferenceId, Description, Amount)
+SELECT b.Id, b.CreatedAt, -9223372036854775807, 0, N'BANK_OPENING', CONVERT(BIGINT, b.Id),
+       N'موجودی افتتاحیه‌ی حساب بانکی «' + b.Name + N'»', b.OpeningBalance
+FROM dbo.BankAccounts b
+WHERE b.OpeningBalance > 0
+  AND b.CreatedAt < @toExclusive
+  AND (@branchId IS NULL OR b.BranchId = @branchId)
+  AND (@bankAccountId IS NULL OR b.Id = @bankAccountId);
+
+INSERT INTO #BankMovements (BankAccountId, OccurredAt, EventSeq, LineSeq, SourceType, ReferenceId, Description, Amount)
+SELECT s.BankAccountId, t.OccurredAt, t.Seq, s.LineNumber * 2, N'TRADE', t.Id,
+       CASE WHEN t.IsVoided = 1 THEN N'[باطل‌شده] ' ELSE N'' END + N'معامله شماره '
+           + CONVERT(NVARCHAR(20), t.Id) + N' (' + CASE WHEN t.TradeType = N'BUY' THEN N'خرید ارز' ELSE N'فروش ارز' END + N')',
+       CASE WHEN s.Direction = N'PAY' THEN -s.Amount ELSE s.Amount END
+FROM dbo.CurrencyTransactionSettlements s
+INNER JOIN dbo.CurrencyTransactions t ON t.Id = s.TradeId
+INNER JOIN dbo.BankAccounts b ON b.Id = s.BankAccountId
+WHERE s.BankAccountId IS NOT NULL AND t.BranchId = b.BranchId
+  AND t.OccurredAt < @toExclusive
+  AND (@branchId IS NULL OR b.BranchId = @branchId)
+  AND (@bankAccountId IS NULL OR b.Id = @bankAccountId);
+
+INSERT INTO #BankMovements (BankAccountId, OccurredAt, EventSeq, LineSeq, SourceType, ReferenceId, Description, Amount)
+SELECT s.BankAccountId, COALESCE(v.OccurredAt, t.VoidedAt), COALESCE(v.Seq, t.Seq), s.LineNumber * 2 + 1, N'VOID', t.Id,
+       N'ابطال معامله شماره ' + CONVERT(NVARCHAR(20), t.Id),
+       CASE WHEN s.Direction = N'PAY' THEN s.Amount ELSE -s.Amount END
+FROM dbo.CurrencyTransactionSettlements s
+INNER JOIN dbo.CurrencyTransactions t ON t.Id = s.TradeId
+INNER JOIN dbo.BankAccounts b ON b.Id = s.BankAccountId
+OUTER APPLY
+(
+    SELECT TOP (1) e.OccurredAt, e.Seq
+    FROM dbo.JournalEntries e
+    WHERE e.BranchId = t.BranchId AND e.SourceType = N'VOID' AND e.SourceId = t.Id
+    ORDER BY e.Seq DESC
+) v
+WHERE s.BankAccountId IS NOT NULL AND t.BranchId = b.BranchId
+  AND t.IsVoided = 1 AND t.VoidedAt IS NOT NULL
+  AND COALESCE(v.OccurredAt, t.VoidedAt) < @toExclusive
+  AND (@branchId IS NULL OR b.BranchId = @branchId)
+  AND (@bankAccountId IS NULL OR b.Id = @bankAccountId);
+
+CREATE CLUSTERED INDEX IX_BankMovements_AccountDate
+    ON #BankMovements (BankAccountId, OccurredAt, EventSeq, LineSeq);
+
+SELECT b.Id, b.BranchId, br.Name, b.Name, b.CurrencyCode, c.Name, c.DecimalPlaces,
+       b.OpeningBalance, b.OpeningCostIrr, b.Balance, b.CostIrr, b.CreatedAt, u.Username,
+       COALESCE(SUM(m.Amount), CONVERT(DECIMAL(19,4), 0)) AS OpeningBalanceAtRange
+FROM dbo.BankAccounts b
+INNER JOIN dbo.Branches br ON br.Id = b.BranchId
+INNER JOIN dbo.Currencies c ON c.Code = b.CurrencyCode
+INNER JOIN dbo.Users u ON u.Id = b.CreatedBy
+LEFT JOIN #BankMovements m
+  ON m.BankAccountId = b.Id
+ AND m.OccurredAt < @toExclusive
+ AND (@fromInclusive IS NULL OR m.OccurredAt < @fromInclusive)
+WHERE (@branchId IS NULL OR b.BranchId = @branchId)
+  AND (@bankAccountId IS NULL OR b.Id = @bankAccountId)
+GROUP BY b.Id, b.BranchId, br.Name, b.Name, b.CurrencyCode, c.Name, c.DecimalPlaces,
+         b.OpeningBalance, b.OpeningCostIrr, b.Balance, b.CostIrr, b.CreatedAt, u.Username
+ORDER BY b.BranchId, b.CurrencyCode, b.Name, b.Id;
+
+SELECT m.BankAccountId, m.OccurredAt, m.SourceType, m.ReferenceId, m.Description, m.Amount
+FROM #BankMovements m
+INNER JOIN dbo.BankAccounts b ON b.Id = m.BankAccountId
+WHERE @fromInclusive IS NOT NULL
+  AND m.OccurredAt >= @fromInclusive AND m.OccurredAt < @toExclusive
+  AND (@branchId IS NULL OR b.BranchId = @branchId)
+  AND (@bankAccountId IS NULL OR b.Id = @bankAccountId)
+ORDER BY m.BankAccountId, m.OccurredAt, m.EventSeq, m.LineSeq, m.SourceType;
+
+DROP TABLE #BankMovements;";
+        await using var conn = await OpenAsync(ct);
+        await using var cmd = new SqlCommand(sql, conn);
+        cmd.Parameters.Add(NullableInt("@branchId", branchId));
+        cmd.Parameters.Add(NullableInt("@bankAccountId", bankAccountId));
+        cmd.Parameters.Add(new SqlParameter("@fromInclusive", SqlDbType.DateTime2)
+        {
+            Value = (object?)fromInclusive ?? DBNull.Value,
+        });
+        cmd.Parameters.Add(new SqlParameter("@toExclusive", toExclusive));
+
+        var builders = new Dictionary<int, BankAccountLedgerBuilder>();
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+        {
+            var id = reader.GetInt32(0);
+            var account = new BankAccountInfo(
+                id,
+                reader.GetInt32(1),
+                reader.GetString(2),
+                reader.GetString(3),
+                reader.GetString(4).Trim(),
+                reader.GetString(5),
+                reader.GetByte(6),
+                reader.GetDecimal(7),
+                reader.GetDecimal(8),
+                reader.GetDecimal(9),
+                reader.GetDecimal(10),
+                reader.GetDateTime(11),
+                reader.GetString(12));
+            builders.Add(id, new BankAccountLedgerBuilder(account, reader.GetDecimal(13)));
+        }
+
+        if (await reader.NextResultAsync(ct))
+        {
+            while (await reader.ReadAsync(ct))
+            {
+                var builder = builders[reader.GetInt32(0)];
+                var amount = reader.GetDecimal(5);
+                builder.RunningBalance += amount;
+                builder.Lines.Add(new OperationalLedgerLineInfo(
+                    reader.GetDateTime(1),
+                    reader.GetString(2),
+                    reader.IsDBNull(3) ? null : reader.GetInt64(3),
+                    reader.GetString(4),
+                    amount,
+                    builder.RunningBalance));
+            }
+            await reader.NextResultAsync(ct); // اجرا و پاک‌کردن جدول موقت بانکی
+        }
+
+        return builders.Values
+            .OrderBy(item => item.BankAccount.BranchId)
+            .ThenBy(item => item.BankAccount.CurrencyCode, StringComparer.Ordinal)
+            .ThenBy(item => item.BankAccount.Name, StringComparer.Ordinal)
+            .ThenBy(item => item.BankAccount.Id)
+            .Select(item => new BankAccountLedgerData(item.BankAccount, item.OpeningBalance, item.Lines))
+            .ToList();
+    }
+
     /// <summary>
     /// دسترسی کاربر (نقش سیستمی، فعال بودن، شعبه‌ی اصلی و عضویت‌ها با نقش هر شعبه)؛ در هر بار فراخوانی تازه خوانده می‌شود.
     /// </summary>
@@ -2642,6 +2996,45 @@ WHERE Id = @id;";
         reader.IsDBNull(ordinal) ? null : reader.GetString(ordinal);
 
     private static UserRole ParseRole(string value) => Enum.Parse<UserRole>(value, ignoreCase: true);
+
+    private sealed class CashBoxLedgerBuilder
+    {
+        public CashBoxLedgerBuilder(CashBoxInfo cashBox, int decimalPlaces, decimal openingBalance)
+        {
+            CashBox = cashBox;
+            DecimalPlaces = decimalPlaces;
+            OpeningBalance = openingBalance;
+            RunningBalance = openingBalance;
+        }
+
+        public CashBoxInfo CashBox { get; }
+
+        public int DecimalPlaces { get; }
+
+        public decimal OpeningBalance { get; }
+
+        public decimal RunningBalance { get; set; }
+
+        public List<OperationalLedgerLineInfo> Lines { get; } = new();
+    }
+
+    private sealed class BankAccountLedgerBuilder
+    {
+        public BankAccountLedgerBuilder(BankAccountInfo bankAccount, decimal openingBalance)
+        {
+            BankAccount = bankAccount;
+            OpeningBalance = openingBalance;
+            RunningBalance = openingBalance;
+        }
+
+        public BankAccountInfo BankAccount { get; }
+
+        public decimal OpeningBalance { get; }
+
+        public decimal RunningBalance { get; set; }
+
+        public List<OperationalLedgerLineInfo> Lines { get; } = new();
+    }
 
     private sealed class JournalEntryBuilder
     {

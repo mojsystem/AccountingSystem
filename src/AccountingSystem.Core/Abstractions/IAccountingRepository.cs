@@ -99,6 +99,18 @@ public interface IAccountingRepository
     /// <summary>مانده‌ی ابتدای دوره و گردش دفتر شخص در بازه؛ اسناد ابطال‌شده و سند معکوسشان برای حفظ تاریخچه با هم لحاظ می‌شوند.</summary>
     Task<CustomerLedgerData> GetCustomerLedgerAsync(int customerId, int? branchId, DateTime fromInclusive, DateTime toExclusive, CancellationToken ct = default);
 
+    /// <summary>مانده‌ی سرفصل تا تاریخ انتخابی؛ در صورت درخواست، همه‌ی فرزندان نیز تجمیع می‌شوند.</summary>
+    Task<decimal> GetAccountBalanceAsync(string accountCode, bool includeDescendants, int? branchId, DateTime toExclusive, CancellationToken ct = default);
+
+    /// <summary>مانده‌ی اول دوره و ریز گردش یک سرفصل؛ ثبت‌های ابطال‌شده و اسناد معکوس برای حفظ تاریخچه باقی می‌مانند.</summary>
+    Task<AccountLedgerData> GetAccountLedgerAsync(string accountCode, bool includeDescendants, int? branchId, DateTime fromInclusive, DateTime toExclusive, CancellationToken ct = default);
+
+    /// <summary>معین یک یا همه‌ی صندوق‌ها. fromInclusive خالی یعنی فقط مانده تا toExclusive.</summary>
+    Task<IReadOnlyList<CashBoxLedgerData>> GetCashBoxLedgersAsync(int? branchId, int? cashBoxId, DateTime? fromInclusive, DateTime toExclusive, CancellationToken ct = default);
+
+    /// <summary>معین یک یا همه‌ی حساب‌های بانکی؛ حرکات حواله از تاریخچه‌ی معاملات و اسناد ابطال بازسازی می‌شوند.</summary>
+    Task<IReadOnlyList<BankAccountLedgerData>> GetBankAccountLedgersAsync(int? branchId, int? bankAccountId, DateTime? fromInclusive, DateTime toExclusive, CancellationToken ct = default);
+
     Task<IReadOnlyList<OpeningInfo>> GetOpeningsAsync(int? branchId, DateTime fromInclusive, DateTime toExclusive, CancellationToken ct = default);
 
     Task<OpeningInfo?> GetOpeningAsync(long openingId, CancellationToken ct = default);
