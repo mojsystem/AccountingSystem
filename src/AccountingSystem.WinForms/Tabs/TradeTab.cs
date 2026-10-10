@@ -469,9 +469,9 @@ internal sealed class TradeTab : UserControl, IRefreshable
         _settlementsLabel.Visible = split;
         _bankAccount.Visible = transfer && direct;
         _bankAccountLabel.Visible = transfer && direct;
-        if (_settlementsGrid.Columns.Contains("BankAccountId"))
+        if (_settlementsGrid.Columns["BankAccountId"] is { } bankAccountColumn)
         {
-            _settlementsGrid.Columns["BankAccountId"].Visible = transfer && split;
+            bankAccountColumn.Visible = transfer && split;
         }
         _crossRate.ReadOnly = direct && SelectedValue(_rateMode) == "DERIVED";
         UpdateBankAccountControls();
