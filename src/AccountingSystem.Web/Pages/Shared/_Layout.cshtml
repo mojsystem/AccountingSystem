@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="light" />
+    <title>@ViewData["Title"] - سیستم حسابداری صرافی</title>
+    <link rel="stylesheet" href="~/css/site.css" asp-append-version="true" />
+</head>
+<body>
+    @{
+        var currentPage = ViewContext.RouteData.Values["page"]?.ToString() ?? string.Empty;
+        bool IsActive(params string[] prefixes) => prefixes.Any(p => currentPage.StartsWith(p, StringComparison.OrdinalIgnoreCase));
+        string? Active(params string[] prefixes) => IsActive(prefixes) ? "active" : null;
+        string? Current(params string[] prefixes) => IsActive(prefixes) ? "page" : null;
+    }
+    @if (User.Identity?.IsAuthenticated == true)
+    {
+        <a class="skip-link" href="#main">پرش به محتوای اصلی</a>
+        <header class="topbar">
+            <a class="brand" asp-page="/Index" aria-label="داشبورد">
+                <span class="brand-mark" aria-hidden="true">ص</span>
+                <span class="brand-text">
+                    صرافی
+                    <small>حسابداری و معاملات ارزی</small>
+                </span>
+            </a>
+            <nav class="nav-groups" aria-label="منوی اصلی">
+                <div class="nav-group">
+                    <span class="nav-group-title">کار روزانه</span>
+                    <a class="@Active("/Index")" aria-current="@Current("/Index")" asp-page="/Index">داشبورد</a>
+                    <a class="@Active("/Trade")" aria-current="@Current("/Trade")" asp-page="/Trade/Index">خرید و فروش</a>
+                    <a class="@Active("/CashTransactions")" aria-current="@Current("/CashTransactions")" asp-page="/CashTransactions/Index">دریافت و پرداخت</a>
+                    <a class="@Active("/Customers")" aria-current="@Current("/Customers")" asp-page="/Customers/Index">مشتریان</a>
+                    <a class="@Active("/Rates")" aria-current="@Current("/Rates")" asp-page="/Rates/Index">نرخ‌ها و مدیریت ارز</a>
+                </div>
+                <div class="nav-group">
+                    <span class="nav-group-title">حسابداری</span>
+                    <a class="@Active("/Cash")" aria-current="@Current("/Cash")" asp-page="/Cash/Index">صندوق‌ها</a>
+                    <a class="@Active("/Journal")" aria-current="@Current("/Journal")" asp-page="/Journal/Index">اسناد حسابداری</a>
+                    <a class="@Active("/Reports")" aria-current="@Current("/Reports")" asp-page="/Reports/Index">گزارش‌ها</a>
+                </div>
+                @if (User.IsInRole("Admin"))
+                {
+                    <div class="nav-group">
+                        <span class="nav-group-title">مدیریت</span>
+                        <a class="@Active("/Branches")" aria-current="@Current("/Branches")" asp-page="/Branches/Index">شعبه‌ها</a>
+                        <a class="@Active("/Users")" aria-current="@Current("/Users")" asp-page="/Users/Index">کاربران</a>
+                        <a class="@Active("/Roles")" aria-current="@Current("/Roles")" asp-page="/Roles/Index">نقش‌ها</a>
+                        <a class="@Active("/Accounts")" aria-current="@Current("/Accounts")" asp-page="/Accounts/Index">سرفصل حساب‌ها</a>
+                        <a class="@Active("/BankAccounts")" aria-current="@Current("/BankAccounts")" asp-page="/BankAccounts/Index">حساب‌های بانکی</a>
+                        <a class="@Active("/Backup")" aria-current="@Current("/Backup")" asp-page="/Backup/Index">پشتیبان و بازیابی</a>
+                    </div>
+                }
+            </nav>
+            <form method="post" asp-page="/Account/Logout" class="session">
+                <span class="who">
+                    <span>
+                        <strong>@User.Identity.Name</strong>
+                        <span class="role-badge">@(User.IsInRole("Admin") ? "مدیر سیستم" : "کاربر شعبه")</span>
+                    </span>
+                    @if (User.FindFirst("BranchName")?.Value is { Length: > 0 } branchName)
+                    {
+                        <span class="meta">شعبه‌ی اصلی: @branchName</span>
+                    }
+                </span>
+                <button type="submit">خروج</button>
+            </form>
+        </header>
+    }
+    <main id="main" class="container" tabindex="-1">
+        @RenderBody()
+    </main>
+</body>
+</html>

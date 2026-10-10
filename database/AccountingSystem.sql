@@ -1,0 +1,769 @@
+/*
+    AccountingSystem - مرجع ساختار کامل پایگاه داده (آخرین نسخه)
+    برای SQL Server 2019 (سطح سازگاری 150)
+
+    این فایل فقط مرجع و نصب دستی روی یک پایگاه داده‌ی تازه است.
+    برنامه‌ی وب و ویندوز پایگاه داده را خودشان از پوشه‌ی database/migrations می‌سازند و
+    هر بار که اجرا می‌شوند، نسخه‌ی آن را با نسخه‌ی برنامه مقایسه و نسخه‌های باقی‌مانده را اجرا می‌کنند.
+    هر تغییر ساختار باید هم در یک فایل مهاجرت جدید و هم در این فایل اعمال شود؛
+    تست Fresh_database_matches_the_install_script این دو را با هم مقایسه می‌کند.
+
+    نصب دستی (فقط روی بانک جدید):
+      - در SSMS با کاربری که دسترسی sysadmin دارد باز و Execute کنید، یا
+      - از خط فرمان:  sqlcmd -S localhost -E -b -f 65001 -i AccountingSystem.sql
+*/
+SET NOCOUNT ON;
+GO
+
+IF DB_ID(N'AccountingSystem') IS NULL
+    CREATE DATABASE [AccountingSystem];
+GO
+
+ALTER DATABASE [AccountingSystem] SET COMPATIBILITY_LEVEL = 150;
+GO
+
+USE [AccountingSystem];
+GO
+
+IF OBJECT_ID(N'dbo.Currencies', N'U') IS NOT NULL
+    THROW 50000, N'پایگاه داده‌ی AccountingSystem قبلاً ساخته شده است. این اسکریپت فقط برای نصب تازه است.', 1;
+GO
+
+-- ترتیب ثابت همه‌ی اسناد با زمان یکسان. با هر سند جدید مقدار بعدی گرفته می‌شود.
+CREATE SEQUENCE dbo.LedgerSeq AS BIGINT START WITH 1 INCREMENT BY 1;
+GO
+
+CREATE TABLE dbo.Branches
+(
+    Id            INT           NOT NULL IDENTITY(1,1),
+    Code          NVARCHAR(10)  NOT NULL,
+    Name          NVARCHAR(100) NOT NULL,
+    CreatedAt     DATETIME2(0)  NOT NULL CONSTRAINT DF_Branches_CreatedAt DEFAULT (SYSDATETIME()),
+    -- شمارنده‌ی تغییرات دفتر شعبه؛ هر ثبت یا ابطال آن را یک واحد بالا می‌برد (کنترل همزمانی).
+    LedgerVersion BIGINT        NOT NULL CONSTRAINT DF_Branches_LedgerVersion DEFAULT (0),
+    CONSTRAINT PK_Branches PRIMARY KEY (Id),
+    CONSTRAINT UQ_Branches_Code UNIQUE (Code),
+    CONSTRAINT CK_Branches_Code CHECK (LEN(Code) BETWEEN 1 AND 10)
+);
+GO
+
+CREATE TABLE dbo.Currencies
+(
+    Code          NCHAR(3)      NOT NULL,
+    Name          NVARCHAR(100) NOT NULL,
+    DecimalPlaces TINYINT       NOT NULL,
+    IsActive      BIT           NOT NULL CONSTRAINT DF_Currencies_IsActive DEFAULT (1),
+    CreatedAt     DATETIME2(0)  NOT NULL CONSTRAINT DF_Currencies_CreatedAt DEFAULT (SYSDATETIME()),
+    CONSTRAINT PK_Currencies PRIMARY KEY (Code),
+    CONSTRAINT CK_Currencies_DecimalPlaces CHECK (DecimalPlaces BETWEEN 0 AND 4)
+);
+GO
+
+-- مدیر (Admin) به همه‌ی شعبه‌ها دسترسی دارد و BranchId آن NULL است؛ کاربر صندوق حتماً شعبه دارد.
+CREATE TABLE dbo.Users
+(
+    Id           INT IDENTITY(1,1) NOT NULL,
+    Username     NVARCHAR(50)      NOT NULL,
+    FullName     NVARCHAR(100)     NOT NULL,
+    PasswordHash NVARCHAR(300)     NOT NULL,
+    Role         NVARCHAR(20)      NOT NULL,
+    BranchId     INT               NULL,
+    IsActive     BIT               NOT NULL CONSTRAINT DF_Users_IsActive DEFAULT (1),
+    CreatedAt    DATETIME2(0)      NOT NULL CONSTRAINT DF_Users_CreatedAt DEFAULT (SYSDATETIME()),
+    CONSTRAINT PK_Users PRIMARY KEY (Id),
+    CONSTRAINT UQ_Users_Username UNIQUE (Username),
+    CONSTRAINT CK_Users_Role CHECK (Role IN (N'Admin', N'Cashier')),
+    CONSTRAINT FK_Users_Branches FOREIGN KEY (BranchId) REFERENCES dbo.Branches (Id),
+    CONSTRAINT CK_Users_Branch CHECK (Role = N'Admin' OR BranchId IS NOT NULL)
+);
+GO
+
+-- مشتریان صرافی: فهرست مشترک همه‌ی شعبه‌ها. هر معامله به یک مشتری وصل است و نام/کد ملی آن را نیز نگه می‌دارد.
+-- CustomerCode ستون محاسباتی پایدار است: سیستم آن را از شناسه‌ی داخلی می‌سازد و هیچ نوشتنی (حتی SQL مستقیم) آن را تغییر نمی‌دهد.
+CREATE TABLE dbo.Customers
+(
+    Id            INT           IDENTITY(1,1) NOT NULL,
+    CustomerCode  AS ('C' + RIGHT('0000000000' + CONVERT(VARCHAR(11), [Id]), 10)) PERSISTED NOT NULL,
+    FullName      NVARCHAR(100) NOT NULL,
+    NationalCode  NVARCHAR(20)  NULL,
+    Phone         NVARCHAR(20)  NULL,
+    Mobile        NVARCHAR(20)  NULL,
+    Address       NVARCHAR(250) NULL,
+    City          NVARCHAR(60)  NULL,
+    Sheba1        NVARCHAR(26)  NULL,
+    Sheba2        NVARCHAR(26)  NULL,
+    CardNumber1   NVARCHAR(16)  NULL,
+    CardNumber2   NVARCHAR(16)  NULL,
+    Note          NVARCHAR(250) NULL,
+    CreatedBy     INT           NOT NULL,
+    CreatedAt     DATETIME2(0)  NOT NULL,
+    UpdatedBy     INT           NOT NULL,
+    UpdatedAt     DATETIME2(0)  NOT NULL,
+    CONSTRAINT PK_Customers PRIMARY KEY (Id),
+    CONSTRAINT UX_Customers_CustomerCode UNIQUE (CustomerCode),
+    CONSTRAINT FK_Customers_CreatedBy FOREIGN KEY (CreatedBy) REFERENCES dbo.Users (Id),
+    CONSTRAINT FK_Customers_UpdatedBy FOREIGN KEY (UpdatedBy) REFERENCES dbo.Users (Id),
+    CONSTRAINT CK_Customers_FullName CHECK (LEN(LTRIM(RTRIM(FullName))) >= 2),
+    CONSTRAINT CK_Customers_Sheba1 CHECK (Sheba1 IS NULL OR (LEN(Sheba1) = 26 AND LEFT(Sheba1, 2) = 'IR' AND SUBSTRING(Sheba1, 3, 24) NOT LIKE '%[^0-9]%')),
+    CONSTRAINT CK_Customers_Sheba2 CHECK (Sheba2 IS NULL OR (LEN(Sheba2) = 26 AND LEFT(Sheba2, 2) = 'IR' AND SUBSTRING(Sheba2, 3, 24) NOT LIKE '%[^0-9]%')),
+    CONSTRAINT CK_Customers_CardNumber1 CHECK (CardNumber1 IS NULL OR (LEN(CardNumber1) = 16 AND CardNumber1 NOT LIKE '%[^0-9]%')),
+    CONSTRAINT CK_Customers_CardNumber2 CHECK (CardNumber2 IS NULL OR (LEN(CardNumber2) = 16 AND CardNumber2 NOT LIKE '%[^0-9]%'))
+);
+CREATE UNIQUE INDEX UX_Customers_NationalCode ON dbo.Customers (NationalCode) WHERE NationalCode IS NOT NULL;
+GO
+
+CREATE TABLE dbo.Accounts
+(
+    Code        NVARCHAR(20)  NOT NULL,
+    Name        NVARCHAR(100) NOT NULL,
+    AccountType NVARCHAR(20)  NOT NULL,
+    Level       TINYINT       NOT NULL,
+    ParentCode  NVARCHAR(20)  NULL,
+    IsSystem    BIT           NOT NULL CONSTRAINT DF_Accounts_IsSystem DEFAULT (0),
+    IsActive    BIT           NOT NULL CONSTRAINT DF_Accounts_IsActive DEFAULT (1),
+    CONSTRAINT PK_Accounts PRIMARY KEY (Code),
+    CONSTRAINT FK_Accounts_Parent FOREIGN KEY (ParentCode) REFERENCES dbo.Accounts (Code),
+    CONSTRAINT CK_Accounts_Type CHECK (AccountType IN (N'Asset', N'Liability', N'Equity', N'Revenue', N'Expense')),
+    CONSTRAINT CK_Accounts_Level CHECK (Level BETWEEN 1 AND 4),
+    CONSTRAINT CK_Accounts_Parent CHECK ((Level = 1 AND ParentCode IS NULL) OR (Level > 1 AND ParentCode IS NOT NULL))
+);
+GO
+
+-- هر شعبه برای هر ارز یک صندوق جدا دارد.
+CREATE TABLE dbo.CashBoxes
+(
+    Id           INT IDENTITY(1,1) NOT NULL,
+    BranchId     INT               NOT NULL,
+    CurrencyCode NCHAR(3)          NOT NULL,
+    Name         NVARCHAR(100)     NOT NULL,
+    Balance      DECIMAL(19,4)     NOT NULL CONSTRAINT DF_CashBoxes_Balance DEFAULT (0),
+    UpdatedAt    DATETIME2(0)      NOT NULL CONSTRAINT DF_CashBoxes_UpdatedAt DEFAULT (SYSDATETIME()),
+    CONSTRAINT PK_CashBoxes PRIMARY KEY (Id),
+    CONSTRAINT UQ_CashBoxes_Branch_Currency UNIQUE (BranchId, CurrencyCode),
+    CONSTRAINT FK_CashBoxes_Branches FOREIGN KEY (BranchId) REFERENCES dbo.Branches (Id),
+    CONSTRAINT FK_CashBoxes_Currencies FOREIGN KEY (CurrencyCode) REFERENCES dbo.Currencies (Code),
+    CONSTRAINT CK_CashBoxes_Balance CHECK (Balance >= 0)
+);
+GO
+
+CREATE TABLE dbo.CashMovements
+(
+    Id           BIGINT IDENTITY(1,1) NOT NULL,
+    CashBoxId    INT                  NOT NULL,
+    Amount       DECIMAL(19,4)        NOT NULL,
+    BalanceAfter DECIMAL(19,4)        NOT NULL,
+    RefType      NVARCHAR(20)         NOT NULL,
+    RefId        BIGINT               NULL,
+    Description  NVARCHAR(250)        NULL,
+    OccurredAt   DATETIME2(0)         NOT NULL,
+    CreatedBy    INT                  NOT NULL,
+    CONSTRAINT PK_CashMovements PRIMARY KEY (Id),
+    CONSTRAINT FK_CashMovements_CashBoxes FOREIGN KEY (CashBoxId) REFERENCES dbo.CashBoxes (Id),
+    CONSTRAINT FK_CashMovements_Users FOREIGN KEY (CreatedBy) REFERENCES dbo.Users (Id),
+    CONSTRAINT CK_CashMovements_Amount CHECK (Amount <> 0),
+    CONSTRAINT CK_CashMovements_RefType CHECK (RefType IN (N'TRADE', N'OPENING', N'VOID', N'MANUAL'))
+);
+CREATE INDEX IX_CashMovements_CashBox_OccurredAt ON dbo.CashMovements (CashBoxId, OccurredAt);
+CREATE INDEX IX_CashMovements_CashBox_Id ON dbo.CashMovements (CashBoxId, Id) INCLUDE (RefType, RefId);
+GO
+
+-- بهای تمام‌شده‌ی موجودی هر ارز در هر شعبه. مقدار ارز همان موجودی صندوق ارز آن شعبه است.
+CREATE TABLE dbo.CurrencyInventory
+(
+    BranchId     INT           NOT NULL,
+    CurrencyCode NCHAR(3)      NOT NULL,
+    TotalCostIrr DECIMAL(19,4) NOT NULL CONSTRAINT DF_CurrencyInventory_Cost DEFAULT (0),
+    UpdatedAt    DATETIME2(0)  NOT NULL CONSTRAINT DF_CurrencyInventory_UpdatedAt DEFAULT (SYSDATETIME()),
+    CONSTRAINT PK_CurrencyInventory PRIMARY KEY (BranchId, CurrencyCode),
+    CONSTRAINT FK_CurrencyInventory_Branches FOREIGN KEY (BranchId) REFERENCES dbo.Branches (Id),
+    CONSTRAINT FK_CurrencyInventory_Currencies FOREIGN KEY (CurrencyCode) REFERENCES dbo.Currencies (Code),
+    CONSTRAINT CK_CurrencyInventory_Cost CHECK (TotalCostIrr >= 0)
+);
+GO
+
+-- نرخ‌ها برای هر شعبه جدا هستند؛ آخرین نرخ هر شعبه و ارز معتبر است.
+CREATE TABLE dbo.ExchangeRates
+(
+    Id           BIGINT IDENTITY(1,1) NOT NULL,
+    BranchId     INT                  NOT NULL,
+    CurrencyCode NCHAR(3)             NOT NULL,
+    BuyRateIrr   DECIMAL(19,4)        NOT NULL,
+    SellRateIrr  DECIMAL(19,4)        NOT NULL,
+    CreatedAt    DATETIME2(0)         NOT NULL,
+    CreatedBy    INT                  NOT NULL,
+    CONSTRAINT PK_ExchangeRates PRIMARY KEY (Id),
+    CONSTRAINT FK_ExchangeRates_Branches FOREIGN KEY (BranchId) REFERENCES dbo.Branches (Id),
+    CONSTRAINT FK_ExchangeRates_Currencies FOREIGN KEY (CurrencyCode) REFERENCES dbo.Currencies (Code),
+    CONSTRAINT FK_ExchangeRates_Users FOREIGN KEY (CreatedBy) REFERENCES dbo.Users (Id),
+    CONSTRAINT CK_ExchangeRates_Buy CHECK (BuyRateIrr > 0),
+    CONSTRAINT CK_ExchangeRates_Spread CHECK (SellRateIrr >= BuyRateIrr)
+);
+CREATE INDEX IX_ExchangeRates_Branch_Currency_Id ON dbo.ExchangeRates (BranchId, CurrencyCode, Id);
+GO
+
+-- معاملات. کارمزد (FeeIrr) جدا از مبلغ ریالی ثبت می‌شود. ابطال با ستون‌های IsVoided و ... ثبت می‌شود و سطر حذف نمی‌شود.
+CREATE TABLE dbo.CurrencyTransactions
+(
+    Id           BIGINT IDENTITY(1,1) NOT NULL,
+    BranchId     INT                  NOT NULL,
+    TradeType    NVARCHAR(10)         NOT NULL,
+    CurrencyCode NCHAR(3)             NOT NULL,
+    Amount       DECIMAL(19,4)        NOT NULL,
+    Rate         DECIMAL(19,4)        NOT NULL,
+    IrrAmount    DECIMAL(19,4)        NOT NULL,
+    CostIrr      DECIMAL(19,4)        NOT NULL,
+    ProfitIrr    DECIMAL(19,4)        NOT NULL,
+    FeeIrr       DECIMAL(19,4)        NOT NULL CONSTRAINT DF_CurrencyTransactions_Fee DEFAULT (0),
+    CustomerId   INT                  NOT NULL CONSTRAINT FK_CurrencyTransactions_Customers REFERENCES dbo.Customers (Id),
+    CustomerName NVARCHAR(100)        NULL,
+    NationalCode NVARCHAR(20)         NULL,
+    Note         NVARCHAR(250)        NULL,
+    OccurredAt   DATETIME2(0)         NOT NULL,
+    CreatedBy    INT                  NOT NULL,
+    IsVoided     BIT                  NOT NULL CONSTRAINT DF_CurrencyTransactions_IsVoided DEFAULT (0),
+    VoidedAt     DATETIME2(0)         NULL,
+    VoidedBy     INT                  NULL,
+    VoidReason   NVARCHAR(250)        NULL,
+    Seq          BIGINT               NOT NULL CONSTRAINT DF_CurrencyTransactions_Seq DEFAULT (NEXT VALUE FOR dbo.LedgerSeq),
+    -- معامله‌ای که این معامله نسخه‌ی اصلاحی آن است (ویرایش مالی با ابطال نسخه‌ی قبلی انجام می‌شود).
+    ReplacesId   BIGINT               NULL,
+    SettlementCurrencyCode NCHAR(3) NULL,
+    SettlementMode NVARCHAR(12) NOT NULL CONSTRAINT DF_CurrencyTransactions_SettlementMode DEFAULT (N'DIRECT'),
+    RateMode NVARCHAR(12) NOT NULL CONSTRAINT DF_CurrencyTransactions_RateMode DEFAULT (N'DERIVED'),
+    CrossRate DECIMAL(19,8) NOT NULL CONSTRAINT DF_CurrencyTransactions_CrossRate DEFAULT (0),
+    CustomerOffsetIrr DECIMAL(19,4) NOT NULL CONSTRAINT DF_CurrencyTransactions_CustomerOffset DEFAULT (0),
+    CONSTRAINT PK_CurrencyTransactions PRIMARY KEY (Id),
+    CONSTRAINT FK_CurrencyTransactions_SettlementCurrency FOREIGN KEY (SettlementCurrencyCode) REFERENCES dbo.Currencies (Code),
+    CONSTRAINT FK_CurrencyTransactions_Replaces FOREIGN KEY (ReplacesId) REFERENCES dbo.CurrencyTransactions (Id),
+    CONSTRAINT FK_CurrencyTransactions_Branches FOREIGN KEY (BranchId) REFERENCES dbo.Branches (Id),
+    CONSTRAINT FK_CurrencyTransactions_Currencies FOREIGN KEY (CurrencyCode) REFERENCES dbo.Currencies (Code),
+    CONSTRAINT FK_CurrencyTransactions_Users FOREIGN KEY (CreatedBy) REFERENCES dbo.Users (Id),
+    CONSTRAINT FK_CurrencyTransactions_VoidedBy FOREIGN KEY (VoidedBy) REFERENCES dbo.Users (Id),
+    CONSTRAINT CK_CurrencyTransactions_Type CHECK (TradeType IN (N'BUY', N'SELL')),
+    CONSTRAINT CK_CurrencyTransactions_Amount CHECK (Amount > 0),
+    CONSTRAINT CK_CurrencyTransactions_Rate CHECK (Rate > 0),
+    CONSTRAINT CK_CurrencyTransactions_Irr CHECK (IrrAmount > 0 AND CostIrr >= 0),
+    CONSTRAINT CK_CurrencyTransactions_Fee CHECK (FeeIrr >= 0 AND (TradeType = N'SELL' OR FeeIrr < IrrAmount)),
+    CONSTRAINT CK_CurrencyTransactions_SettlementMode CHECK (SettlementMode IN (N'DIRECT', N'SPLIT', N'ACCOUNT')),
+    CONSTRAINT CK_CurrencyTransactions_RateMode CHECK (RateMode IN (N'DIRECT', N'DERIVED')),
+    CONSTRAINT CK_CurrencyTransactions_CrossRate CHECK (CrossRate >= 0 AND CustomerOffsetIrr >= 0),
+    CONSTRAINT CK_CurrencyTransactions_Void CHECK (
+        (IsVoided = 0 AND VoidedAt IS NULL AND VoidedBy IS NULL AND VoidReason IS NULL)
+        OR (IsVoided = 1 AND VoidedAt IS NOT NULL AND VoidedBy IS NOT NULL AND VoidReason IS NOT NULL))
+);
+CREATE INDEX IX_CurrencyTransactions_Branch_OccurredAt ON dbo.CurrencyTransactions (BranchId, OccurredAt);
+GO
+
+-- جزئیات دریافت/پرداخت برای تبادل مستقیم، تسویه‌ی چندبخشی و گردش حساب مشتری.
+CREATE TABLE dbo.CurrencyTransactionSettlements
+(
+    TradeId       BIGINT         NOT NULL,
+    LineNumber    INT            NOT NULL,
+    Direction     NVARCHAR(8)    NOT NULL,
+    CurrencyCode  NCHAR(3)       NOT NULL,
+    Amount        DECIMAL(19,4)  NOT NULL,
+    RateIrr       DECIMAL(19,4)  NOT NULL,
+    IrrAmount     DECIMAL(19,4)  NOT NULL,
+    CostIrr       DECIMAL(19,4)  NOT NULL CONSTRAINT DF_TradeSettlements_Cost DEFAULT (0),
+    ProfitIrr     DECIMAL(19,4)  NOT NULL CONSTRAINT DF_TradeSettlements_Profit DEFAULT (0),
+    CONSTRAINT PK_CurrencyTransactionSettlements PRIMARY KEY (TradeId, LineNumber),
+    CONSTRAINT FK_TradeSettlements_Trade FOREIGN KEY (TradeId) REFERENCES dbo.CurrencyTransactions (Id),
+    CONSTRAINT FK_TradeSettlements_Currency FOREIGN KEY (CurrencyCode) REFERENCES dbo.Currencies (Code),
+    CONSTRAINT CK_TradeSettlements_Direction CHECK (Direction IN (N'PAY', N'RECEIVE')),
+    CONSTRAINT CK_TradeSettlements_Amount CHECK (Amount > 0 AND RateIrr > 0 AND IrrAmount > 0 AND CostIrr >= 0)
+);
+CREATE INDEX IX_TradeSettlements_Currency ON dbo.CurrencyTransactionSettlements (CurrencyCode, TradeId);
+GO
+
+-- موجودی افتتاحیه‌ی ریال یا ارز هر شعبه. ابطال و ویرایش مثل معاملات با بازمحاسبه‌ی تاریخچه انجام می‌شود.
+CREATE TABLE dbo.OpeningBalances
+(
+    Id           BIGINT IDENTITY(1,1) NOT NULL,
+    BranchId     INT                  NOT NULL,
+    CurrencyCode NCHAR(3)             NOT NULL,
+    Quantity     DECIMAL(19,4)        NOT NULL,
+    RateIrr      DECIMAL(19,4)        NULL,
+    CostIrr      DECIMAL(19,4)        NOT NULL,
+    OccurredAt   DATETIME2(0)         NOT NULL,
+    Seq          BIGINT               NOT NULL CONSTRAINT DF_OpeningBalances_Seq DEFAULT (NEXT VALUE FOR dbo.LedgerSeq),
+    CreatedBy    INT                  NOT NULL,
+    CreatedAt    DATETIME2(0)         NOT NULL CONSTRAINT DF_OpeningBalances_CreatedAt DEFAULT (SYSDATETIME()),
+    IsVoided     BIT                  NOT NULL CONSTRAINT DF_OpeningBalances_IsVoided DEFAULT (0),
+    VoidedAt     DATETIME2(0)         NULL,
+    VoidedBy     INT                  NULL,
+    VoidReason   NVARCHAR(250)        NULL,
+    ReplacesId   BIGINT               NULL,
+    CONSTRAINT PK_OpeningBalances PRIMARY KEY (Id),
+    CONSTRAINT FK_OpeningBalances_Branches FOREIGN KEY (BranchId) REFERENCES dbo.Branches (Id),
+    CONSTRAINT FK_OpeningBalances_Currencies FOREIGN KEY (CurrencyCode) REFERENCES dbo.Currencies (Code),
+    CONSTRAINT FK_OpeningBalances_CreatedBy FOREIGN KEY (CreatedBy) REFERENCES dbo.Users (Id),
+    CONSTRAINT FK_OpeningBalances_VoidedBy FOREIGN KEY (VoidedBy) REFERENCES dbo.Users (Id),
+    CONSTRAINT FK_OpeningBalances_Replaces FOREIGN KEY (ReplacesId) REFERENCES dbo.OpeningBalances (Id),
+    CONSTRAINT CK_OpeningBalances_Quantity CHECK (Quantity > 0),
+    CONSTRAINT CK_OpeningBalances_Cost CHECK (CostIrr > 0),
+    CONSTRAINT CK_OpeningBalances_Void CHECK (
+        (IsVoided = 0 AND VoidedAt IS NULL AND VoidedBy IS NULL AND VoidReason IS NULL)
+        OR (IsVoided = 1 AND VoidedAt IS NOT NULL AND VoidedBy IS NOT NULL AND VoidReason IS NOT NULL))
+);
+CREATE INDEX IX_OpeningBalances_Branch_OccurredAt ON dbo.OpeningBalances (BranchId, OccurredAt);
+GO
+
+CREATE TABLE dbo.JournalEntries
+(
+    Id          BIGINT IDENTITY(1,1) NOT NULL,
+    BranchId    INT                  NOT NULL,
+    OccurredAt  DATETIME2(0)         NOT NULL,
+    Description NVARCHAR(250)        NOT NULL,
+    SourceType  NVARCHAR(20)         NOT NULL,
+    SourceId    BIGINT               NULL,
+    CreatedBy   INT                  NOT NULL,
+    CreatedAt   DATETIME2(0)         NOT NULL CONSTRAINT DF_JournalEntries_CreatedAt DEFAULT (SYSDATETIME()),
+    Seq         BIGINT               NOT NULL CONSTRAINT DF_JournalEntries_Seq DEFAULT (NEXT VALUE FOR dbo.LedgerSeq),
+    -- سندی که باطل شده است (معامله، افتتاحیه یا سند دستی) یا سندی که این سند جایگزین آن است.
+    IsVoided    BIT                  NOT NULL CONSTRAINT DF_JournalEntries_IsVoided DEFAULT (0),
+    ReplacesId  BIGINT               NULL,
+    CONSTRAINT PK_JournalEntries PRIMARY KEY (Id),
+    CONSTRAINT FK_JournalEntries_Branches FOREIGN KEY (BranchId) REFERENCES dbo.Branches (Id),
+    CONSTRAINT FK_JournalEntries_Users FOREIGN KEY (CreatedBy) REFERENCES dbo.Users (Id),
+    CONSTRAINT FK_JournalEntries_Replaces FOREIGN KEY (ReplacesId) REFERENCES dbo.JournalEntries (Id),
+    CONSTRAINT CK_JournalEntries_Source CHECK (SourceType IN (N'TRADE', N'OPENING', N'VOID', N'ADJUST', N'MANUAL'))
+);
+CREATE INDEX IX_JournalEntries_Branch_OccurredAt ON dbo.JournalEntries (BranchId, OccurredAt);
+GO
+
+-- سابقه‌ی همه‌ی ثبت‌ها، ابطال‌ها و ویرایش‌ها (چه کسی، چه زمانی، چه تغییری).
+CREATE TABLE dbo.AuditLog
+(
+    Id         BIGINT IDENTITY(1,1) NOT NULL,
+    OccurredAt DATETIME2(0)         NOT NULL,
+    UserId     INT                  NOT NULL,
+    Action     NVARCHAR(50)         NOT NULL,
+    EntityType NVARCHAR(20)         NOT NULL,
+    EntityId   BIGINT               NULL,
+    Details    NVARCHAR(MAX)        NULL,
+    CONSTRAINT PK_AuditLog PRIMARY KEY (Id),
+    CONSTRAINT FK_AuditLog_Users FOREIGN KEY (UserId) REFERENCES dbo.Users (Id)
+);
+CREATE INDEX IX_AuditLog_Entity ON dbo.AuditLog (EntityType, EntityId);
+GO
+
+-- نقش‌های دسترسی. هر شعبه نقش‌های خودش را دارد؛ سه نقش پیش‌فرض برای هر شعبه ساخته می‌شود.
+CREATE TABLE dbo.AccessRoles
+(
+    Id        INT IDENTITY(1,1) NOT NULL,
+    BranchId  INT               NOT NULL,
+    Name      NVARCHAR(60)      NOT NULL,
+    CreatedBy INT               NULL,
+    CreatedAt DATETIME2(0)      NOT NULL CONSTRAINT DF_AccessRoles_CreatedAt DEFAULT (SYSDATETIME()),
+    CONSTRAINT PK_AccessRoles PRIMARY KEY (Id),
+    CONSTRAINT UQ_AccessRoles_Branch_Name UNIQUE (BranchId, Name),
+    CONSTRAINT UQ_AccessRoles_Id_Branch UNIQUE (Id, BranchId),
+    CONSTRAINT FK_AccessRoles_Branches FOREIGN KEY (BranchId) REFERENCES dbo.Branches (Id),
+    CONSTRAINT FK_AccessRoles_CreatedBy FOREIGN KEY (CreatedBy) REFERENCES dbo.Users (Id),
+    CONSTRAINT CK_AccessRoles_Name CHECK (LEN(LTRIM(RTRIM(Name))) >= 2)
+);
+GO
+
+-- کارهایی که یک نقش مجاز است انجام دهد (مجموعه‌ی کارهای نقش؛ هیچ استثنای جدا برای کاربر وجود ندارد).
+CREATE TABLE dbo.AccessRolePermissions
+(
+    RoleId     INT          NOT NULL,
+    Permission NVARCHAR(40) NOT NULL,
+    CONSTRAINT PK_AccessRolePermissions PRIMARY KEY (RoleId, Permission),
+    CONSTRAINT FK_AccessRolePermissions_Roles FOREIGN KEY (RoleId) REFERENCES dbo.AccessRoles (Id),
+    CONSTRAINT CK_AccessRolePermissions_Permission CHECK (Permission IN (
+        N'TRADE_RECORD', N'TRADE_EDIT', N'TRADE_VOID',
+        N'OPENING_CREATE', N'OPENING_EDIT', N'OPENING_VOID',
+        N'MANUAL_CREATE', N'MANUAL_EDIT', N'MANUAL_VOID',
+        N'RATE_SET'))
+);
+GO
+
+-- عضویت کاربر در هر شعبه با یک نقش. کاربر می‌تواند در چند شعبه عضو باشد و در هر شعبه نقش متفاوتی داشته باشد.
+-- شعبه‌ی اصلی کاربر (Users.BranchId) باید یکی از همین عضویت‌ها باشد؛ این را برنامه کنترل می‌کند.
+CREATE TABLE dbo.UserBranchRoles
+(
+    UserId    INT          NOT NULL,
+    BranchId  INT          NOT NULL,
+    RoleId    INT          NOT NULL,
+    GrantedBy INT          NOT NULL,
+    GrantedAt DATETIME2(0) NOT NULL CONSTRAINT DF_UserBranchRoles_GrantedAt DEFAULT (SYSDATETIME()),
+    CONSTRAINT PK_UserBranchRoles PRIMARY KEY (UserId, BranchId),
+    CONSTRAINT FK_UserBranchRoles_Users FOREIGN KEY (UserId) REFERENCES dbo.Users (Id),
+    CONSTRAINT FK_UserBranchRoles_Branches FOREIGN KEY (BranchId) REFERENCES dbo.Branches (Id),
+    CONSTRAINT FK_UserBranchRoles_GrantedBy FOREIGN KEY (GrantedBy) REFERENCES dbo.Users (Id),
+    CONSTRAINT FK_UserBranchRoles_Role_Branch FOREIGN KEY (RoleId, BranchId) REFERENCES dbo.AccessRoles (Id, BranchId)
+);
+CREATE INDEX IX_UserBranchRoles_Role ON dbo.UserBranchRoles (RoleId);
+GO
+
+CREATE TABLE dbo.JournalLines
+(
+    Id             BIGINT IDENTITY(1,1) NOT NULL,
+    JournalEntryId BIGINT               NOT NULL,
+    LineNumber     INT                  NOT NULL,
+    AccountCode    NVARCHAR(20)         NOT NULL,
+    Debit          DECIMAL(19,4)        NOT NULL,
+    Credit         DECIMAL(19,4)        NOT NULL,
+    CustomerId     INT                  NULL,
+    CONSTRAINT PK_JournalLines PRIMARY KEY (Id),
+    CONSTRAINT UQ_JournalLines_EntryLine UNIQUE (JournalEntryId, LineNumber),
+    CONSTRAINT FK_JournalLines_JournalEntries FOREIGN KEY (JournalEntryId) REFERENCES dbo.JournalEntries (Id),
+    CONSTRAINT FK_JournalLines_Accounts FOREIGN KEY (AccountCode) REFERENCES dbo.Accounts (Code),
+    CONSTRAINT FK_JournalLines_Customers FOREIGN KEY (CustomerId) REFERENCES dbo.Customers (Id),
+    CONSTRAINT CK_JournalLines_OneSide CHECK ((Debit > 0 AND Credit = 0) OR (Debit = 0 AND Credit > 0)),
+    CONSTRAINT CK_JournalLines_CustomerAccount CHECK (CustomerId IS NULL OR AccountCode IN (N'1201', N'2101'))
+);
+CREATE INDEX IX_JournalLines_Customer ON dbo.JournalLines (CustomerId, AccountCode, JournalEntryId) INCLUDE (Debit, Credit) WHERE CustomerId IS NOT NULL;
+GO
+
+-- داده‌های اولیه
+INSERT INTO dbo.Branches (Code, Name) VALUES (N'MAIN', N'شعبه‌ی مرکزی');
+GO
+
+-- نقش‌های پیش‌فرض شعبه‌ی MAIN (همان فهرست RolePresets در برنامه).
+DECLARE @MainBranchId INT = (SELECT Id FROM dbo.Branches WHERE Code = N'MAIN');
+INSERT INTO dbo.AccessRoles (BranchId, Name) VALUES
+    (@MainBranchId, N'حسابدار'),
+    (@MainBranchId, N'مدیر شعبه'),
+    (@MainBranchId, N'کاربر صندوق');
+INSERT INTO dbo.AccessRolePermissions (RoleId, Permission)
+SELECT r.Id, p.Permission
+FROM dbo.AccessRoles r
+JOIN (VALUES
+    (N'حسابدار', N'TRADE_EDIT'), (N'حسابدار', N'TRADE_VOID'),
+    (N'حسابدار', N'OPENING_EDIT'), (N'حسابدار', N'OPENING_VOID'),
+    (N'حسابدار', N'MANUAL_CREATE'), (N'حسابدار', N'MANUAL_EDIT'), (N'حسابدار', N'MANUAL_VOID'),
+    (N'مدیر شعبه', N'TRADE_RECORD'), (N'مدیر شعبه', N'TRADE_EDIT'), (N'مدیر شعبه', N'TRADE_VOID'),
+    (N'مدیر شعبه', N'OPENING_CREATE'), (N'مدیر شعبه', N'OPENING_EDIT'), (N'مدیر شعبه', N'OPENING_VOID'),
+    (N'مدیر شعبه', N'MANUAL_CREATE'), (N'مدیر شعبه', N'MANUAL_EDIT'), (N'مدیر شعبه', N'MANUAL_VOID'),
+    (N'مدیر شعبه', N'RATE_SET'),
+    (N'کاربر صندوق', N'TRADE_RECORD')
+) AS p (RoleName, Permission) ON p.RoleName = r.Name
+WHERE r.BranchId = @MainBranchId;
+GO
+
+INSERT INTO dbo.Currencies (Code, Name, DecimalPlaces) VALUES
+(N'IRR', N'ریال ایران', 0),
+(N'USD', N'دلار آمریکا', 2),
+(N'EUR', N'یورو', 2),
+(N'GBP', N'پوند استرلینگ', 2),
+(N'AED', N'درهم امارات', 2),
+(N'TRY', N'لیر ترکیه', 2);
+GO
+
+-- سرفصل چهارسطحی: گروه (۱) ← کل (۲) ← معین (۳) ← تفصیلی (۴). نوع حساب از گروه به زیرمجموعه‌ها به ارث می‌رسد.
+-- حساب‌های IsSystem=1 پایه‌ی موتور معاملات و سندهای خودکارند: کد، پدر، نوع و وضعیت آن‌ها قابل تغییر نیست؛ فقط نام قابل ویرایش است.
+INSERT INTO dbo.Accounts (Code, Name, AccountType, Level, ParentCode, IsSystem) VALUES
+(N'1',          N'دارایی‌ها',                       N'Asset',   1, NULL,     0),
+(N'2',          N'بدهی‌ها',                          N'Liability', 1, NULL,   1),
+(N'10',         N'دارایی‌های نقدی',                 N'Asset',   2, N'1',     0),
+(N'1001',       N'صندوق ریال',                      N'Asset',   3, N'10',    1),
+(N'11',         N'دارایی‌های ارزی',                 N'Asset',   2, N'1',     0),
+(N'12',         N'مطالبات از مشتریان',               N'Asset',   2, N'1',     1),
+(N'1201',       N'حساب دریافتنی مشتریان',            N'Asset',   3, N'12',    1),
+(N'21',         N'بدهی به مشتریان',                  N'Liability', 2, N'2',  1),
+(N'2101',       N'حساب پرداختنی مشتریان',           N'Liability', 3, N'21', 1),
+(N'1101',       N'موجودی ارز به تفکیک ارز',         N'Asset',   3, N'11',    0),
+(N'1101-USD',   N'موجودی ارز - دلار آمریکا',        N'Asset',   4, N'1101',  1),
+(N'1101-EUR',   N'موجودی ارز - یورو',               N'Asset',   4, N'1101',  1),
+(N'1101-GBP',   N'موجودی ارز - پوند استرلینگ',      N'Asset',   4, N'1101',  1),
+(N'1101-AED',   N'موجودی ارز - درهم امارات',        N'Asset',   4, N'1101',  1),
+(N'1101-TRY',   N'موجودی ارز - لیر ترکیه',          N'Asset',   4, N'1101',  1),
+(N'3',          N'سرمایه',                          N'Equity',  1, NULL,     0),
+(N'30',         N'سرمایه‌ی پایه',                    N'Equity',  2, N'3',     0),
+(N'3001',       N'سرمایه افتتاحیه',                 N'Equity',  3, N'30',    1),
+(N'4',          N'درآمدها',                         N'Revenue', 1, NULL,     0),
+(N'40',         N'درآمد معاملات ارزی',              N'Revenue', 2, N'4',     0),
+(N'4001',       N'سود معاملات ارزی',                N'Revenue', 3, N'40',    1),
+(N'41',         N'درآمد کارمزد',                    N'Revenue', 2, N'4',     0),
+(N'4101',       N'درآمد کارمزد معاملات',            N'Revenue', 3, N'41',    1),
+(N'5',          N'زیان‌ها',                         N'Expense', 1, NULL,     0),
+(N'50',         N'زیان‌های معاملات ارزی',           N'Expense', 2, N'5',     0),
+(N'5001',       N'زیان معاملات ارزی',               N'Expense', 3, N'50',    1),
+(N'6',          N'هزینه‌های عملیاتی',               N'Expense', 1, NULL,     0),
+(N'60',         N'هزینه‌های جاری',                  N'Expense', 2, N'6',     0),
+(N'6001',       N'هزینه‌های اداری و جاری',          N'Expense', 3, N'60',    0),
+(N'6002',       N'هزینه‌ی اجاره',                   N'Expense', 3, N'60',    0),
+(N'6003',       N'سایر هزینه‌ها',                   N'Expense', 3, N'60',    0);
+GO
+
+INSERT INTO dbo.CashBoxes (BranchId, CurrencyCode, Name)
+SELECT b.Id, c.Code, N'صندوق ' + c.Name FROM dbo.Branches b CROSS JOIN dbo.Currencies c;
+GO
+
+INSERT INTO dbo.CurrencyInventory (BranchId, CurrencyCode)
+SELECT b.Id, c.Code FROM dbo.Branches b CROSS JOIN dbo.Currencies c WHERE c.Code <> N'IRR';
+GO
+-- 0004 - رسید دریافت و پرداخت مستقل از معامله، با ثبت دوطرفه روی صندوق و حساب مشتری
+GO
+
+CREATE TABLE dbo.CashTransactions
+(
+    Id           BIGINT         NOT NULL IDENTITY(1,1),
+    BranchId     INT            NOT NULL,
+    Direction    NVARCHAR(8)    NOT NULL,
+    CustomerId   INT            NOT NULL,
+    CurrencyCode NCHAR(3)       NOT NULL,
+    Amount       DECIMAL(19,4)  NOT NULL,
+    RateMode     NVARCHAR(12)   NOT NULL,
+    RateIrr      DECIMAL(19,4)  NOT NULL,
+    IrrAmount    DECIMAL(19,4)  NOT NULL,
+    CostIrr      DECIMAL(19,4)  NOT NULL CONSTRAINT DF_CashTransactions_CostIrr DEFAULT (0),
+    ProfitIrr    DECIMAL(19,4)  NOT NULL CONSTRAINT DF_CashTransactions_ProfitIrr DEFAULT (0),
+    Note         NVARCHAR(250)  NULL,
+    OccurredAt   DATETIME2(0)   NOT NULL,
+    CreatedBy    INT            NOT NULL,
+    CreatedAt    DATETIME2(0)   NOT NULL CONSTRAINT DF_CashTransactions_CreatedAt DEFAULT (SYSDATETIME()),
+    IsVoided     BIT            NOT NULL CONSTRAINT DF_CashTransactions_IsVoided DEFAULT (0),
+    VoidedAt     DATETIME2(0)   NULL,
+    VoidedBy     INT            NULL,
+    VoidReason   NVARCHAR(250)  NULL,
+    Seq          BIGINT         NOT NULL CONSTRAINT DF_CashTransactions_Seq DEFAULT (NEXT VALUE FOR dbo.LedgerSeq),
+    ReplacesId   BIGINT         NULL,
+    CONSTRAINT PK_CashTransactions PRIMARY KEY (Id),
+    CONSTRAINT FK_CashTransactions_Branches FOREIGN KEY (BranchId) REFERENCES dbo.Branches (Id),
+    CONSTRAINT FK_CashTransactions_Customers FOREIGN KEY (CustomerId) REFERENCES dbo.Customers (Id),
+    CONSTRAINT FK_CashTransactions_Currencies FOREIGN KEY (CurrencyCode) REFERENCES dbo.Currencies (Code),
+    CONSTRAINT FK_CashTransactions_CreatedBy FOREIGN KEY (CreatedBy) REFERENCES dbo.Users (Id),
+    CONSTRAINT FK_CashTransactions_VoidedBy FOREIGN KEY (VoidedBy) REFERENCES dbo.Users (Id),
+    CONSTRAINT FK_CashTransactions_Replaces FOREIGN KEY (ReplacesId) REFERENCES dbo.CashTransactions (Id),
+    CONSTRAINT CK_CashTransactions_Direction CHECK (Direction IN (N'RECEIVE', N'PAY')),
+    CONSTRAINT CK_CashTransactions_RateMode CHECK (RateMode IN (N'DIRECT', N'DERIVED')),
+    CONSTRAINT CK_CashTransactions_Amount CHECK (Amount > 0 AND RateIrr > 0 AND IrrAmount > 0 AND CostIrr >= 0),
+    CONSTRAINT CK_CashTransactions_Rate CHECK (CurrencyCode <> N'IRR' OR (RateIrr = 1 AND RateMode = N'DERIVED')),
+    CONSTRAINT CK_CashTransactions_Void CHECK
+    (
+        (IsVoided = 0 AND VoidedAt IS NULL AND VoidedBy IS NULL AND VoidReason IS NULL)
+        OR (IsVoided = 1 AND VoidedAt IS NOT NULL AND VoidedBy IS NOT NULL AND VoidReason IS NOT NULL)
+    )
+);
+CREATE INDEX IX_CashTransactions_Branch_OccurredAt ON dbo.CashTransactions (BranchId, OccurredAt, Id);
+CREATE INDEX IX_CashTransactions_Customer_OccurredAt ON dbo.CashTransactions (CustomerId, OccurredAt, Id);
+GO
+
+-- سندها و حرکت‌های صندوق جدید باید در محدودیت‌های همان جداول پذیرفته شوند.
+ALTER TABLE dbo.JournalEntries DROP CONSTRAINT CK_JournalEntries_Source;
+ALTER TABLE dbo.JournalEntries ADD CONSTRAINT CK_JournalEntries_Source CHECK
+    (SourceType IN (N'TRADE', N'OPENING', N'VOID', N'ADJUST', N'MANUAL', N'CASH_RECEIPT', N'CASH_PAYMENT', N'CASH_ADJUST'));
+ALTER TABLE dbo.CashMovements DROP CONSTRAINT CK_CashMovements_RefType;
+ALTER TABLE dbo.CashMovements ADD CONSTRAINT CK_CashMovements_RefType CHECK
+    (RefType IN (N'TRADE', N'OPENING', N'VOID', N'MANUAL', N'CASH_TRANSACTION'));
+GO
+
+-- نقش‌های پیش‌فرض موجود، وظایف تازه را می‌گیرند؛ نقش‌های سفارشی بدون تغییر می‌مانند.
+ALTER TABLE dbo.AccessRolePermissions DROP CONSTRAINT CK_AccessRolePermissions_Permission;
+ALTER TABLE dbo.AccessRolePermissions ADD CONSTRAINT CK_AccessRolePermissions_Permission CHECK (Permission IN
+(
+    N'TRADE_RECORD', N'TRADE_EDIT', N'TRADE_VOID',
+    N'OPENING_CREATE', N'OPENING_EDIT', N'OPENING_VOID',
+    N'MANUAL_CREATE', N'MANUAL_EDIT', N'MANUAL_VOID',
+    N'RATE_SET',
+    N'CASH_TRANSACTION_CREATE', N'CASH_TRANSACTION_EDIT', N'CASH_TRANSACTION_VOID'
+));
+GO
+
+INSERT INTO dbo.AccessRolePermissions (RoleId, Permission)
+SELECT r.Id, p.Permission
+FROM dbo.AccessRoles r
+JOIN (VALUES
+    (N'حسابدار', N'CASH_TRANSACTION_CREATE'),
+    (N'حسابدار', N'CASH_TRANSACTION_EDIT'),
+    (N'حسابدار', N'CASH_TRANSACTION_VOID'),
+    (N'مدیر شعبه', N'CASH_TRANSACTION_CREATE'),
+    (N'مدیر شعبه', N'CASH_TRANSACTION_EDIT'),
+    (N'مدیر شعبه', N'CASH_TRANSACTION_VOID'),
+    (N'کاربر صندوق', N'CASH_TRANSACTION_CREATE')
+) AS p (RoleName, Permission) ON p.RoleName = r.Name
+WHERE NOT EXISTS
+(
+    SELECT 1 FROM dbo.AccessRolePermissions existing
+    WHERE existing.RoleId = r.Id AND existing.Permission = p.Permission
+);
+GO
+-- 0005 - مانده‌ی مشتری به تفکیک ارز برای دریافت/پرداخت و حفظ بدهی‌های تاریخی معاملات
+GO
+
+ALTER TABLE dbo.CashTransactions
+    ADD BalanceCurrencyCode NCHAR(3) NULL,
+        BalanceAmount DECIMAL(19,4) NULL;
+GO
+
+-- اسناد قدیمی، مانده را در همان ارز صندوق ثبت می‌کردند.
+UPDATE dbo.CashTransactions
+SET BalanceCurrencyCode = CurrencyCode,
+    BalanceAmount = Amount;
+GO
+
+ALTER TABLE dbo.CashTransactions
+    ALTER COLUMN BalanceCurrencyCode NCHAR(3) NOT NULL;
+ALTER TABLE dbo.CashTransactions
+    ALTER COLUMN BalanceAmount DECIMAL(19,4) NOT NULL;
+ALTER TABLE dbo.CashTransactions
+    ADD CONSTRAINT FK_CashTransactions_BalanceCurrencies FOREIGN KEY (BalanceCurrencyCode) REFERENCES dbo.Currencies (Code),
+        CONSTRAINT CK_CashTransactions_BalanceAmount CHECK (BalanceAmount > 0);
+GO
+
+-- سطرهای مشتری در دفتر، علاوه بر ارزش ریالی، تغییر مانده به ارز حساب را نگه می‌دارند.
+ALTER TABLE dbo.JournalLines
+    ADD CustomerBalanceCurrencyCode NCHAR(3) NULL,
+        CustomerBalanceDelta DECIMAL(19,4) NULL;
+GO
+
+-- بدهی‌های قدیمی معاملات در ریال ثبت شده‌اند و به همان شکل در حساب ریالی مشتری باقی می‌مانند.
+UPDATE dbo.JournalLines
+SET CustomerBalanceCurrencyCode = N'IRR',
+    CustomerBalanceDelta = Debit - Credit
+WHERE CustomerId IS NOT NULL
+  AND AccountCode IN (N'1201', N'2101');
+GO
+
+-- دریافت/پرداخت‌های نسخه‌ی ۴ به ارز انتخاب‌شده در صندوق منتقل می‌شوند؛ مقدار ریالی سابق مبنای مانده‌ی ارزی نیست.
+UPDATE l
+SET l.CustomerBalanceCurrencyCode = t.CurrencyCode,
+    l.CustomerBalanceDelta = CASE WHEN t.Direction = N'RECEIVE' THEN -t.Amount ELSE t.Amount END
+FROM dbo.JournalLines l
+INNER JOIN dbo.JournalEntries e ON e.Id = l.JournalEntryId
+INNER JOIN dbo.CashTransactions t ON t.Id = e.SourceId AND t.BranchId = e.BranchId
+WHERE e.SourceType IN (N'CASH_RECEIPT', N'CASH_PAYMENT')
+  AND l.CustomerId = t.CustomerId
+  AND l.AccountCode IN (N'1201', N'2101');
+GO
+
+-- سند معکوس اسناد قدیمی نیز به همان ارز و با جهت برعکس بازنویسی می‌شود.
+UPDATE l
+SET l.CustomerBalanceCurrencyCode = t.CurrencyCode,
+    l.CustomerBalanceDelta = CASE WHEN t.Direction = N'RECEIVE' THEN t.Amount ELSE -t.Amount END
+FROM dbo.JournalLines l
+INNER JOIN dbo.JournalEntries e ON e.Id = l.JournalEntryId
+INNER JOIN dbo.CashTransactions t ON t.Id = e.SourceId AND t.BranchId = e.BranchId
+WHERE e.SourceType = N'VOID'
+  AND e.Description LIKE N'ابطال دریافت/پرداخت%'
+  AND t.IsVoided = 1
+  AND l.CustomerId = t.CustomerId
+  AND l.AccountCode IN (N'1201', N'2101');
+GO
+
+ALTER TABLE dbo.JournalLines
+    ADD CONSTRAINT FK_JournalLines_CustomerBalanceCurrency FOREIGN KEY (CustomerBalanceCurrencyCode) REFERENCES dbo.Currencies (Code),
+        CONSTRAINT CK_JournalLines_CustomerBalance CHECK
+        (
+            (CustomerBalanceCurrencyCode IS NULL AND CustomerBalanceDelta IS NULL)
+            OR (CustomerId IS NOT NULL AND CustomerBalanceCurrencyCode IS NOT NULL AND CustomerBalanceDelta IS NOT NULL)
+        );
+CREATE INDEX IX_JournalLines_CustomerBalanceCurrency
+    ON dbo.JournalLines (CustomerId, CustomerBalanceCurrencyCode, JournalEntryId)
+    INCLUDE (CustomerBalanceDelta);
+GO
+-- 0006 - روش دریافت/پرداخت معامله، حساب‌های بانکی نام‌دار و حساب‌های واسط چک/کارتخوان
+GO
+
+ALTER TABLE dbo.CurrencyTransactions
+    ADD PaymentMethod NVARCHAR(12) NOT NULL
+        CONSTRAINT DF_CurrencyTransactions_PaymentMethod DEFAULT (N'CASH');
+GO
+
+-- معاملات قدیمیِ ثبت‌شده روی حساب مشتری از این پس با روش نسیه نمایش داده می‌شوند.
+UPDATE dbo.CurrencyTransactions
+SET PaymentMethod = N'CREDIT'
+WHERE SettlementMode = N'ACCOUNT';
+GO
+
+ALTER TABLE dbo.CurrencyTransactions
+    ADD CONSTRAINT CK_CurrencyTransactions_PaymentMethod
+        CHECK (PaymentMethod IN (N'CASH', N'CREDIT', N'CHEQUE', N'POS', N'TRANSFER'));
+GO
+
+ALTER TABLE dbo.CurrencyTransactions
+    ADD CONSTRAINT CK_CurrencyTransactions_PaymentMethod_SettlementMode
+        CHECK ((PaymentMethod = N'CREDIT' AND SettlementMode = N'ACCOUNT')
+            OR (PaymentMethod <> N'CREDIT' AND SettlementMode IN (N'DIRECT', N'SPLIT')));
+GO
+
+CREATE TABLE dbo.BankAccounts
+(
+    Id              INT IDENTITY(1,1) NOT NULL,
+    BranchId        INT               NOT NULL,
+    Name            NVARCHAR(100)     NOT NULL,
+    CurrencyCode    NCHAR(3)          NOT NULL,
+    OpeningBalance  DECIMAL(19,4)     NOT NULL,
+    OpeningCostIrr  DECIMAL(19,4)     NOT NULL,
+    Balance         DECIMAL(19,4)     NOT NULL,
+    CostIrr         DECIMAL(19,4)     NOT NULL,
+    CreatedAt       DATETIME2(0)      NOT NULL,
+    CreatedBy       INT               NOT NULL,
+    UpdatedAt       DATETIME2(0)      NOT NULL,
+    CONSTRAINT PK_BankAccounts PRIMARY KEY (Id),
+    CONSTRAINT FK_BankAccounts_Branches FOREIGN KEY (BranchId) REFERENCES dbo.Branches (Id),
+    CONSTRAINT FK_BankAccounts_Currencies FOREIGN KEY (CurrencyCode) REFERENCES dbo.Currencies (Code),
+    CONSTRAINT FK_BankAccounts_CreatedBy FOREIGN KEY (CreatedBy) REFERENCES dbo.Users (Id),
+    CONSTRAINT CK_BankAccounts_Name CHECK (LEN(LTRIM(RTRIM(Name))) BETWEEN 2 AND 100),
+    CONSTRAINT CK_BankAccounts_Opening CHECK (OpeningBalance >= 0 AND OpeningCostIrr >= 0),
+    CONSTRAINT CK_BankAccounts_Balance CHECK (Balance >= 0 AND CostIrr >= 0)
+);
+CREATE UNIQUE INDEX UX_BankAccounts_Branch_Currency_Name
+    ON dbo.BankAccounts (BranchId, CurrencyCode, Name);
+GO
+
+-- افتتاحیه‌ی حساب بانکی هم سند دفتر کل است و باید در محدودیت نوع سند پذیرفته شود.
+ALTER TABLE dbo.JournalEntries DROP CONSTRAINT CK_JournalEntries_Source;
+ALTER TABLE dbo.JournalEntries ADD CONSTRAINT CK_JournalEntries_Source CHECK
+    (SourceType IN (N'TRADE', N'OPENING', N'VOID', N'ADJUST', N'MANUAL', N'CASH_RECEIPT', N'CASH_PAYMENT', N'CASH_ADJUST', N'BANK_OPENING'));
+GO
+
+ALTER TABLE dbo.CurrencyTransactionSettlements
+    ADD BankAccountId INT NULL;
+GO
+
+ALTER TABLE dbo.CurrencyTransactionSettlements
+    ADD CONSTRAINT FK_TradeSettlements_BankAccount
+        FOREIGN KEY (BankAccountId) REFERENCES dbo.BankAccounts (Id);
+GO
+
+-- حساب‌های دفتر کل متناظر با صندوق بانکی و حساب‌های واسط؛ حساب بانکی به تفکیک ارز در BankAccounts نگهداری می‌شود.
+IF NOT EXISTS (SELECT 1 FROM dbo.Accounts WHERE Code = N'1002')
+    INSERT INTO dbo.Accounts (Code, Name, AccountType, Level, ParentCode, IsSystem, IsActive)
+    VALUES (N'1002', N'حساب بانکی ریالی', N'Asset', 3, N'10', 1, 1);
+GO
+
+IF NOT EXISTS (SELECT 1 FROM dbo.Accounts WHERE Code = N'1102')
+    INSERT INTO dbo.Accounts (Code, Name, AccountType, Level, ParentCode, IsSystem, IsActive)
+    VALUES (N'1102', N'موجودی حساب‌های بانکی ارزی', N'Asset', 3, N'11', 0, 1);
+GO
+
+IF NOT EXISTS (SELECT 1 FROM dbo.Accounts WHERE Code = N'12')
+    INSERT INTO dbo.Accounts (Code, Name, AccountType, Level, ParentCode, IsSystem, IsActive)
+    VALUES (N'12', N'مطالبات از مشتریان', N'Asset', 2, N'1', 1, 1);
+GO
+
+IF NOT EXISTS (SELECT 1 FROM dbo.Accounts WHERE Code = N'1202')
+    INSERT INTO dbo.Accounts (Code, Name, AccountType, Level, ParentCode, IsSystem, IsActive)
+    VALUES (N'1202', N'اسناد و چک‌های دریافتنی', N'Asset', 3, N'12', 1, 1);
+GO
+
+IF NOT EXISTS (SELECT 1 FROM dbo.Accounts WHERE Code = N'1203')
+    INSERT INTO dbo.Accounts (Code, Name, AccountType, Level, ParentCode, IsSystem, IsActive)
+    VALUES (N'1203', N'مطالبات کارتخوان', N'Asset', 3, N'12', 1, 1);
+GO
+
+IF NOT EXISTS (SELECT 1 FROM dbo.Accounts WHERE Code = N'21')
+    INSERT INTO dbo.Accounts (Code, Name, AccountType, Level, ParentCode, IsSystem, IsActive)
+    VALUES (N'21', N'بدهی به مشتریان', N'Liability', 2, N'2', 1, 1);
+GO
+
+IF NOT EXISTS (SELECT 1 FROM dbo.Accounts WHERE Code = N'2102')
+    INSERT INTO dbo.Accounts (Code, Name, AccountType, Level, ParentCode, IsSystem, IsActive)
+    VALUES (N'2102', N'چک‌های پرداختنی', N'Liability', 3, N'21', 1, 1);
+GO
+
+IF NOT EXISTS (SELECT 1 FROM dbo.Accounts WHERE Code = N'2103')
+    INSERT INTO dbo.Accounts (Code, Name, AccountType, Level, ParentCode, IsSystem, IsActive)
+    VALUES (N'2103', N'حساب واسط کارتخوان پرداختی', N'Liability', 3, N'21', 1, 1);
+GO
+
+INSERT INTO dbo.Accounts (Code, Name, AccountType, Level, ParentCode, IsSystem, IsActive)
+SELECT N'1102-' + RTRIM(c.Code), N'موجودی بانکی - ' + c.Name, N'Asset', 4, N'1102', 1, 1
+FROM dbo.Currencies c
+WHERE c.Code <> N'IRR'
+  AND NOT EXISTS (SELECT 1 FROM dbo.Accounts a WHERE a.Code = N'1102-' + RTRIM(c.Code));
+GO

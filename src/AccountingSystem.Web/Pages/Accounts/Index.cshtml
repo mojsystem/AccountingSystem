@@ -1,0 +1,227 @@
+@page
+@model IndexModel
+@{
+    ViewData["Title"] = "سرفصل حساب‌ها";
+    var current = Model.Current;
+    var isSystem = current?.IsSystem == true;
+    var hasChildren = current?.HasChildren == true;
+    var hasPostings = current?.HasPostings == true;
+}
+
+<div class="page-head">
+    <div>
+        <h1>سرفصل حساب‌ها</h1>
+        <p class="hint">
+            ساختار چهار سطحی: <strong>گروه</strong> ← <strong>کل</strong> ← <strong>معین</strong> ← <strong>تفصیلی</strong>.
+            فقط حساب‌های فعال و بدون زیرمجموعه سند می‌گیرند. نوع حساب از گروه به زیرمجموعه‌ها به ارث می‌رسد.
+        </p>
+    </div>
+</div>
+
+@if (TempData["Success"] is string successMessage)
+{
+    <div class="alert ok" role="status">@successMessage</div>
+}
+@if (TempData["Error"] is string errorMessage)
+{
+    <div class="alert error" role="alert">@errorMessage</div>
+}
+<div asp-validation-summary="All" class="alert error" role="alert"></div>
+
+<div class="split">
+    <section class="panel">
+        <h2>درخت حساب‌ها <span class="count">(@Model.Accounts.Count حساب)</span></h2>
+        <div class="table-wrap">
+            <table class="table">
+                <thead>
+                    <tr>
+                        <th>کد</th>
+                        <th>نام حساب</th>
+                        <th>سطح</th>
+                        <th>نوع</th>
+                        <th>وضعیت</th>
+                        <th></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var a in Model.Accounts)
+                    {
+                        var indent = (a.Level - 1) * 20 + 8;
+                        var rowClass = a.Code == current?.Code ? "selected" : null;
+                        <tr class="@rowClass">
+                            <td class="code">@a.Code</td>
+                            <td style="padding-inline-start: @(indent)px">
+                                <span class="@(a.Level == 1 ? "strong" : null)">@a.Name</span>
+                                @if (a.IsSystem)
+                                {
+                                    <span class="badge system" title="این حساب در معاملات و سندهای خودکار استفاده می‌شود">پایه‌ی موتور</span>
+                                }
+                            </td>
+                            <td><span class="badge level level-@a.Level">@AccountRules.LevelName(a.Level)</span></td>
+                            <td>@AccountRules.TypeName(a.AccountType)</td>
+                            <td>
+                                @if (!a.IsActive)
+                                {
+                                    <span class="badge muted">غیرفعال</span>
+                                }
+                                else if (a.IsPostable)
+                                {
+                                    <span class="badge ok">سند می‌گیرد</span>
+                                }
+                                else
+                                {
+                                    <span class="badge info">تجمیعی</span>
+                                }
+                            </td>
+                            <td class="row-actions">
+                                <a class="link" asp-page="/Accounts/Index" asp-route-edit="@a.Code">ویرایش</a>
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    </section>
+
+    <aside class="panel form-panel">
+        @if (current is null)
+        {
+            <h2>حساب تازه</h2>
+            <p class="hint">
+                برای گروه تازه «حساب پدر» را خالی بگذارید و کد آن یک رقم (۱ تا ۹) باشد.
+                برای زیرمجموعه، حساب پدر را انتخاب کنید؛ کد باید با کد پدر شروع شود و نوع آن همان نوع پدر می‌شود.
+            </p>
+        }
+        else
+        {
+            <h2>ویرایش «@current.Name»</h2>
+            <p class="hint">
+                سطح: <strong>@AccountRules.LevelName(current.Level)</strong>
+                @if (current.IsSystem)
+                {
+                    <span class="badge system">پایه‌ی موتور</span>
+                }
+            </p>
+            @if (isSystem)
+            {
+                <p class="notice">
+                    این حساب در معاملات و سندهای خودکار استفاده می‌شود. کد، حساب پدر، نوع و وضعیت آن قابل تغییر نیست؛ فقط نام را می‌توانید عوض کنید.
+                </p>
+            }
+        }
+
+        <form method="post" class="stack" asp-page-handler="@(current is null ? "Create" : "Update")">
+            @if (current is not null)
+            {
+                <input type="hidden" name="Form.OriginalCode" value="@current.Code" />
+            }
+
+            <label>
+                <span>کد حساب</span>
+                <input name="Form.Code" value="@Model.Form.Code" required maxlength="20" dir="ltr" readonly="@isSystem" autocomplete="off" />
+                <small class="hint">فقط حروف لاتین، عدد و خط تیره. کد زیرمجموعه باید با کد پدر شروع شود.</small>
+            </label>
+
+            <label>
+                <span>نام حساب</span>
+                <input name="Form.Name" value="@Model.Form.Name" required maxlength="100" />
+            </label>
+
+            <label>
+                <span>حساب پدر</span>
+                @if (isSystem)
+                {
+                    <input type="hidden" name="Form.ParentCode" value="@(current!.ParentCode)" />
+                }
+                <select name="Form.ParentCode" id="parentSelect" disabled="@isSystem">
+                    <option value="">— بدون پدر (گروه) —</option>
+                    @foreach (var p in Model.ParentCandidates)
+                    {
+                        <option value="@p.Code" data-type="@p.AccountType" selected="@(p.Code == Model.Form.ParentCode)">
+                            @p.Code · @p.Name (@AccountRules.LevelName(p.Level))
+                        </option>
+                    }
+                </select>
+            </label>
+
+            <label>
+                <span>نوع حساب</span>
+                @if (isSystem)
+                {
+                    <input type="hidden" name="Form.AccountType" value="@(current!.AccountType)" />
+                }
+                <select name="Form.AccountType" id="typeSelect" disabled="@isSystem">
+                    @foreach (var t in AccountRules.AccountTypes)
+                    {
+                        <option value="@t" selected="@(t == Model.Form.AccountType)">@AccountRules.TypeName(t)</option>
+                    }
+                </select>
+                <small class="hint">برای زیرمجموعه، نوع از حساب پدر گرفته می‌شود.</small>
+            </label>
+
+            @if (isSystem)
+            {
+                <input type="hidden" name="Form.IsActive" value="true" />
+                <p class="hint">این حساب همیشه فعال است.</p>
+            }
+            else
+            {
+                <label class="check">
+                    <input type="checkbox" name="Form.IsActive" value="true" checked="@Model.Form.IsActive" />
+                    <span>حساب فعال باشد (حساب غیرفعال سند نمی‌گیرد)</span>
+                </label>
+            }
+
+            <div class="actions">
+                @if (current is null)
+                {
+                    <button type="submit" class="btn primary">ثبت حساب</button>
+                }
+                else
+                {
+                    <button type="submit" class="btn primary">ذخیره‌ی تغییرات</button>
+                    <a class="btn ghost" asp-page="/Accounts/Index">انصراف</a>
+                }
+            </div>
+        </form>
+
+        @if (current is not null && !isSystem)
+        {
+            <div class="danger-zone">
+                @if (hasChildren)
+                {
+                    <p class="hint">این حساب زیرمجموعه دارد؛ تا زمانی که زیرمجموعه دارد حذف یا غیرفعال نمی‌شود.</p>
+                }
+                else if (hasPostings)
+                {
+                    <p class="hint">این حساب سند دارد و حذف نمی‌شود. برای جلوگیری از استفاده‌ی بعدی، آن را غیرفعال کنید.</p>
+                }
+                else
+                {
+                    <form method="post" asp-page-handler="Delete" class="inline-form"
+                          onsubmit="return confirm('حساب «@current.Code» حذف شود؟ این کار برگشت‌پذیر نیست.');">
+                        <input type="hidden" name="code" value="@current.Code" />
+                        <button type="submit" class="btn danger">حذف حساب</button>
+                    </form>
+                }
+            </div>
+        }
+    </aside>
+</div>
+
+<script>
+    (function () {
+        var parent = document.getElementById('parentSelect');
+        var type = document.getElementById('typeSelect');
+        if (!parent || !type || parent.disabled) {
+            return;
+        }
+        parent.addEventListener('change', function () {
+            var option = parent.options[parent.selectedIndex];
+            var inherited = option ? option.getAttribute('data-type') : null;
+            if (inherited) {
+                type.value = inherited;
+            }
+        });
+    })();
+</script>

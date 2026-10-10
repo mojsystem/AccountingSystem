@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>AccountingSystem.Web</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\AccountingSystem.Core\AccountingSystem.Core.csproj" />
+    <ProjectReference Include="..\AccountingSystem.Data\AccountingSystem.Data.csproj" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,169 @@
+@page
+@model IndexModel
+@{
+    ViewData["Title"] = "صندوق‌ها";
+}
+
+<h1>صندوق‌ها</h1>
+
+@if (TempData["Success"] is string successMessage)
+{
+    <div class="alert ok">@successMessage</div>
+}
+@if (TempData["Error"] is string errorMessage)
+{
+    <div class="alert error">@errorMessage</div>
+}
+<div asp-validation-summary="All" class="alert error"></div>
+
+@if (Model.Notice is { } notice)
+{
+    <p class="alert error">@notice</p>
+}
+@if (Model.IsAdmin || Model.ReadableBranches.Count > 1)
+{
+    <form method="get" class="panel filters">
+        <label>شعبه
+            <select name="BranchFilter">
+                @if (Model.IsAdmin)
+                {
+                    <option value="">همه‌ی شعبه‌ها</option>
+                }
+                @foreach (var b in Model.ReadableBranches)
+                {
+                    <option value="@b.Id" selected="@(Model.BranchFilter == b.Id)">@b.Code - @b.Name</option>
+                }
+            </select>
+        </label>
+        <div><button type="submit">نمایش</button></div>
+    </form>
+}
+
+<div class="tools"><a class="link-button" asp-page-handler="Excel" asp-route-branchFilter="@Model.BranchFilter">خروجی Excel صندوق‌ها</a></div>
+
+<table>
+    <thead>
+        <tr>
+            <th>شعبه</th>
+            <th>صندوق</th>
+            <th>ارز</th>
+            <th>موجودی</th>
+            <th>آخرین تغییر</th>
+        </tr>
+    </thead>
+    <tbody>
+        @foreach (var b in Model.Boxes)
+        {
+            <tr>
+                <td>@b.BranchName</td>
+                <td>@b.Name</td>
+                <td>@b.CurrencyCode</td>
+                <td>@(b.CurrencyCode == "IRR" ? ViewFormat.Money(b.Balance) : ViewFormat.Quantity(b.Balance))</td>
+                <td>@ViewFormat.Date(b.UpdatedAt)</td>
+            </tr>
+        }
+    </tbody>
+</table>
+
+<h2>موجودی‌های افتتاحیه (۹۰ روز اخیر)</h2>
+<table>
+    <thead>
+        <tr>
+            <th>تاریخ</th>
+            <th>شعبه</th>
+            <th>ارز</th>
+            <th>مقدار</th>
+            <th>نرخ</th>
+            <th>بهای ریالی</th>
+            <th>ثبت‌کننده</th>
+            <th>وضعیت</th>
+            <th>عملیات</th>
+        </tr>
+    </thead>
+    <tbody>
+        @foreach (var o in Model.Openings)
+        {
+            <tr class="@(o.IsVoided ? "row-void" : string.Empty)">
+                <td>@ViewFormat.Date(o.OccurredAt)</td>
+                <td>@o.BranchName</td>
+                <td>@o.CurrencyCode</td>
+                <td>@(o.CurrencyCode == "IRR" ? ViewFormat.Money(o.Quantity) : ViewFormat.Quantity(o.Quantity))</td>
+                <td>@(o.RateIrr is { } rate ? ViewFormat.Rate(rate) : "—")</td>
+                <td>@ViewFormat.Money(o.CostIrr)</td>
+                <td>@o.CreatedBy</td>
+                <td>
+                    @if (o.IsVoided)
+                    {
+                        <span class="badge void">باطل شد</span>
+                        <div class="muted">@o.VoidReason</div>
+                    }
+                    else
+                    {
+                        <span class="badge">فعال</span>
+                    }
+                </td>
+                <td>
+                    @if (!o.IsVoided && (Model.CanAt(Permission.OpeningEdit, o.BranchId) || Model.CanAt(Permission.OpeningVoid, o.BranchId)))
+                    {
+                        <div class="inline-form">
+                            @if (Model.CanAt(Permission.OpeningEdit, o.BranchId))
+                            {
+                                <a class="link-button" asp-page="EditOpening" asp-route-id="@o.Id">ویرایش</a>
+                            }
+                            @if (Model.CanAt(Permission.OpeningVoid, o.BranchId))
+                            {
+                                <form method="post" asp-page-handler="VoidOpening" onsubmit="return confirm('این موجودی افتتاحیه باطل شود؟');">
+                                    <input type="hidden" name="openingId" value="@o.Id" />
+                                    <input name="voidReason" placeholder="دلیل ابطال" maxlength="200" required />
+                                    <button type="submit" class="danger">ابطال</button>
+                                </form>
+                            }
+                        </div>
+                    }
+                </td>
+            </tr>
+        }
+    </tbody>
+</table>
+
+@if (Model.Branches.Count > 0)
+{
+    <h2>موجودی افتتاحیه ریال</h2>
+    <form method="post" asp-page-handler="OpeningIrr" class="panel form-grid">
+        <label>شعبه
+            <select name="IrrInput.BranchId">
+                @foreach (var b in Model.Branches)
+                {
+                    <option value="@b.Id">@b.Code - @b.Name</option>
+                }
+            </select>
+        </label>
+        <label>مبلغ (ریال، عدد صحیح)<input name="IrrInput.Amount" dir="ltr" inputmode="numeric" /></label>
+        <label>تاریخ (شمسی، اختیاری)<input name="IrrInput.OccurredOn" dir="ltr" placeholder="۱۴۰۵/۰۷/۱۵" /></label>
+        <div><button type="submit">ثبت موجودی افتتاحیه ریال</button></div>
+    </form>
+
+    <h2>موجودی افتتاحیه ارز</h2>
+    <form method="post" asp-page-handler="OpeningFx" class="panel form-grid">
+        <label>شعبه
+            <select name="FxInput.BranchId">
+                @foreach (var b in Model.Branches)
+                {
+                    <option value="@b.Id">@b.Code - @b.Name</option>
+                }
+            </select>
+        </label>
+        <label>ارز
+            <select name="FxInput.CurrencyCode">
+                @foreach (var c in Model.Currencies)
+                {
+                    <option value="@c.Code">@c.Code - @c.Name</option>
+                }
+            </select>
+        </label>
+        <label>مقدار ارز<input name="FxInput.Quantity" dir="ltr" inputmode="decimal" /></label>
+        <label>نرخ خرید واحد (ریال)<input name="FxInput.UnitRate" dir="ltr" inputmode="decimal" /></label>
+        <label>تاریخ (شمسی، اختیاری)<input name="FxInput.OccurredOn" dir="ltr" placeholder="۱۴۰۵/۰۷/۱۵" /></label>
+        <div><button type="submit">ثبت موجودی افتتاحیه ارز</button></div>
+    </form>
+}

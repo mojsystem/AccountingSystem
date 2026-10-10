@@ -1,0 +1,272 @@
+@page "{id:long}"
+@model EditModel
+@{
+    ViewData["Title"] = "ویرایش معامله";
+}
+
+<h1>ویرایش معامله‌ی شماره @Model.Id</h1>
+
+<div asp-validation-summary="All" class="alert error"></div>
+
+@if (Model.IsVoided)
+{
+    <div class="alert error">این معامله باطل شده است و قابل ویرایش نیست.</div>
+}
+else if (!Model.CanEdit)
+{
+    <div class="alert error">برای ویرایش این معامله دسترسی لازم را ندارید. از مدیر سیستم بخواهید دسترسی «ویرایش معامله» را به حساب شما بدهد.</div>
+}
+else
+{
+    <form method="post" class="panel" asp-route-id="@Model.Id">
+        <p class="hint">
+            تغییر توضیحات به‌تنهایی فقط اطلاعات نمایشی را به‌روز می‌کند. تغییر مالی با سند ابطال و نسخه‌ی اصلاحی ثبت می‌شود؛
+            بهای معاملات بعدی نیز بازمحاسبه خواهد شد. روش تسویه، ریز دریافت/پرداخت، نرخ جفت‌ارز و تهاتر را می‌توانید همین‌جا ویرایش کنید.
+        </p>
+        <div class="radio-row">
+            <label><input type="radio" name="Input.TradeType" value="BUY" checked="@(Model.Input.TradeType != "SELL")" /> خرید ارز از مشتری</label>
+            <label><input type="radio" name="Input.TradeType" value="SELL" checked="@(Model.Input.TradeType == "SELL")" /> فروش ارز به مشتری</label>
+        </div>
+        <input type="hidden" name="Input.BranchId" value="@Model.Input.BranchId" />
+        <div class="form-grid">
+            <label>ارز
+                <select id="currency" name="Input.CurrencyCode">
+                    @foreach (var c in Model.Currencies)
+                    {
+                        <option value="@c.Code" selected="@(c.Code == Model.Input.CurrencyCode)">@c.Code - @c.Name</option>
+                    }
+                </select>
+            </label>
+            <label>مقدار ارز<input name="Input.Amount" value="@Model.Input.Amount" dir="ltr" inputmode="decimal" /></label>
+            <label>نرخ پایه (ریال به ازای یک واحد)<input id="rate" name="Input.Rate" value="@Model.Input.Rate" dir="ltr" inputmode="decimal" /></label>
+            <label>روش دریافت/پرداخت کل معامله
+                <select id="paymentMethod" name="Input.PaymentMethod">
+                    <option value="CASH" selected="@(Model.Input.PaymentMethod == "CASH")">نقد</option>
+                    <option value="CREDIT" selected="@(Model.Input.PaymentMethod == "CREDIT")">نسیه</option>
+                    <option value="CHEQUE" selected="@(Model.Input.PaymentMethod == "CHEQUE")">چک</option>
+                    <option value="POS" selected="@(Model.Input.PaymentMethod == "POS")">کارتخوان</option>
+                    <option value="TRANSFER" selected="@(Model.Input.PaymentMethod == "TRANSFER")">حواله</option>
+                </select>
+            </label>
+            <label id="settlementModeField">ساختار تسویه
+                <select id="settlementMode" name="Input.SettlementMode">
+                    <option value="DIRECT" selected="@(Model.Input.SettlementMode == "DIRECT")">تبادل مستقیم دو ارز</option>
+                    <option value="SPLIT" selected="@(Model.Input.SettlementMode == "SPLIT")">چندبخشی (چند دریافت/پرداخت)</option>
+                    <option value="ACCOUNT" selected="@(Model.Input.SettlementMode == "ACCOUNT")">ثبت روی حساب مشتری</option>
+                </select>
+            </label>
+            <label id="settlementCurrencyField"><span id="settlementCurrencyLabel">ارز مقابل</span>
+                <select id="settlementCurrency" name="Input.SettlementCurrencyCode">
+                    @foreach (var c in Model.SettlementCurrencies)
+                    {
+                        <option value="@c.Code" selected="@(c.Code == Model.Input.SettlementCurrencyCode)">@c.Code - @c.Name</option>
+                    }
+                </select>
+            </label>
+            <label id="directBankAccountField" hidden>حساب بانکی حواله
+                <select id="directBankAccount" name="Input.BankAccountId">
+                    <option value="">-- حساب بانکی --</option>
+                    @foreach (var b in Model.BankAccounts)
+                    {
+                        <option value="@b.Id" data-branch-id="@b.BranchId" data-currency-code="@b.CurrencyCode" selected="@(Model.Input.BankAccountId == b.Id)">@b.Name · @b.CurrencyCode</option>
+                    }
+                </select>
+            </label>
+            <label id="rateModeField">روش نرخ جفت‌ارز
+                <select id="rateMode" name="Input.RateMode">
+                    <option value="DERIVED" selected="@(Model.Input.RateMode == "DERIVED")">محاسبه از نرخ‌های ریالی روز</option>
+                    <option value="DIRECT" selected="@(Model.Input.RateMode == "DIRECT")">نرخ مستقیم جفت‌ارز</option>
+                </select>
+            </label>
+            <label id="crossRateField">نرخ جفت‌ارز (واحد ارز مقابل به ازای هر واحد)
+                <input id="crossRate" name="Input.CrossRate" value="@Model.Input.CrossRate" dir="ltr" inputmode="decimal" />
+            </label>
+            <label>کارمزد (ریال)<input name="Input.Fee" value="@Model.Input.Fee" dir="ltr" inputmode="numeric" /></label>
+            <label>تاریخ معامله (شمسی)<input name="Input.OccurredOn" value="@Model.Input.OccurredOn" dir="ltr" /></label>
+            <label>مشتری
+                <select name="Input.CustomerId" required>
+                    <option value="">— انتخاب مشتری —</option>
+                    @foreach (var c in Model.Customers)
+                    {
+                        <option value="@c.Id" selected="@(c.Id == Model.Input.CustomerId)">@c.FullName · @c.CustomerCode</option>
+                    }
+                </select>
+                <a class="link small" asp-page="/Customers/Index">مشتری تازه</a>
+            </label>
+            <label>توضیحات<input name="Input.Note" value="@Model.Input.Note" /></label>
+            <label class="check">تهاتر مانده‌ی قبلی مشتری
+                <input type="checkbox" name="Input.ApplyCustomerOffset" value="true" checked="@(Model.Input.ApplyCustomerOffset)" />
+            </label>
+        </div>
+        <section id="splitPanel" class="settlement-panel" hidden>
+            <h3>ریز دریافت/پرداخت</h3>
+            <div id="settlementLines">
+                @for (var i = 0; i < Model.Input.SettlementLines.Count; i++)
+                {
+                    <div class="settlement-line">
+                        <label>ارز
+                            <select name="Input.SettlementLines[@i].CurrencyCode">
+                                <option value="">-- انتخاب ارز --</option>
+                                @foreach (var c in Model.SettlementCurrencies)
+                                {
+                                    <option value="@c.Code" selected="@(c.Code == Model.Input.SettlementLines[i].CurrencyCode)">@c.Code - @c.Name</option>
+                                }
+                            </select>
+                        </label>
+                        <label>مقدار دریافتی/پرداختی
+                            <input name="Input.SettlementLines[@i].Amount" value="@Model.Input.SettlementLines[i].Amount" dir="ltr" inputmode="decimal" />
+                        </label>
+                        <label class="bank-account-field" hidden>حساب بانکی حواله
+                            <select name="Input.SettlementLines[@i].BankAccountId">
+                                <option value="">-- حساب بانکی --</option>
+                                @foreach (var b in Model.BankAccounts)
+                                {
+                                    <option value="@b.Id" data-branch-id="@b.BranchId" data-currency-code="@b.CurrencyCode" selected="@(Model.Input.SettlementLines[i].BankAccountId == b.Id)">@b.Name · @b.CurrencyCode</option>
+                                }
+                            </select>
+                        </label>
+                    </div>
+                }
+            </div>
+            <template id="settlementLineTemplate">
+                <div class="settlement-line">
+                    <label>ارز
+                        <select name="Input.SettlementLines[0].CurrencyCode">
+                            <option value="">-- انتخاب ارز --</option>
+                            @foreach (var c in Model.SettlementCurrencies)
+                            {
+                                <option value="@c.Code">@c.Code - @c.Name</option>
+                            }
+                        </select>
+                    </label>
+                    <label>مقدار دریافتی/پرداختی
+                        <input name="Input.SettlementLines[0].Amount" dir="ltr" inputmode="decimal" />
+                    </label>
+                    <label class="bank-account-field" hidden>حساب بانکی حواله
+                        <select name="Input.SettlementLines[0].BankAccountId">
+                            <option value="">-- حساب بانکی --</option>
+                            @foreach (var b in Model.BankAccounts)
+                            {
+                                <option value="@b.Id" data-branch-id="@b.BranchId" data-currency-code="@b.CurrencyCode">@b.Name · @b.CurrencyCode</option>
+                            }
+                        </select>
+                    </label>
+                </div>
+            </template>
+            <button type="button" class="secondary" id="addSettlementLine">افزودن سطر</button>
+            <p class="hint">ارزش هر دریافت/پرداخت با نرخ شعبه در تاریخ معامله سنجیده می‌شود. مانده‌ی تسویه‌نشده با ارز انتخاب‌شده برای حساب مشتری ثبت می‌شود.</p>
+        </section>
+        <p class="hint">یک روش دریافت/پرداخت برای کل معامله انتخاب می‌شود. پرداخت نقدی یا حواله با موجودی ناکافی رد می‌شود؛ چک و کارتخوان به حساب‌های واسط می‌روند و صندوق را تغییر نمی‌دهند. تهاتر همچنان فقط با مانده‌ی همین مشتری و شعبه انجام می‌شود.</p>
+        <p><button type="submit">ذخیره‌ی ویرایش</button> <a href="/Trade">بازگشت</a></p>
+    </form>
+}
+
+<script>
+(function () {
+    var rates = @Html.Raw(Model.RatesJson);
+    var currency = document.getElementById('currency');
+    if (!currency) { return; }
+    var rate = document.getElementById('rate');
+    var settlementCurrency = document.getElementById('settlementCurrency');
+    var settlementMode = document.getElementById('settlementMode');
+    var paymentMethod = document.getElementById('paymentMethod');
+    var directBankField = document.getElementById('directBankAccountField');
+    var directBank = document.getElementById('directBankAccount');
+    var rateMode = document.getElementById('rateMode');
+    var crossRate = document.getElementById('crossRate');
+    var branchId = '@Model.Input.BranchId';
+    var splitPanel = document.getElementById('splitPanel');
+    var settlementCurrencyField = document.getElementById('settlementCurrencyField');
+    var settlementCurrencyLabel = document.getElementById('settlementCurrencyLabel');
+    var rateModeField = document.getElementById('rateModeField');
+    var crossRateField = document.getElementById('crossRateField');
+    var rows = document.getElementById('settlementLines');
+    var template = document.getElementById('settlementLineTemplate');
+    var addLine = document.getElementById('addSettlementLine');
+    var radios = document.querySelectorAll('input[name="Input.TradeType"]');
+
+    function selectedRate(code, isCounter, isSell) {
+        if (code === 'IRR') { return 1; }
+        var list = rates[branchId] || [];
+        var item = list.find(function (r) { return r.code === code; });
+        if (!item) { return null; }
+        return isCounter ? (isSell ? item.buy : item.sell) : (isSell ? item.sell : item.buy);
+    }
+
+    function fillRate() {
+        var isSell = document.querySelector('input[name="Input.TradeType"][value="SELL"]').checked;
+        var baseRate = selectedRate(currency.value, false, isSell);
+        if (baseRate !== null) { rate.value = baseRate; }
+        if (settlementMode.value === 'DIRECT' && rateMode.value === 'DERIVED') {
+            var counterRate = selectedRate(settlementCurrency.value, true, isSell);
+            crossRate.value = baseRate !== null && counterRate ? (baseRate / counterRate).toPrecision(10).replace(/0+$/, '').replace(/\.$/, '') : '';
+        }
+    }
+
+    function filterBankAccounts(select, currencyCode) {
+        if (!select) { return; }
+        Array.from(select.options).forEach(function (option) {
+            if (!option.value) { option.hidden = false; option.disabled = false; return; }
+            var valid = option.dataset.branchId === branchId && option.dataset.currencyCode === currencyCode;
+            option.hidden = !valid;
+            option.disabled = !valid;
+            if (!valid && option.selected) { select.value = ''; }
+        });
+    }
+
+    function updateBankAccounts() {
+        var transfer = paymentMethod.value === 'TRANSFER';
+        var direct = settlementMode.value === 'DIRECT';
+        directBankField.hidden = !transfer || !direct;
+        directBank.disabled = !transfer || !direct;
+        if (transfer && direct) { filterBankAccounts(directBank, settlementCurrency.value); }
+        else { directBank.value = ''; }
+        rows.querySelectorAll('.settlement-line').forEach(function (row) {
+            var field = row.querySelector('.bank-account-field');
+            var select = field && field.querySelector('select');
+            var code = row.querySelector('select[name$=".CurrencyCode"]');
+            if (!field || !select) { return; }
+            field.hidden = !transfer || settlementMode.value !== 'SPLIT';
+            select.disabled = !transfer || settlementMode.value !== 'SPLIT';
+            if (transfer && settlementMode.value === 'SPLIT') { filterBankAccounts(select, code ? code.value : ''); }
+            else { select.value = ''; }
+        });
+    }
+
+    function updateMode() {
+        var credit = paymentMethod.value === 'CREDIT';
+        if (credit) { settlementMode.value = 'ACCOUNT'; }
+        else if (settlementMode.value === 'ACCOUNT') { settlementMode.value = 'DIRECT'; }
+        settlementMode.disabled = credit;
+        var direct = settlementMode.value === 'DIRECT';
+        var split = settlementMode.value === 'SPLIT';
+        settlementCurrencyField.hidden = false;
+        settlementCurrencyLabel.textContent = direct ? 'ارز مقابل واقعی' : 'ارز مانده‌ی حساب مشتری';
+        rateModeField.hidden = !direct;
+        crossRateField.hidden = !direct;
+        splitPanel.hidden = !split;
+        crossRate.readOnly = direct && rateMode.value === 'DERIVED';
+        updateBankAccounts();
+        fillRate();
+    }
+
+    addLine.addEventListener('click', function () {
+        if (rows.querySelectorAll('.settlement-line').length >= 100) { return; }
+        var row = template.content.firstElementChild.cloneNode(true);
+        var index = rows.querySelectorAll('.settlement-line').length;
+        row.querySelectorAll('[name]').forEach(function (input) { input.name = input.name.replace('[0]', '[' + index + ']'); });
+        rows.appendChild(row);
+        updateBankAccounts();
+    });
+    currency.addEventListener('change', fillRate);
+    settlementCurrency.addEventListener('change', function () { fillRate(); updateBankAccounts(); });
+    radios.forEach(function (radio) { radio.addEventListener('change', fillRate); });
+    settlementMode.addEventListener('change', updateMode);
+    paymentMethod.addEventListener('change', updateMode);
+    rows.addEventListener('change', function (event) {
+        if (event.target && event.target.matches('select[name$=".CurrencyCode"]')) { updateBankAccounts(); }
+    });
+    rateMode.addEventListener('change', updateMode);
+    updateMode();
+})();
+</script>

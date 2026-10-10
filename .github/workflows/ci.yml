@@ -1,0 +1,108 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  windows-build:
+    name: Build (Web + WinForms) and unit tests
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Restore
+        shell: bash
+        run: |
+          set -o pipefail
+          dotnet restore AccountingSystem.sln 2>&1 | tee restore.log
+
+      - name: Build solution
+        shell: bash
+        run: |
+          set -o pipefail
+          dotnet build AccountingSystem.sln -c Release --no-restore 2>&1 | tee build.log
+
+      - name: Report restore and build errors as annotations
+        if: always()
+        continue-on-error: true
+        shell: bash
+        run: python .github/scripts/report-build.py restore.log build.log
+
+      - name: Core unit tests
+        shell: bash
+        run: |
+          set -o pipefail
+          dotnet test tests/AccountingSystem.Core.Tests/AccountingSystem.Core.Tests.csproj -c Release --no-build --logger "trx;LogFileName=core-tests.trx" --results-directory TestResults-core 2>&1 | tee core-tests.log
+
+      - name: Report Core test results
+        if: always()
+        continue-on-error: true
+        shell: bash
+        run: python .github/scripts/report-trx.py TestResults-core core-tests.log
+
+  sql-integration:
+    name: SQL integration tests (SQL Server 2019 engine, compatibility level 150)
+    runs-on: ubuntu-latest
+    services:
+      sqlserver:
+        image: mcr.microsoft.com/mssql/server:2019-latest
+        env:
+          ACCEPT_EULA: "Y"
+          MSSQL_SA_PASSWORD: "Ci_Only_Passw0rd!"
+        ports:
+          - 1433:1433
+    env:
+      AS_TEST_SQL: "Server=127.0.0.1,1433;User Id=sa;Password=Ci_Only_Passw0rd!;Encrypt=False;TrustServerCertificate=True"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Publish web app
+        shell: bash
+        run: |
+          set -o pipefail
+          dotnet publish src/AccountingSystem.Web/AccountingSystem.Web.csproj -c Release -o publish/web 2>&1 | tee publish.log
+
+      - name: Report publish errors as annotations
+        if: always()
+        continue-on-error: true
+        shell: bash
+        run: python3 .github/scripts/report-build.py publish.log
+
+      - name: Data integration tests
+        shell: bash
+        run: |
+          set -o pipefail
+          dotnet test tests/AccountingSystem.Data.Tests/AccountingSystem.Data.Tests.csproj -c Release --logger "trx;LogFileName=data-tests.trx" --results-directory TestResults 2>&1 | tee data-tests.log
+
+      - name: Report data test build errors as annotations
+        if: always()
+        continue-on-error: true
+        shell: bash
+        run: python3 .github/scripts/report-build.py data-tests.log
+
+      - name: Report test results
+        if: always()
+        run: python3 .github/scripts/report-trx.py TestResults data-tests.log
+
+      - name: Web app smoke test (sign-in and main pages, against the test database)
+        env:
+          ConnectionStrings__AccountingSystem: "Server=127.0.0.1,1433;Database=AccountingSystem_IT;User Id=sa;Password=Ci_Only_Passw0rd!;Encrypt=False;TrustServerCertificate=True"
+          SMOKE_USERNAME: admin
+          SMOKE_PASSWORD: "Test#12345"
+        run: |
+          dotnet ./publish/web/AccountingSystem.Web.dll > web-app.log 2>&1 &
+          web_pid=$!
+          status=0
+          python3 .github/scripts/web-smoke.py http://127.0.0.1:5080 web-app.log || status=$?
+          kill "$web_pid" 2>/dev/null || true
+          exit "$status"

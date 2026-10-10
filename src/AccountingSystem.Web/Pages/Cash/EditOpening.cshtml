@@ -1,0 +1,35 @@
+@page "{id:long}"
+@model EditOpeningModel
+@{
+    ViewData["Title"] = "ویرایش موجودی افتتاحیه";
+}
+
+<h1>ویرایش موجودی افتتاحیه‌ی شماره @Model.Id</h1>
+
+<div asp-validation-summary="All" class="alert error"></div>
+
+@if (Model.IsVoided)
+{
+    <div class="alert error">این موجودی افتتاحیه باطل شده است و قابل ویرایش نیست.</div>
+}
+else if (!Model.CanEdit)
+{
+    <div class="alert error">برای ویرایش این موجودی افتتاحیه دسترسی لازم را ندارید. از مدیر سیستم بخواهید دسترسی «ویرایش موجودی افتتاحیه» را به حساب شما بدهد.</div>
+}
+else
+{
+    <form method="post" class="panel form-grid" asp-route-id="@Model.Id">
+        <p class="hint">
+            شعبه: @Model.BranchName - ارز: @Model.CurrencyCode.
+            ویرایش با ابطال نسخه‌ی قبلی و ثبت نسخه‌ی اصلاحی انجام می‌شود؛ معاملات بعدی همین ارز بازمحاسبه می‌شوند
+            و اگر موجودی در هر لحظه منفی شود، ویرایش رد می‌شود.
+        </p>
+        <label>@(Model.IsIrr ? "مبلغ (ریال، عدد صحیح)" : "مقدار ارز")<input name="Input.Quantity" value="@Model.Input.Quantity" dir="ltr" inputmode="decimal" /></label>
+        @if (!Model.IsIrr)
+        {
+            <label>نرخ خرید واحد (ریال)<input name="Input.Rate" value="@Model.Input.Rate" dir="ltr" inputmode="decimal" /></label>
+        }
+        <label>تاریخ (شمسی)<input name="Input.OccurredOn" value="@Model.Input.OccurredOn" dir="ltr" /></label>
+        <div><button type="submit">ذخیره‌ی ویرایش</button> <a href="/Cash">بازگشت</a></div>
+    </form>
+}

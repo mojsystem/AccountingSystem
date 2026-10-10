@@ -1,0 +1,53 @@
+@page "{id:long}"
+@model EditManualModel
+@{
+    ViewData["Title"] = "ویرایش سند دستی";
+}
+
+<h1>ویرایش سند دستی شماره @Model.Id</h1>
+
+<div asp-validation-summary="All" class="alert error"></div>
+
+@if (Model.IsVoided)
+{
+    <div class="alert error">این سند باطل شده است و قابل ویرایش نیست.</div>
+}
+else if (!Model.CanEdit)
+{
+    <div class="alert error">برای ویرایش این سند دسترسی لازم را ندارید. از مدیر سیستم بخواهید دسترسی «ویرایش سند دستی» را به حساب شما بدهد.</div>
+}
+else
+{
+    <form method="post" class="panel" asp-route-id="@Model.Id">
+        <p class="hint">شعبه: @Model.BranchName. ویرایش با ابطال نسخه‌ی قبلی و ثبت نسخه‌ی اصلاحی انجام می‌شود؛ سطرهای خالی نادیده گرفته می‌شوند.</p>
+        <div class="form-grid">
+            <label>شرح سند<input name="Input.Description" value="@Model.Input.Description" maxlength="250" /></label>
+            <label>تاریخ (شمسی)<input name="Input.OccurredOn" value="@Model.Input.OccurredOn" dir="ltr" /></label>
+        </div>
+        <table>
+            <thead>
+                <tr><th>حساب</th><th>بدهکار (ریال)</th><th>بستانکار (ریال)</th></tr>
+            </thead>
+            <tbody>
+                @for (var i = 0; i < Model.Input.Lines.Count; i++)
+                {
+                    var line = Model.Input.Lines[i];
+                    <tr>
+                        <td>
+                            <select name="Input.Lines[@i].AccountCode">
+                                <option value="">-- حساب --</option>
+                                @foreach (var a in Model.Accounts.Where(a => a.IsActive && !a.Code.StartsWith("1101-", StringComparison.Ordinal)))
+                                {
+                                    <option value="@a.Code" selected="@(a.Code == line.AccountCode)">@a.Code - @a.Name</option>
+                                }
+                            </select>
+                        </td>
+                        <td><input name="Input.Lines[@i].Debit" value="@line.Debit" dir="ltr" inputmode="numeric" /></td>
+                        <td><input name="Input.Lines[@i].Credit" value="@line.Credit" dir="ltr" inputmode="numeric" /></td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+        <p><button type="submit">ذخیره‌ی ویرایش</button> <a href="/Journal">بازگشت</a></p>
+    </form>
+}

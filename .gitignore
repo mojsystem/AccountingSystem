@@ -282,6 +282,8 @@ Generated_Code/
 # because we have git ;-)
 _UpgradeReport_Files/
 Backup*/
+# صفحه‌ی پشتیبان وب (مسیر /Backup) نباید با الگوی بالا پنهان شود
+!src/AccountingSystem.Web/Pages/Backup/
 UpgradeLog*.XML
 UpgradeLog*.htm
 ServiceFabricBackup/

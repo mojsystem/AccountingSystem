@@ -1,0 +1,41 @@
+@page
+@model IndexModel
+@{
+    ViewData["Title"] = "شعبه‌ها";
+}
+
+<h1>شعبه‌ها</h1>
+
+@if (TempData["Success"] is string successMessage)
+{
+    <div class="alert ok">@successMessage</div>
+}
+<div asp-validation-summary="All" class="alert error"></div>
+
+<table>
+    <thead>
+        <tr>
+            <th>کد شعبه</th>
+            <th>نام شعبه</th>
+            <th>تاریخ ایجاد</th>
+        </tr>
+    </thead>
+    <tbody>
+        @foreach (var b in Model.BranchList)
+        {
+            <tr>
+                <td>@b.Code</td>
+                <td>@b.Name</td>
+                <td>@ViewFormat.Date(b.CreatedAt)</td>
+            </tr>
+        }
+    </tbody>
+</table>
+
+<h2>افزودن شعبه</h2>
+<form method="post" class="panel form-grid">
+    <label>کد شعبه (۱ تا ۱۰ حرف یا رقم انگلیسی)<input name="Input.Code" dir="ltr" maxlength="10" /></label>
+    <label>نام شعبه<input name="Input.Name" maxlength="100" /></label>
+    <div><button type="submit">ثبت شعبه</button></div>
+</form>
+<p class="hint">پس از ثبت، برای شعبه‌ی جدید صندوق هر ارز و بهای تمام‌شده صفر ساخته می‌شود. نرخ‌های شعبه را در صفحه‌ی نرخ‌ها ثبت کنید.</p>
