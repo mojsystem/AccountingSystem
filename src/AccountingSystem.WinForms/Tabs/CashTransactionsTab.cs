@@ -376,7 +376,10 @@ internal sealed class CashTransactionsTab : UserControl, IRefreshable
         var balanceAmount = code == balanceCode
             ? amount
             : MoneyMath.RoundTo(irrAmount / balanceRate.Value, decimals);
-        _preview.Text = $"اثر صندوق: {MoneyMath.FormatAmount(irrAmount, 0)} ریال؛ تسویه‌ی مانده: {MoneyMath.FormatAmount(balanceAmount, decimals)} {balanceCode}";
+        var customerBalanceHint = direction == CashTransactionDirection.Receipt
+            ? "؛ مانده‌ی مشتری محدودکننده نیست"
+            : "؛ مانده‌ی مشتری محدودکننده نیست و پرداخت به موجودی کافی صندوق نیاز دارد";
+        _preview.Text = $"اثر صندوق: {MoneyMath.FormatAmount(irrAmount, 0)} ریال؛ تسویه‌ی مانده: {MoneyMath.FormatAmount(balanceAmount, decimals)} {balanceCode}{customerBalanceHint}";
     }
 
     private decimal? RateFor(string code, int branchId, CashTransactionDirection direction)

@@ -293,9 +293,6 @@ WHERE e.SourceType = N'TRADE' AND e.SourceId = @tradeId AND l.CustomerId = @cust
         var currencyBalanceAfterPayment = Assert.Single(await repo.GetCustomerCurrencyBalancesAsync(branchId, _customerId, now));
         Assert.Equal(CurrencyCodes.Irr, currencyBalanceAfterPayment.CurrencyCode);
         Assert.Equal(-2_800_000m, currencyBalanceAfterPayment.BalanceAmount);
-        await Assert.ThrowsAsync<BusinessRuleException>(() => cashTransactions.RecordAsync(user, new CashTransactionInput(
-            branchId, CashTransactionDirection.Payment, _customerId, code, 3m,
-            TradeRateMode.Derived, BalanceCurrencyCode: CurrencyCodes.Irr), now, now));
         var directPaymentId = await cashTransactions.RecordAsync(user, new CashTransactionInput(
             branchId, CashTransactionDirection.Payment, _customerId, code, 1m,
             TradeRateMode.Direct, 1_000_000m, "نرخ اطلاع‌رسانی آزمایشی", CurrencyCodes.Irr), now, now);
@@ -329,21 +326,35 @@ WHERE e.SourceType = N'TRADE' AND e.SourceId = @tradeId AND l.CustomerId = @cust
             balance => balance.CurrencyCode == balanceCode);
         Assert.Equal(-4.34m, nonIrrAccountBalance.BalanceAmount);
 
-        // فروش روی حساب مانده‌ی دریافتنی می‌سازد. رسید مستقل، ویرایش جایگزین‌محور و ابطال آن با دفتر واقعی سنجیده می‌شوند.
+        // دریافت ۵۰۰ واحد ارز بدون دریافتنی قبلی در همان ارز به‌عنوان پیش‌پرداخت ثبت می‌شود.
+        var advanceReceiptId = await cashTransactions.RecordAsync(user, new CashTransactionInput(
+            branchId, CashTransactionDirection.Receipt, _customerId, code, 500m,
+            TradeRateMode.Derived, Note: "پیش‌پرداخت ارزی", BalanceCurrencyCode: code), now, now);
+        var advanceReceipt = await repo.GetCashTransactionAsync(advanceReceiptId);
+        Assert.NotNull(advanceReceipt);
+        Assert.Equal(500m, advanceReceipt!.BalanceAmount);
+        Assert.Equal(500_000_000m, advanceReceipt.IrrAmount);
+        var foreignAdvanceBalance = Assert.Single(await repo.GetCustomerCurrencyBalancesAsync(branchId, _customerId, now),
+            balance => balance.CurrencyCode == code);
+        Assert.Equal(-500m, foreignAdvanceBalance.BalanceAmount);
+
+        // فروش روی حساب مانده‌ی دریافتنی می‌سازد. رسید مستقلِ بزرگ‌تر از مانده، مازاد را بستانکار می‌کند؛
+        // ویرایش جایگزین‌محور و ابطال آن نیز با دفتر واقعی سنجیده می‌شوند.
         await trades.SellToCustomerAsync(new TradeInput(
             branchId, code, 10m, 1_200_000m, null, null, null,
             CustomerId: _customerId,
             SettlementMode: TradeSettlementMode.CustomerAccount,
             RateMode: TradeRateMode.Direct), user, now);
-        await Assert.ThrowsAsync<BusinessRuleException>(() => cashTransactions.RecordAsync(user, new CashTransactionInput(
-            branchId, CashTransactionDirection.Receipt, _customerId, CurrencyCodes.Irr, 12_000_001m,
-            TradeRateMode.Derived), now, now));
 
         var receiptId = await cashTransactions.RecordAsync(user, new CashTransactionInput(
-            branchId, CashTransactionDirection.Receipt, _customerId, CurrencyCodes.Irr, 3_000_000m,
-            TradeRateMode.Derived, Note: "رسید مستقل آزمایشی"), now, now);
+            branchId, CashTransactionDirection.Receipt, _customerId, CurrencyCodes.Irr, 12_000_001m,
+            TradeRateMode.Derived, Note: "رسید و پیش‌پرداخت آزمایشی"), now, now);
         var afterReceipt = await repo.GetCustomerAccountBalanceAsync(branchId, _customerId, now);
-        Assert.Equal(7_300_000m, afterReceipt.ReceivableIrr);
+        Assert.Equal(0m, afterReceipt.ReceivableIrr);
+        Assert.Equal(1_700_001m, afterReceipt.PayableIrr);
+        var irrAdvanceBalance = Assert.Single(await repo.GetCustomerCurrencyBalancesAsync(branchId, _customerId, now),
+            balance => balance.CurrencyCode == CurrencyCodes.Irr);
+        Assert.Equal(-1_700_001m, irrAdvanceBalance.BalanceAmount);
 
         var replacementId = await cashTransactions.EditAsync(user, receiptId, new CashTransactionInput(
             branchId, CashTransactionDirection.Receipt, _customerId, CurrencyCodes.Irr, 4_000_000m,
@@ -372,6 +383,20 @@ WHERE e.SourceType = N'TRADE' AND e.SourceId = @tradeId AND l.CustomerId = @cust
         Assert.Equal(10_300_000m, ledger.ClosingBalanceIrr);
         Assert.Contains(ledger.Lines, line => line.SourceType == SourceTypes.CashReceipt && line.IsVoided);
         Assert.Contains(ledger.Lines, line => line.SourceType == SourceTypes.Void && line.SourceId == receiptId);
+
+        // پرداخت بیش از بستانکاری مشتری هم ثبت می‌شود؛ مازاد به دریافتنی می‌رود، مشروط بر موجودی کافی صندوق.
+        var excessPaymentId = await cashTransactions.RecordAsync(user, new CashTransactionInput(
+            branchId, CashTransactionDirection.Payment, _customerId, code, 501m,
+            TradeRateMode.Derived, Note: "پرداخت بیش از بستانکاری", BalanceCurrencyCode: code),
+            now.AddMinutes(3), now.AddMinutes(3));
+        var excessPayment = await repo.GetCashTransactionAsync(excessPaymentId);
+        Assert.NotNull(excessPayment);
+        Assert.Equal(501m, excessPayment!.BalanceAmount);
+        var balanceAfterExcessPayment = Assert.Single(
+            await repo.GetCustomerCurrencyBalancesAsync(branchId, _customerId, now.AddMinutes(4)),
+            balance => balance.CurrencyCode == code);
+        Assert.Equal(1m, balanceAfterExcessPayment.BalanceAmount);
+
         await AssertLedgerConsistentAsync(_fixture.ConnectionString!, branchId, code);
     }
 

@@ -234,17 +234,8 @@ public sealed class CashTransactionService
             occurredAt,
             excludeCashTransactionId: excludeCashTransactionId,
             ct: ct);
+        // این مانده فقط برای تقسیم ثبت بین دریافتنی و پرداختنی استفاده می‌شود و دریافت/پرداخت را محدود نمی‌کند.
         var balanceBefore = balances.FirstOrDefault(b => b.CurrencyCode == balanceCode)?.BalanceAmount ?? 0m;
-        var availableBalance = input.Direction == CashTransactionDirection.Receipt
-            ? Math.Max(0m, balanceBefore)
-            : Math.Max(0m, -balanceBefore);
-        if (balanceAmount > availableBalance)
-        {
-            var sideName = input.Direction == CashTransactionDirection.Receipt ? "دریافتنی" : "پرداختنی";
-            throw new BusinessRuleException(
-                $"مبلغ تسویه‌شده ({MoneyMath.FormatAmount(balanceAmount, balanceCurrency.DecimalPlaces)} {balanceCode}) از مانده‌ی {sideName} مشتری بیشتر است.");
-        }
-
         var informationalRateIrr = cashCode == CurrencyCodes.Irr
             ? 1m
             : input.RateIrr ?? accountingRateIrr;

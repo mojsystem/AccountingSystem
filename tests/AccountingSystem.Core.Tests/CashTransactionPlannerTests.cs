@@ -35,6 +35,98 @@ public sealed class CashTransactionPlannerTests
     }
 
     [Fact]
+    public void Receipt_above_receivable_posts_excess_as_customer_prepayment()
+    {
+        var openingAt = Now.AddHours(-1);
+        var opening = new LedgerEvent(
+            LedgerDocKind.Opening, 5, LedgerEventKind.Acquire, "EUR", openingAt, 10,
+            1m, 1_000_000m, 0m, 0m, 0m, 0m);
+        var ledger = new BranchLedger(
+            1,
+            0,
+            new[] { opening },
+            new HashSet<DocRef> { new(LedgerDocKind.Opening, 5) },
+            0m,
+            new Dictionary<string, PoolBalance> { ["EUR"] = new(1m, 1_000_000m) });
+        var input = new CashTransactionInput(
+            1, CashTransactionDirection.Receipt, 27, "EUR", 500m,
+            TradeRateMode.Derived, BalanceCurrencyCode: "EUR");
+
+        var posting = LedgerPlanner.PlanCashTransaction(
+            ledger, Eur, Eur, input, 1_000_000m,
+            500m, 200m, Now, 9, Now);
+
+        var journal = Assert.Single(posting.Journals);
+        Assert.Contains(journal.Lines, line => line.AccountCode == AccountCodes.ForeignCash("EUR")
+            && line.Debit == 500_000_000m);
+        Assert.Contains(journal.Lines, line => line.AccountCode == AccountCodes.CustomerReceivable
+            && line.CustomerBalanceCurrencyCode == "EUR" && line.CustomerBalanceDelta == -200m
+            && line.Credit == 200_000_000m);
+        Assert.Contains(journal.Lines, line => line.AccountCode == AccountCodes.CustomerPayable
+            && line.CustomerBalanceCurrencyCode == "EUR" && line.CustomerBalanceDelta == -300m
+            && line.Credit == 300_000_000m);
+        Assert.Equal(journal.Lines.Sum(line => line.Debit), journal.Lines.Sum(line => line.Credit));
+    }
+
+    [Fact]
+    public void Payment_above_payable_posts_excess_as_customer_receivable()
+    {
+        var openingAt = Now.AddHours(-1);
+        var opening = new LedgerEvent(
+            LedgerDocKind.Opening, 5, LedgerEventKind.Acquire, "EUR", openingAt, 10,
+            600m, 600_000_000m, 0m, 0m, 0m, 0m);
+        var ledger = new BranchLedger(
+            1,
+            0,
+            new[] { opening },
+            new HashSet<DocRef> { new(LedgerDocKind.Opening, 5) },
+            0m,
+            new Dictionary<string, PoolBalance> { ["EUR"] = new(600m, 600_000_000m) });
+        var input = new CashTransactionInput(
+            1, CashTransactionDirection.Payment, 27, "EUR", 500m,
+            TradeRateMode.Derived, BalanceCurrencyCode: "EUR");
+
+        var posting = LedgerPlanner.PlanCashTransaction(
+            ledger, Eur, Eur, input, 1_000_000m,
+            500m, -200m, Now, 9, Now);
+
+        var journal = Assert.Single(posting.Journals);
+        Assert.Contains(journal.Lines, line => line.AccountCode == AccountCodes.CustomerPayable
+            && line.CustomerBalanceCurrencyCode == "EUR" && line.CustomerBalanceDelta == 200m
+            && line.Debit == 200_000_000m);
+        Assert.Contains(journal.Lines, line => line.AccountCode == AccountCodes.CustomerReceivable
+            && line.CustomerBalanceCurrencyCode == "EUR" && line.CustomerBalanceDelta == 300m
+            && line.Debit == 300_000_000m);
+        Assert.Contains(journal.Lines, line => line.AccountCode == AccountCodes.ForeignCash("EUR")
+            && line.Credit == 500_000_000m);
+        Assert.Equal(-500m, Assert.Single(posting.CashMovements).Delta);
+        Assert.Equal(journal.Lines.Sum(line => line.Debit), journal.Lines.Sum(line => line.Credit));
+    }
+
+    [Fact]
+    public void Payment_above_payable_still_requires_available_cash_inventory()
+    {
+        var openingAt = Now.AddHours(-1);
+        var opening = new LedgerEvent(
+            LedgerDocKind.Opening, 5, LedgerEventKind.Acquire, "EUR", openingAt, 10,
+            2m, 2_000_000m, 0m, 0m, 0m, 0m);
+        var ledger = new BranchLedger(
+            1,
+            0,
+            new[] { opening },
+            new HashSet<DocRef> { new(LedgerDocKind.Opening, 5) },
+            0m,
+            new Dictionary<string, PoolBalance> { ["EUR"] = new(2m, 2_000_000m) });
+        var input = new CashTransactionInput(
+            1, CashTransactionDirection.Payment, 27, "EUR", 3m,
+            TradeRateMode.Derived, BalanceCurrencyCode: "EUR");
+
+        Assert.Throws<BusinessRuleException>(() => LedgerPlanner.PlanCashTransaction(
+            ledger, Eur, Eur, input, 1_000_000m,
+            3m, -1m, Now, 9, Now));
+    }
+
+    [Fact]
     public void Independent_foreign_payment_uses_weighted_cost_and_sell_rate_value()
     {
         var opening = new LedgerEvent(
