@@ -82,4 +82,11 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        sys.exit(main())
+    except Exception as error:  # the diagnostic helper must not hide the test runner's real failure
+        import traceback
+
+        details = "".join(traceback.format_exception(type(error), error, error.__traceback__))[-MAX_MESSAGE_CHARS:]
+        print(f"::error title=Test result reporter failed::{escape_data(details)}")
+        sys.exit(0)
