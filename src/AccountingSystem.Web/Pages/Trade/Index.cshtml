@@ -48,7 +48,16 @@
         </label>
         <label>مقدار ارز<input name="Input.Amount" value="@Model.Input.Amount" dir="ltr" inputmode="decimal" /></label>
         <label>نرخ پایه (ریال به ازای یک واحد)<input id="rate" name="Input.Rate" value="@Model.Input.Rate" dir="ltr" inputmode="decimal" /></label>
-        <label>روش تسویه
+        <label>روش دریافت/پرداخت کل معامله
+            <select id="paymentMethod" name="Input.PaymentMethod">
+                <option value="CASH" selected="@(Model.Input.PaymentMethod == "CASH")">نقد</option>
+                <option value="CREDIT" selected="@(Model.Input.PaymentMethod == "CREDIT")">نسیه</option>
+                <option value="CHEQUE" selected="@(Model.Input.PaymentMethod == "CHEQUE")">چک</option>
+                <option value="POS" selected="@(Model.Input.PaymentMethod == "POS")">کارتخوان</option>
+                <option value="TRANSFER" selected="@(Model.Input.PaymentMethod == "TRANSFER")">حواله</option>
+            </select>
+        </label>
+        <label id="settlementModeField">ساختار تسویه
             <select id="settlementMode" name="Input.SettlementMode">
                 <option value="DIRECT" selected="@(Model.Input.SettlementMode == "DIRECT")">تبادل مستقیم دو ارز</option>
                 <option value="SPLIT" selected="@(Model.Input.SettlementMode == "SPLIT")">چندبخشی (چند دریافت/پرداخت)</option>
@@ -60,6 +69,15 @@
                 @foreach (var c in Model.SettlementCurrencies)
                 {
                     <option value="@c.Code" selected="@(c.Code == Model.Input.SettlementCurrencyCode)">@c.Code - @c.Name</option>
+                }
+            </select>
+        </label>
+        <label id="directBankAccountField" hidden>حساب بانکی حواله
+            <select id="directBankAccount" name="Input.BankAccountId">
+                <option value="">-- حساب بانکی --</option>
+                @foreach (var b in Model.BankAccounts)
+                {
+                    <option value="@b.Id" data-branch-id="@b.BranchId" data-currency-code="@b.CurrencyCode" selected="@(Model.Input.BankAccountId == b.Id)">@b.BranchName · @b.Name · @b.CurrencyCode</option>
                 }
             </select>
         </label>
@@ -107,6 +125,15 @@
                     <label>مقدار دریافتی/پرداختی
                         <input name="Input.SettlementLines[@i].Amount" value="@Model.Input.SettlementLines[i].Amount" dir="ltr" inputmode="decimal" />
                     </label>
+                    <label class="bank-account-field" hidden>حساب بانکی حواله
+                        <select name="Input.SettlementLines[@i].BankAccountId">
+                            <option value="">-- حساب بانکی --</option>
+                            @foreach (var b in Model.BankAccounts)
+                            {
+                                <option value="@b.Id" data-branch-id="@b.BranchId" data-currency-code="@b.CurrencyCode" selected="@(Model.Input.SettlementLines[i].BankAccountId == b.Id)">@b.BranchName · @b.Name · @b.CurrencyCode</option>
+                            }
+                        </select>
+                    </label>
                 </div>
             }
         </div>
@@ -124,12 +151,21 @@
                 <label>مقدار دریافتی/پرداختی
                     <input name="Input.SettlementLines[0].Amount" dir="ltr" inputmode="decimal" />
                 </label>
+                <label class="bank-account-field" hidden>حساب بانکی حواله
+                    <select name="Input.SettlementLines[0].BankAccountId">
+                        <option value="">-- حساب بانکی --</option>
+                        @foreach (var b in Model.BankAccounts)
+                        {
+                            <option value="@b.Id" data-branch-id="@b.BranchId" data-currency-code="@b.CurrencyCode">@b.BranchName · @b.Name · @b.CurrencyCode</option>
+                        }
+                    </select>
+                </label>
             </div>
         </template>
         <button type="button" class="secondary" id="addSettlementLine">افزودن سطر</button>
         <p class="hint">ارزش هر دریافت/پرداخت با نرخ شعبه در تاریخ معامله سنجیده می‌شود. مانده‌ی تسویه‌نشده با ارز انتخاب‌شده برای حساب مشتری ثبت می‌شود.</p>
     </section>
-    <p class="hint">در تسویه‌ی مستقیم، ارز مقابلِ واقعی را انتخاب کنید؛ در تسویه‌ی چندبخشی یا حساب مشتری، این فهرست ارز مانده‌ی مشتری را تعیین می‌کند. مانده‌ی معامله بر مبنای مبلغ و ارز تسویه‌شده است، نه مقدار ارز مورد معامله. روش نرخ مشتق‌شده یا نرخ مستقیم جفت‌ارز هر دو قابل استفاده‌اند. تاریخ خالی یعنی امروز؛ برای ثبت معامله‌ی گذشته، تاریخ آن را تا ۳۰ روز قبل وارد کنید.</p>
+    <p class="hint">روش نقد/نسیه/چک/کارتخوان/حواله برای کل معامله اعمال می‌شود و از ساختار تسویه و روش نرخ جداست. نسیه روی حساب مشتری می‌نشیند؛ حواله از حساب بانکی منتخب همان شعبه و ارز کسر یا به آن افزوده می‌شود. پرداخت نقدی یا حواله بدون موجودی کافی رد می‌شود. در تسویه‌ی چندبخشی، حساب حواله را برای هر سطر جدا انتخاب کنید. تاریخ خالی یعنی امروز؛ برای ثبت گذشته، تاریخ را تا ۳۰ روز قبل وارد کنید.</p>
     <p><button type="submit">ثبت معامله</button></p>
 </form>
 
@@ -175,7 +211,7 @@
             <th>مقدار</th>
             <th>نرخ</th>
             <th>مبلغ ریالی</th>
-            <th>روش تسویه</th>
+            <th>روش دریافت/پرداخت و ساختار تسویه</th>
             <th>دریافت/پرداخت</th>
             <th>کارمزد</th>
             <th>سود (ریال)</th>
@@ -197,7 +233,7 @@
                 <td>@ViewFormat.Quantity(t.Amount)</td>
                 <td>@ViewFormat.Rate(t.Rate)</td>
                 <td>@ViewFormat.Money(t.IrrAmount)</td>
-                <td>@IndexModel.SettlementModeText(t.SettlementMode)</td>
+                <td>@IndexModel.PaymentMethodText(t.PaymentMethod) · @IndexModel.SettlementModeText(t.SettlementMode)</td>
                 <td>@IndexModel.SettlementSummary(t)</td>
                 <td>@ViewFormat.Money(t.FeeIrr)</td>
                 <td>@ViewFormat.Money(t.ProfitIrr)</td>
@@ -241,10 +277,14 @@
 (function () {
     var rates = @Html.Raw(Model.RatesJson);
     var currency = document.getElementById('currency');
+    if (!currency) { return; }
     var rate = document.getElementById('rate');
     var branch = document.getElementById('branch');
     var settlementCurrency = document.getElementById('settlementCurrency');
     var settlementMode = document.getElementById('settlementMode');
+    var paymentMethod = document.getElementById('paymentMethod');
+    var directBankField = document.getElementById('directBankAccountField');
+    var directBank = document.getElementById('directBankAccount');
     var rateMode = document.getElementById('rateMode');
     var crossRate = document.getElementById('crossRate');
     var splitPanel = document.getElementById('splitPanel');
@@ -259,7 +299,7 @@
 
     function selectedRate(code, isCounter, isSell) {
         if (code === 'IRR') { return 1; }
-        var list = rates[branch.value] || [];
+        var list = rates[branch ? branch.value : ''] || [];
         var item = list.find(function (r) { return r.code === code; });
         if (!item) { return null; }
         return isCounter ? (isSell ? item.buy : item.sell) : (isSell ? item.sell : item.buy);
@@ -275,7 +315,42 @@
         }
     }
 
+    function filterBankAccounts(select, currencyCode) {
+        if (!select) { return; }
+        var branchCode = branch ? branch.value : '';
+        Array.from(select.options).forEach(function (option) {
+            if (!option.value) { option.hidden = false; option.disabled = false; return; }
+            var valid = option.dataset.branchId === branchCode && option.dataset.currencyCode === currencyCode;
+            option.hidden = !valid;
+            option.disabled = !valid;
+            if (!valid && option.selected) { select.value = ''; }
+        });
+    }
+
+    function updateBankAccounts() {
+        var transfer = paymentMethod.value === 'TRANSFER';
+        var direct = settlementMode.value === 'DIRECT';
+        directBankField.hidden = !transfer || !direct;
+        directBank.disabled = !transfer || !direct;
+        if (transfer && direct) { filterBankAccounts(directBank, settlementCurrency.value); }
+        else { directBank.value = ''; }
+        rows.querySelectorAll('.settlement-line').forEach(function (row) {
+            var field = row.querySelector('.bank-account-field');
+            var select = field && field.querySelector('select');
+            var code = row.querySelector('select[name$=".CurrencyCode"]');
+            if (!field || !select) { return; }
+            field.hidden = !transfer || settlementMode.value !== 'SPLIT';
+            select.disabled = !transfer || settlementMode.value !== 'SPLIT';
+            if (transfer && settlementMode.value === 'SPLIT') { filterBankAccounts(select, code ? code.value : ''); }
+            else { select.value = ''; }
+        });
+    }
+
     function updateMode() {
+        var credit = paymentMethod.value === 'CREDIT';
+        if (credit) { settlementMode.value = 'ACCOUNT'; }
+        else if (settlementMode.value === 'ACCOUNT') { settlementMode.value = 'DIRECT'; }
+        settlementMode.disabled = credit;
         var direct = settlementMode.value === 'DIRECT';
         var split = settlementMode.value === 'SPLIT';
         settlementCurrencyField.hidden = false;
@@ -284,6 +359,7 @@
         crossRateField.hidden = !direct;
         splitPanel.hidden = !split;
         crossRate.readOnly = direct && rateMode.value === 'DERIVED';
+        updateBankAccounts();
         fillRate();
     }
 
@@ -295,15 +371,19 @@
             input.name = input.name.replace('[0]', '[' + index + ']');
         });
         rows.appendChild(row);
+        updateBankAccounts();
     });
 
     currency.addEventListener('change', fillRate);
-    settlementCurrency.addEventListener('change', fillRate);
-    branch.addEventListener('change', fillRate);
+    settlementCurrency.addEventListener('change', function () { fillRate(); updateBankAccounts(); });
+    if (branch) { branch.addEventListener('change', function () { fillRate(); updateBankAccounts(); }); }
     radios.forEach(function (radio) { radio.addEventListener('change', fillRate); });
     settlementMode.addEventListener('change', updateMode);
+    paymentMethod.addEventListener('change', updateMode);
+    rows.addEventListener('change', function (event) {
+        if (event.target && event.target.matches('select[name$=".CurrencyCode"]')) { updateBankAccounts(); }
+    });
     rateMode.addEventListener('change', updateMode);
-    if (!rate.value) { fillRate(); }
     updateMode();
 })();
 </script>

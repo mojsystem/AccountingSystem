@@ -96,6 +96,7 @@ internal sealed class JournalTab : UserControl, IRefreshable
         SourceTypes.Void => "ابطال",
         SourceTypes.Adjust => "تعدیل بهای تمام‌شده",
         SourceTypes.Manual => "سند دستی",
+        SourceTypes.BankOpening => "افتتاحیه‌ی حساب بانکی",
         _ => sourceType,
     };
 

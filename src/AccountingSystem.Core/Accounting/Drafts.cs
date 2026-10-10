@@ -28,10 +28,12 @@ public sealed record TradeInput(
     decimal? CustomerBalanceRateIrr = null,
     int? CustomerBalanceDecimalPlaces = null,
     string? CustomerOffsetCurrencyCode = null,
-    decimal CustomerOffsetAmount = 0m);
+    decimal CustomerOffsetAmount = 0m,
+    TradePaymentMethod PaymentMethod = TradePaymentMethod.Cash,
+    int? BankAccountId = null);
 
 /// <summary>یک سطر تسویه‌ی پولی که کاربر در فرم دریافت/پرداخت معامله وارد می‌کند.</summary>
-public sealed record TradeSettlementInput(string CurrencyCode, decimal Amount, decimal RateIrr = 1m, int DecimalPlaces = 4);
+public sealed record TradeSettlementInput(string CurrencyCode, decimal Amount, decimal RateIrr = 1m, int DecimalPlaces = 4, int? BankAccountId = null);
 
 /// <summary>ورودی یک رسید یا پرداخت مستقل از معامله، به طرفیت حساب مشتری.</summary>
 public sealed record CashTransactionInput(
@@ -88,7 +90,8 @@ public sealed record TradeDraft(
     decimal CrossRate = 0m,
     decimal CustomerOffsetIrr = 0m,
     IReadOnlyList<TradeSettlementDraft>? Settlements = null,
-    string? SettlementCurrencyCode = null);
+    string? SettlementCurrencyCode = null,
+    TradePaymentMethod PaymentMethod = TradePaymentMethod.Cash);
 
 /// <summary>سطر دریافت/پرداخت آماده‌ی ثبت و بازپخش حسابداری.</summary>
 public sealed record TradeSettlementDraft(
@@ -100,7 +103,8 @@ public sealed record TradeSettlementDraft(
     decimal IrrAmount,
     decimal CostIrr = 0m,
     decimal ProfitIrr = 0m,
-    int DecimalPlaces = 4);
+    int DecimalPlaces = 4,
+    int? BankAccountId = null);
 
 /// <summary>موجودی افتتاحیه‌ی آماده‌ی ذخیره.</summary>
 public sealed record OpeningDraft(
@@ -184,6 +188,14 @@ public sealed record CashMovementDraft(
 /// <summary>تغییر بهای تمام‌شده‌ی موجودی ارز؛ ExpectedCostIrr برای کنترل همزمانی.</summary>
 public sealed record InventoryDraft(string CurrencyCode, decimal ExpectedCostIrr, decimal NewCostIrr);
 
+/// <summary>موجودی جاری حساب بانکی پس از بازپخش تاریخچه؛ Expectedها کنترل همزمانی هستند.</summary>
+public sealed record BankAccountBalanceDraft(
+    int BankAccountId,
+    decimal ExpectedBalance,
+    decimal NewBalance,
+    decimal ExpectedCostIrr,
+    decimal NewCostIrr);
+
 /// <summary>به‌روزرسانی بهای تمام‌شده و سود یک فروش موجود که در اثر بازمحاسبه تغییر کرده است.</summary>
 public sealed record TradeCostUpdate(long TradeId, decimal CostIrr, decimal ProfitIrr);
 
@@ -214,4 +226,5 @@ public sealed record PostingDraft(
     string AuditDetails,
     IReadOnlyList<TradeSettlementCostUpdate>? SettlementCostUpdates = null,
     CashTransactionDraft? CashTransaction = null,
-    IReadOnlyList<CashTransactionCostUpdate>? CashTransactionCostUpdates = null);
+    IReadOnlyList<CashTransactionCostUpdate>? CashTransactionCostUpdates = null,
+    IReadOnlyList<BankAccountBalanceDraft>? BankAccountUpdates = null);

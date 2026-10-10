@@ -1,0 +1,89 @@
+@page
+@model IndexModel
+@{
+    ViewData["Title"] = "حساب‌های بانکی";
+}
+
+<h1>حساب‌های بانکی شعبه‌ها</h1>
+
+@if (TempData["Success"] is string successMessage)
+{
+    <div class="alert ok">@successMessage</div>
+}
+<div asp-validation-summary="All" class="alert error"></div>
+
+<p class="hint">هر حساب به یک شعبه و ارز مشخص متصل است. موجودی افتتاحیه‌ی ارزی با نرخ واردشده ارزش‌گذاری می‌شود و در دفتر کل ثبت خواهد شد. حساب بانکی را معامله‌گران در روش «حواله» انتخاب می‌کنند؛ پرداخت فقط با موجودی کافی مجاز است.</p>
+
+<table>
+    <thead>
+        <tr>
+            <th>شعبه</th>
+            <th>نام حساب</th>
+            <th>ارز</th>
+            <th>موجودی افتتاحیه</th>
+            <th>بهای افتتاحیه (ریال)</th>
+            <th>موجودی فعلی</th>
+            <th>بهای فعلی (ریال)</th>
+            <th>ایجادکننده / زمان</th>
+        </tr>
+    </thead>
+    <tbody>
+        @foreach (var account in Model.Accounts)
+        {
+            <tr>
+                <td>@account.BranchName</td>
+                <td>@account.Name</td>
+                <td>@account.CurrencyCode</td>
+                <td>@ViewFormat.Quantity(account.OpeningBalance)</td>
+                <td>@ViewFormat.Money(account.OpeningCostIrr)</td>
+                <td>@ViewFormat.Quantity(account.Balance)</td>
+                <td>@ViewFormat.Money(account.CostIrr)</td>
+                <td>@account.CreatedBy · @ViewFormat.Date(account.CreatedAt)</td>
+            </tr>
+        }
+    </tbody>
+</table>
+
+<h2>افزودن حساب بانکی</h2>
+<form method="post" class="panel form-grid">
+    <label>شعبه
+        <select name="Input.BranchId" required>
+            <option value="">-- انتخاب شعبه --</option>
+            @foreach (var branch in Model.BranchList)
+            {
+                <option value="@branch.Id" selected="@(branch.Id == Model.Input.BranchId)">@branch.Code · @branch.Name</option>
+            }
+        </select>
+    </label>
+    <label>نام حساب
+        <input name="Input.Name" value="@Model.Input.Name" maxlength="100" placeholder="مثلاً حساب جاری ملت" required />
+    </label>
+    <label>ارز
+        <select id="currencyCode" name="Input.CurrencyCode" required>
+            @foreach (var currency in Model.CurrencyList)
+            {
+                <option value="@currency.Code" data-decimals="@currency.DecimalPlaces" selected="@(currency.Code == Model.Input.CurrencyCode)">@currency.Code · @currency.Name</option>
+            }
+        </select>
+    </label>
+    <label>موجودی افتتاحیه
+        <input name="Input.OpeningBalance" value="@Model.Input.OpeningBalance" dir="ltr" inputmode="decimal" placeholder="0" required />
+    </label>
+    <label id="openingRateField">نرخ افتتاحیه (ریال برای هر واحد ارز)
+        <input name="Input.OpeningRateIrr" value="@Model.Input.OpeningRateIrr" dir="ltr" inputmode="decimal" placeholder="مثلاً 500000" />
+    </label>
+    <div><button type="submit">ایجاد حساب و ثبت افتتاحیه</button></div>
+</form>
+
+<script>
+(function () {
+    var currency = document.getElementById('currencyCode');
+    var rateField = document.getElementById('openingRateField');
+    function update() {
+        rateField.hidden = currency.value === 'IRR';
+        rateField.querySelector('input').disabled = currency.value === 'IRR';
+    }
+    currency.addEventListener('change', update);
+    update();
+})();
+</script>

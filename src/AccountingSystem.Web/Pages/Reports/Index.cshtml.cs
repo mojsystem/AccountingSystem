@@ -64,6 +64,7 @@ public sealed class IndexModel : PageModel
         SourceTypes.Void => "ابطال",
         SourceTypes.Adjust => "تعدیل",
         SourceTypes.Manual => "سند دستی",
+        SourceTypes.BankOpening => "افتتاحیه‌ی حساب بانکی",
         _ => sourceType,
     };
 

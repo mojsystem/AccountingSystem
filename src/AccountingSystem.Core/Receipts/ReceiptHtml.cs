@@ -73,7 +73,8 @@ h1 { font-size: 20px; margin: 0 0 4px; text-align: center; }
         Row(sb, "نرخ پایه (ریال به ازای یک واحد)", MoneyMath.FormatRate(trade.Rate));
         Row(sb, "مبلغ ریالی معامله", MoneyMath.FormatAmount(trade.IrrAmount, 0) + " ریال");
         Row(sb, "کارمزد", MoneyMath.FormatAmount(trade.FeeIrr, 0) + " ریال");
-        Row(sb, "روش تسویه", SettlementModeText(trade.SettlementMode));
+        Row(sb, "روش دریافت/پرداخت", PaymentMethodText(trade.PaymentMethod));
+        Row(sb, "ساختار تسویه", SettlementModeText(trade.SettlementMode));
         if (trade.SettlementMode == TradeSettlementMode.Direct)
         {
             var counterCode = trade.SettlementCurrencyCode ?? settlements.FirstOrDefault()?.CurrencyCode ?? CurrencyCodes.Irr;
@@ -92,7 +93,8 @@ h1 { font-size: 20px; margin: 0 0 4px; text-align: center; }
                 : data.CurrencyDecimalPlaces is not null && data.CurrencyDecimalPlaces.TryGetValue(line.CurrencyCode, out var savedDecimals)
                     ? savedDecimals
                     : 4;
-            var value = $"{MoneyMath.FormatAmount(line.Amount, lineDecimals)} {CurrencyLabel(line.CurrencyCode, data.CurrencyNames)} — ارزش {MoneyMath.FormatAmount(line.IrrAmount, 0)} ریال";
+            var bank = line.BankAccountName is { Length: > 0 } bankName ? $" — حساب بانکی {bankName}" : string.Empty;
+            var value = $"{MoneyMath.FormatAmount(line.Amount, lineDecimals)} {CurrencyLabel(line.CurrencyCode, data.CurrencyNames)}{bank} — ارزش {MoneyMath.FormatAmount(line.IrrAmount, 0)} ریال";
             Row(sb, $"{direction} ({line.LineNumber})", value);
         }
         if (trade.CustomerOffsetIrr > 0m)
@@ -133,6 +135,16 @@ h1 { font-size: 20px; margin: 0 0 4px; text-align: center; }
         sb.Append("</main>\n</body>\n</html>\n");
         return sb.ToString();
     }
+
+    private static string PaymentMethodText(TradePaymentMethod method) => method switch
+    {
+        TradePaymentMethod.Cash => "نقد",
+        TradePaymentMethod.Credit => "نسیه",
+        TradePaymentMethod.Cheque => "چک",
+        TradePaymentMethod.Pos => "کارتخوان",
+        TradePaymentMethod.BankTransfer => "حواله",
+        _ => "نامشخص",
+    };
 
     private static string SettlementModeText(TradeSettlementMode mode) => mode switch
     {

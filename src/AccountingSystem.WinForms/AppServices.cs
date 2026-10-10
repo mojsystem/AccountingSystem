@@ -12,6 +12,7 @@ internal sealed class AppServices
         Trades = new CurrencyTradeService(repository);
         CashTransactions = new CashTransactionService(repository);
         Admin = new CurrencyAdminService(repository);
+        BankAccounts = new BankAccountService(repository);
         Manual = new ManualJournalService(repository);
         Reports = new ReportService(repository);
         Receipts = new ReceiptService(repository);
@@ -29,6 +30,8 @@ internal sealed class AppServices
     public CashTransactionService CashTransactions { get; }
 
     public CurrencyAdminService Admin { get; }
+
+    public BankAccountService BankAccounts { get; }
 
     public ManualJournalService Manual { get; }
 

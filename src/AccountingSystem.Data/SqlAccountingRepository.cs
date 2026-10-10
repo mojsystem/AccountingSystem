@@ -37,7 +37,7 @@ INNER JOIN dbo.Accounts a ON a.Code = l.AccountCode";
     private const string TradeSelect = @"
 SELECT t.Id, t.BranchId, br.Code, br.Name, t.TradeType, t.CurrencyCode, t.Amount, t.Rate, t.IrrAmount, t.CostIrr, t.ProfitIrr, t.FeeIrr,
        t.CustomerName, t.NationalCode, t.Note, t.OccurredAt, u.Username, t.IsVoided, t.VoidedAt, vu.Username, t.VoidReason, t.CustomerId,
-       t.SettlementMode, t.RateMode, t.CrossRate, t.CustomerOffsetIrr, t.SettlementCurrencyCode
+       t.SettlementMode, t.RateMode, t.CrossRate, t.CustomerOffsetIrr, t.SettlementCurrencyCode, t.PaymentMethod
 FROM dbo.CurrencyTransactions t
 INNER JOIN dbo.Branches br ON br.Id = t.BranchId
 INNER JOIN dbo.Users u ON u.Id = t.CreatedBy
@@ -251,6 +251,11 @@ LEFT JOIN dbo.Users vu ON vu.Id = t.VoidedBy";
                     new SqlParameter("@accountCode", AccountCodes.ForeignCash(currency.Code)),
                     new SqlParameter("@accountName", "موجودی ارز - " + currency.Name));
 
+                await ExecuteAsync(conn, tx, ct,
+                    "INSERT INTO dbo.Accounts (Code, Name, AccountType, Level, ParentCode, IsSystem, IsActive) VALUES (@accountCode, @accountName, N'Asset', 4, N'1102', 1, 1);",
+                    new SqlParameter("@accountCode", AccountCodes.ForeignBank(currency.Code)),
+                    new SqlParameter("@accountName", "موجودی بانکی - " + currency.Name));
+
                 return true;
             }, ct);
         }
@@ -372,6 +377,94 @@ ORDER BY br.Id, CASE WHEN b.CurrencyCode = N'IRR' THEN 0 ELSE 1 END, b.CurrencyC
         return result;
     }
 
+    public async Task<IReadOnlyList<BankAccountInfo>> GetBankAccountsAsync(int? branchId, CancellationToken ct = default)
+    {
+        const string sql = @"
+SELECT b.Id, b.BranchId, br.Name, b.Name, b.CurrencyCode, c.Name, c.DecimalPlaces,
+       b.OpeningBalance, b.OpeningCostIrr, b.Balance, b.CostIrr, b.CreatedAt, u.Username
+FROM dbo.BankAccounts b
+INNER JOIN dbo.Branches br ON br.Id = b.BranchId
+INNER JOIN dbo.Currencies c ON c.Code = b.CurrencyCode
+INNER JOIN dbo.Users u ON u.Id = b.CreatedBy
+WHERE (@branchId IS NULL OR b.BranchId = @branchId)
+ORDER BY br.Id, b.CurrencyCode, b.Name, b.Id;";
+        var result = new List<BankAccountInfo>();
+        await using var conn = await OpenAsync(ct);
+        await using var cmd = new SqlCommand(sql, conn);
+        cmd.Parameters.Add(NullableInt("@branchId", branchId));
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+        {
+            result.Add(new BankAccountInfo(
+                reader.GetInt32(0), reader.GetInt32(1), reader.GetString(2), reader.GetString(3),
+                reader.GetString(4).Trim(), reader.GetString(5), reader.GetByte(6),
+                reader.GetDecimal(7), reader.GetDecimal(8), reader.GetDecimal(9), reader.GetDecimal(10),
+                reader.GetDateTime(11), reader.GetString(12)));
+        }
+        return result;
+    }
+
+    public async Task<int> AddBankAccountAsync(BankAccountRecord account, int actorId, DateTime now, CancellationToken ct = default)
+    {
+        try
+        {
+            return await WithTransactionAsync(async (conn, tx) =>
+            {
+                var nowAt = OccurrenceRules.Truncate(now);
+                var id = Convert.ToInt32(await ScalarAsync(conn, tx, ct, @"
+INSERT INTO dbo.BankAccounts
+    (BranchId, Name, CurrencyCode, OpeningBalance, OpeningCostIrr, Balance, CostIrr, CreatedAt, CreatedBy, UpdatedAt)
+OUTPUT INSERTED.Id
+VALUES (@branchId, @name, @currencyCode, @openingBalance, @openingCost, @openingBalance, @openingCost, @now, @actorId, @now);",
+                    new SqlParameter("@branchId", account.BranchId),
+                    new SqlParameter("@name", account.Name),
+                    new SqlParameter("@currencyCode", account.CurrencyCode),
+                    Money("@openingBalance", account.OpeningBalance),
+                    Money("@openingCost", account.OpeningCostIrr),
+                    new SqlParameter("@now", nowAt),
+                    new SqlParameter("@actorId", actorId)), CultureInfo.InvariantCulture);
+
+                var ledgerVersionUpdated = await ExecuteAsync(conn, tx, ct,
+                    "UPDATE dbo.Branches SET LedgerVersion = LedgerVersion + 1 WHERE Id = @branchId;",
+                    new SqlParameter("@branchId", account.BranchId));
+                if (ledgerVersionUpdated != 1)
+                {
+                    throw new BusinessRuleException("شعبه‌ی حساب بانکی در دسترس نیست.");
+                }
+
+                if (account.OpeningCostIrr > 0m)
+                {
+                    var accountCode = account.CurrencyCode == CurrencyCodes.Irr
+                        ? AccountCodes.BankCash
+                        : AccountCodes.ForeignBank(account.CurrencyCode);
+                    var journal = new JournalDraft(
+                        $"موجودی افتتاحیه‌ی حساب بانکی «{account.Name}» ({account.CurrencyCode})",
+                        nowAt,
+                        new[]
+                        {
+                            new JournalLineDraft(accountCode, account.OpeningCostIrr, 0m),
+                            new JournalLineDraft(AccountCodes.OpeningCapital, 0m, account.OpeningCostIrr),
+                        },
+                        SourceTypes.BankOpening,
+                        new DocRef(LedgerDocKind.Opening, id));
+                    await InsertJournalAsync(conn, tx, account.BranchId, journal, id, actorId, nowAt, ct);
+                }
+
+                await InsertAuditAsync(conn, tx, actorId, nowAt, "BANK_ACCOUNT_CREATE", "BANK_ACCOUNT", id,
+                    $"حساب بانکی «{account.Name}» برای شعبه‌ی {account.BranchId} و ارز {account.CurrencyCode} ایجاد شد؛ موجودی افتتاحیه {account.OpeningBalance}، بهای ریالی {account.OpeningCostIrr}", ct);
+                return id;
+            }, ct);
+        }
+        catch (SqlException ex) when (ex.Number is DuplicateKeyError or UniqueIndexError)
+        {
+            throw new BusinessRuleException("حساب بانکی با همین نام و ارز در این شعبه از قبل ثبت شده است.");
+        }
+        catch (SqlException ex) when (ex.Number == ForeignKeyError)
+        {
+            throw new BusinessRuleException("شعبه، ارز یا کاربر انتخاب‌شده برای حساب بانکی معتبر نیست.");
+        }
+    }
+
     public async Task<IReadOnlyList<InventoryInfo>> GetInventoryAsync(int? branchId, CancellationToken ct = default)
     {
         const string sql = "SELECT BranchId, CurrencyCode, TotalCostIrr FROM dbo.CurrencyInventory WHERE (@branchId IS NULL OR BranchId = @branchId);";
@@ -435,6 +528,7 @@ ORDER BY a.Code;";
         await ReadOpeningEventsAsync(conn, branchId, events, active, ct);
         await ReadManualEventsAsync(conn, branchId, events, active, ct);
         await ReadCashTransactionEventsAsync(conn, branchId, events, active, ct);
+        var storedBankPools = await ReadBankAccountOpeningEventsAsync(conn, branchId, events, ct);
 
         var irrBalance = 0m;
         var pools = new Dictionary<string, PoolBalance>(StringComparer.Ordinal);
@@ -463,7 +557,35 @@ WHERE b.BranchId = @branchId;";
             }
         }
 
-        return new BranchLedger(branchId, version, events, active, irrBalance, pools);
+        return new BranchLedger(branchId, version, events, active, irrBalance, pools, storedBankPools);
+    }
+
+    private static async Task<Dictionary<int, PoolBalance>> ReadBankAccountOpeningEventsAsync(SqlConnection conn, int branchId, List<LedgerEvent> events, CancellationToken ct)
+    {
+        const string sql = @"
+SELECT Id, CurrencyCode, OpeningBalance, OpeningCostIrr, CreatedAt, Balance, CostIrr
+FROM dbo.BankAccounts
+WHERE BranchId = @branchId;";
+        var result = new Dictionary<int, PoolBalance>();
+        await using var cmd = new SqlCommand(sql, conn);
+        cmd.Parameters.Add(new SqlParameter("@branchId", branchId));
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+        {
+            var id = reader.GetInt32(0);
+            var code = reader.GetString(1).Trim();
+            var openingBalance = reader.GetDecimal(2);
+            var openingCost = reader.GetDecimal(3);
+            var createdAt = reader.GetDateTime(4);
+            result.Add(id, new PoolBalance(reader.GetDecimal(5), reader.GetDecimal(6)));
+            if (openingBalance > 0m || openingCost > 0m)
+            {
+                events.Add(new LedgerEvent(LedgerDocKind.Opening, -id, LedgerEventKind.Acquire, code, createdAt,
+                    long.MinValue + id, openingBalance, openingCost, 0m, 0m, openingCost, 0m,
+                    BankAccountId: id));
+            }
+        }
+        return result;
     }
 
     private static async Task ReadTradeEventsAsync(SqlConnection conn, int branchId, List<LedgerEvent> events, HashSet<DocRef> active, CancellationToken ct)
@@ -499,7 +621,8 @@ WHERE t.BranchId = @branchId AND t.IsVoided = 0;";
         }
 
         const string settlementSql = @"
-SELECT s.TradeId, s.LineNumber, s.Direction, s.CurrencyCode, s.Amount, s.IrrAmount, s.CostIrr, s.ProfitIrr, t.OccurredAt, t.Seq
+SELECT s.TradeId, s.LineNumber, s.Direction, s.CurrencyCode, s.Amount, s.IrrAmount, s.CostIrr, s.ProfitIrr,
+       t.OccurredAt, t.Seq, t.PaymentMethod, s.BankAccountId
 FROM dbo.CurrencyTransactionSettlements s
 INNER JOIN dbo.CurrencyTransactions t ON t.Id = s.TradeId
 WHERE t.BranchId = @branchId AND t.IsVoided = 0
@@ -521,17 +644,31 @@ ORDER BY t.OccurredAt, t.Seq, s.LineNumber;";
             var profit = settlementReader.GetDecimal(7);
             var occurredAt = settlementReader.GetDateTime(8);
             var seq = checked(settlementReader.GetInt64(9) * LedgerSeqFactor + lineNumber);
-            if (code == CurrencyCodes.Irr)
+            var method = ParsePaymentMethod(settlementReader.GetString(10));
+            var bankAccountId = settlementReader.IsDBNull(11) ? (int?)null : settlementReader.GetInt32(11);
+            var eventKind = direction == TradeSettlementDirection.Payment ? LedgerEventKind.Dispose : LedgerEventKind.Acquire;
+            if (method == TradePaymentMethod.BankTransfer)
             {
-                var delta = direction == TradeSettlementDirection.Payment ? -amount : amount;
-                events.Add(new LedgerEvent(LedgerDocKind.Trade, tradeId, LedgerEventKind.CashOnly, code, occurredAt, seq,
-                    0m, valueIrr, 0m, delta, cost, profit, lineNumber));
+                if (bankAccountId is null)
+                {
+                    throw new InvalidOperationException($"سطر حواله‌ی معامله‌ی {tradeId} حساب بانکی ندارد.");
+                }
+                events.Add(new LedgerEvent(LedgerDocKind.Trade, tradeId, eventKind, code, occurredAt, seq,
+                    amount, valueIrr, 0m, 0m, cost, profit, lineNumber, bankAccountId));
             }
-            else
+            else if (method == TradePaymentMethod.Cash)
             {
-                var kind = direction == TradeSettlementDirection.Payment ? LedgerEventKind.Dispose : LedgerEventKind.Acquire;
-                events.Add(new LedgerEvent(LedgerDocKind.Trade, tradeId, kind, code, occurredAt, seq,
-                    amount, valueIrr, 0m, 0m, cost, profit, lineNumber));
+                if (code == CurrencyCodes.Irr)
+                {
+                    var delta = direction == TradeSettlementDirection.Payment ? -amount : amount;
+                    events.Add(new LedgerEvent(LedgerDocKind.Trade, tradeId, LedgerEventKind.CashOnly, code, occurredAt, seq,
+                        0m, valueIrr, 0m, delta, cost, profit, lineNumber));
+                }
+                else
+                {
+                    events.Add(new LedgerEvent(LedgerDocKind.Trade, tradeId, eventKind, code, occurredAt, seq,
+                        amount, valueIrr, 0m, 0m, cost, profit, lineNumber));
+                }
             }
         }
     }
@@ -836,6 +973,7 @@ WHERE Id = @id AND BranchId = @branchId AND IsVoided = 0;",
             }
 
             await ApplyCashMovementsAsync(conn, tx, posting, newId, ct);
+            await ApplyBankAccountUpdatesAsync(conn, tx, posting, ct);
 
             foreach (var inventory in posting.Inventory)
             {
@@ -1020,10 +1158,10 @@ VALUES (@branchId, @occurredAt, @description, @sourceType, @sourceId, @userId, @
         const string sql = @"
 INSERT INTO dbo.CurrencyTransactions
     (BranchId, TradeType, CurrencyCode, Amount, Rate, IrrAmount, CostIrr, ProfitIrr, FeeIrr, CustomerId, CustomerName, NationalCode, Note, OccurredAt, CreatedBy, ReplacesId,
-     SettlementCurrencyCode, SettlementMode, RateMode, CrossRate, CustomerOffsetIrr)
+     SettlementCurrencyCode, SettlementMode, RateMode, CrossRate, CustomerOffsetIrr, PaymentMethod)
 OUTPUT INSERTED.Id
 VALUES (@branchId, @tradeType, @code, @amount, @rate, @irr, @cost, @profit, @fee, @customerId, @customer, @nationalCode, @note, @occurredAt, @userId, @replacesId,
-        @settlementCode, @settlementMode, @rateMode, @crossRate, @customerOffset);";
+        @settlementCode, @settlementMode, @rateMode, @crossRate, @customerOffset, @paymentMethod);";
         await using var cmd = new SqlCommand(sql, conn, tx);
         cmd.Parameters.Add(new SqlParameter("@branchId", branchId));
         cmd.Parameters.Add(new SqlParameter("@tradeType", trade.Type == TradeType.Buy ? "BUY" : "SELL"));
@@ -1057,6 +1195,7 @@ VALUES (@branchId, @tradeType, @code, @amount, @rate, @irr, @cost, @profit, @fee
         }));
         cmd.Parameters.Add(PreciseRate("@crossRate", trade.CrossRate));
         cmd.Parameters.Add(Money("@customerOffset", trade.CustomerOffsetIrr));
+        cmd.Parameters.Add(new SqlParameter("@paymentMethod", PaymentMethodCode(trade.PaymentMethod)));
         return Convert.ToInt64(await cmd.ExecuteScalarAsync(ct), CultureInfo.InvariantCulture);
     }
 
@@ -1074,8 +1213,8 @@ VALUES (@branchId, @tradeType, @code, @amount, @rate, @irr, @cost, @profit, @fee
 
         const string sql = @"
 INSERT INTO dbo.CurrencyTransactionSettlements
-    (TradeId, LineNumber, Direction, CurrencyCode, Amount, RateIrr, IrrAmount, CostIrr, ProfitIrr)
-VALUES (@tradeId, @lineNumber, @direction, @currencyCode, @amount, @rateIrr, @irrAmount, @cost, @profit);";
+    (TradeId, LineNumber, Direction, CurrencyCode, Amount, RateIrr, IrrAmount, CostIrr, ProfitIrr, BankAccountId)
+VALUES (@tradeId, @lineNumber, @direction, @currencyCode, @amount, @rateIrr, @irrAmount, @cost, @profit, @bankAccountId);";
         foreach (var settlement in settlements.OrderBy(s => s.LineNumber))
         {
             await using var cmd = new SqlCommand(sql, conn, tx);
@@ -1088,6 +1227,7 @@ VALUES (@tradeId, @lineNumber, @direction, @currencyCode, @amount, @rateIrr, @ir
             cmd.Parameters.Add(Money("@irrAmount", settlement.IrrAmount));
             cmd.Parameters.Add(Money("@cost", settlement.CostIrr));
             cmd.Parameters.Add(Money("@profit", settlement.ProfitIrr));
+            cmd.Parameters.Add(NullableInt("@bankAccountId", settlement.BankAccountId));
             await cmd.ExecuteNonQueryAsync(ct);
         }
     }
@@ -1198,6 +1338,54 @@ VALUES (@boxId, @amount, 0, @refType, @refId, @description, @occurredAt, @userId
                     new SqlParameter("@userId", posting.UserId));
             }
         }
+    }
+
+    private static async Task ApplyBankAccountUpdatesAsync(SqlConnection conn, SqlTransaction tx, PostingDraft posting, CancellationToken ct)
+    {
+        foreach (var update in posting.BankAccountUpdates ?? Array.Empty<BankAccountBalanceDraft>())
+        {
+            if (update.NewBalance < 0m || update.NewCostIrr < 0m)
+            {
+                throw new BusinessRuleException("موجودی حساب بانکی پس از ثبت نمی‌تواند منفی باشد.");
+            }
+            var current = await ReadBankAccountBalanceAsync(conn, tx, posting.BranchId, update.BankAccountId, ct);
+            if (current.Balance != update.ExpectedBalance || current.CostIrr != update.ExpectedCostIrr)
+            {
+                throw new ConcurrencyConflictException();
+            }
+            var affected = await ExecuteAsync(conn, tx, ct, @"
+UPDATE dbo.BankAccounts
+SET Balance = @newBalance, CostIrr = @newCost, UpdatedAt = @now
+WHERE Id = @id AND BranchId = @branchId AND Balance = @expectedBalance AND CostIrr = @expectedCost;",
+                Money("@newBalance", update.NewBalance),
+                Money("@newCost", update.NewCostIrr),
+                new SqlParameter("@now", posting.Now),
+                new SqlParameter("@id", update.BankAccountId),
+                new SqlParameter("@branchId", posting.BranchId),
+                Money("@expectedBalance", update.ExpectedBalance),
+                Money("@expectedCost", update.ExpectedCostIrr));
+            if (affected != 1)
+            {
+                throw new ConcurrencyConflictException();
+            }
+        }
+    }
+
+    private static async Task<(decimal Balance, decimal CostIrr)> ReadBankAccountBalanceAsync(
+        SqlConnection conn, SqlTransaction tx, int branchId, int bankAccountId, CancellationToken ct)
+    {
+        await using var cmd = new SqlCommand(@"
+SELECT Balance, CostIrr
+FROM dbo.BankAccounts WITH (UPDLOCK, HOLDLOCK)
+WHERE Id = @id AND BranchId = @branchId;", conn, tx);
+        cmd.Parameters.Add(new SqlParameter("@id", bankAccountId));
+        cmd.Parameters.Add(new SqlParameter("@branchId", branchId));
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        if (!await reader.ReadAsync(ct))
+        {
+            throw new BusinessRuleException("حساب بانکی حواله در شعبه‌ی انتخابی یافت نشد.");
+        }
+        return (reader.GetDecimal(0), reader.GetDecimal(1));
     }
 
     private static async Task<(int Id, decimal Balance)> ReadCashBoxAsync(SqlConnection conn, SqlTransaction tx, int branchId, string currencyCode, CancellationToken ct)
@@ -1336,8 +1524,10 @@ ORDER BY t.OccurredAt DESC, t.Id DESC;";
         CancellationToken ct)
     {
         const string sql = @"
-SELECT s.TradeId, s.LineNumber, s.Direction, s.CurrencyCode, s.Amount, s.RateIrr, s.IrrAmount, s.CostIrr, s.ProfitIrr
+SELECT s.TradeId, s.LineNumber, s.Direction, s.CurrencyCode, s.Amount, s.RateIrr, s.IrrAmount, s.CostIrr, s.ProfitIrr,
+       s.BankAccountId, b.Name
 FROM dbo.CurrencyTransactionSettlements s
+LEFT JOIN dbo.BankAccounts b ON b.Id = s.BankAccountId
 INNER JOIN dbo.CurrencyTransactions t ON t.Id = s.TradeId
 WHERE t.OccurredAt >= @from AND t.OccurredAt < @to AND (@branchId IS NULL OR t.BranchId = @branchId)
 ORDER BY s.TradeId, s.LineNumber;";
@@ -1363,10 +1553,12 @@ ORDER BY s.TradeId, s.LineNumber;";
     private static async Task<IReadOnlyList<TradeSettlementInfo>> ReadTradeSettlementsAsync(SqlConnection conn, long tradeId, CancellationToken ct)
     {
         const string sql = @"
-SELECT LineNumber, Direction, CurrencyCode, Amount, RateIrr, IrrAmount, CostIrr, ProfitIrr
-FROM dbo.CurrencyTransactionSettlements
-WHERE TradeId = @tradeId
-ORDER BY LineNumber;";
+SELECT s.LineNumber, s.Direction, s.CurrencyCode, s.Amount, s.RateIrr, s.IrrAmount, s.CostIrr, s.ProfitIrr,
+       s.BankAccountId, b.Name
+FROM dbo.CurrencyTransactionSettlements s
+LEFT JOIN dbo.BankAccounts b ON b.Id = s.BankAccountId
+WHERE s.TradeId = @tradeId
+ORDER BY s.LineNumber;";
         var result = new List<TradeSettlementInfo>();
         await using var cmd = new SqlCommand(sql, conn);
         cmd.Parameters.Add(new SqlParameter("@tradeId", tradeId));
@@ -1386,7 +1578,9 @@ ORDER BY LineNumber;";
         reader.GetDecimal(offset + 4),
         reader.GetDecimal(offset + 5),
         reader.GetDecimal(offset + 6),
-        reader.GetDecimal(offset + 7));
+        reader.GetDecimal(offset + 7),
+        reader.IsDBNull(offset + 8) ? (int?)null : reader.GetInt32(offset + 8),
+        ReadNullableString(reader, offset + 9));
 
     public async Task<TradeInfo?> GetTradeAsync(long tradeId, CancellationToken ct = default)
     {
@@ -2393,7 +2587,8 @@ WHERE Id = @id;";
             reader.GetDecimal(24),
             reader.GetDecimal(25),
             null,
-            ReadNullableString(reader, 26)?.Trim());
+            ReadNullableString(reader, 26)?.Trim(),
+            ParsePaymentMethod(reader.GetString(27)));
     }
 
     private static TradeSettlementMode ParseSettlementMode(string value) => value switch
@@ -2409,6 +2604,26 @@ WHERE Id = @id;";
         "DIRECT" => TradeRateMode.Direct,
         "DERIVED" => TradeRateMode.Derived,
         _ => throw new InvalidOperationException($"روش نرخ دیتابیس ناشناخته است: {value}"),
+    };
+
+    private static TradePaymentMethod ParsePaymentMethod(string value) => value switch
+    {
+        "CASH" => TradePaymentMethod.Cash,
+        "CREDIT" => TradePaymentMethod.Credit,
+        "CHEQUE" => TradePaymentMethod.Cheque,
+        "POS" => TradePaymentMethod.Pos,
+        "TRANSFER" => TradePaymentMethod.BankTransfer,
+        _ => throw new InvalidOperationException($"روش دریافت/پرداخت دیتابیس ناشناخته است: {value}"),
+    };
+
+    private static string PaymentMethodCode(TradePaymentMethod value) => value switch
+    {
+        TradePaymentMethod.Cash => "CASH",
+        TradePaymentMethod.Credit => "CREDIT",
+        TradePaymentMethod.Cheque => "CHEQUE",
+        TradePaymentMethod.Pos => "POS",
+        TradePaymentMethod.BankTransfer => "TRANSFER",
+        _ => throw new InvalidOperationException("روش دریافت/پرداخت ناشناخته است."),
     };
 
     private static SqlParameter Money(string name, decimal value) =>

@@ -11,6 +11,7 @@ public sealed class SchemaUpgradePlannerTests
     private static readonly string Sum3 = new('3', 64);
     private static readonly string Sum4 = new('4', 64);
     private static readonly string Sum5 = new('5', 64);
+    private static readonly string Sum6 = new('6', 64);
 
     private static readonly IReadOnlyList<MigrationInfo> Catalog = new[]
     {
@@ -19,6 +20,7 @@ public sealed class SchemaUpgradePlannerTests
         new MigrationInfo(3, "multicurrency_trade_settlement", Sum3),
         new MigrationInfo(4, "cash_receipts_payments", Sum4),
         new MigrationInfo(5, "currency_balances", Sum5),
+        new MigrationInfo(6, "trade_payment_methods_and_banks", Sum6),
     };
 
     private static DatabaseSchemaState Empty() =>
@@ -65,6 +67,14 @@ public sealed class SchemaUpgradePlannerTests
         "dbo.JournalLines.CustomerBalanceCurrencyCode", "dbo.JournalLines.CustomerBalanceDelta",
     }).ToArray();
 
+    private static readonly string[] V6Objects = V5Objects.Concat(new[]
+    {
+        "dbo.CurrencyTransactions.PaymentMethod",
+        "dbo.CurrencyTransactionSettlements.BankAccountId",
+        "dbo.BankAccounts", "dbo.BankAccounts.OpeningBalance", "dbo.BankAccounts.OpeningCostIrr",
+        "dbo.BankAccounts.Balance", "dbo.BankAccounts.CostIrr",
+    }).ToArray();
+
     [Fact]
     public void Empty_database_gets_every_version_in_order()
     {
@@ -72,13 +82,13 @@ public sealed class SchemaUpgradePlannerTests
 
         Assert.Equal(UpgradeKind.Create, plan.Kind);
         Assert.Empty(plan.AdoptVersions);
-        Assert.Equal(new[] { 1, 2, 3, 4, 5 }, plan.ApplyVersions);
+        Assert.Equal(new[] { 1, 2, 3, 4, 5, 6 }, plan.ApplyVersions);
     }
 
     [Fact]
     public void Versioned_database_at_latest_version_is_up_to_date()
     {
-        var plan = SchemaUpgradePlanner.Plan(Catalog, Versioned(Applied(1, Sum1), Applied(2, Sum2), Applied(3, Sum3), Applied(4, Sum4), Applied(5, Sum5)));
+        var plan = SchemaUpgradePlanner.Plan(Catalog, Versioned(Applied(1, Sum1), Applied(2, Sum2), Applied(3, Sum3), Applied(4, Sum4), Applied(5, Sum5), Applied(6, Sum6)));
 
         Assert.Equal(UpgradeKind.UpToDate, plan.Kind);
         Assert.Empty(plan.ApplyVersions);
@@ -91,7 +101,7 @@ public sealed class SchemaUpgradePlannerTests
 
         Assert.Equal(UpgradeKind.Upgrade, plan.Kind);
         Assert.Empty(plan.AdoptVersions);
-        Assert.Equal(new[] { 2, 3, 4, 5 }, plan.ApplyVersions);
+        Assert.Equal(new[] { 2, 3, 4, 5, 6 }, plan.ApplyVersions);
     }
 
     [Fact]
@@ -106,7 +116,7 @@ public sealed class SchemaUpgradePlannerTests
     [Fact]
     public void Database_newer_than_the_program_is_refused()
     {
-        var plan = SchemaUpgradePlanner.Plan(Catalog, Versioned(Applied(1, Sum1), Applied(2, Sum2), Applied(3, Sum3), Applied(4, Sum4), Applied(5, Sum5), Applied(6, Sum5)));
+        var plan = SchemaUpgradePlanner.Plan(Catalog, Versioned(Applied(1, Sum1), Applied(2, Sum2), Applied(3, Sum3), Applied(4, Sum4), Applied(5, Sum5), Applied(6, Sum6), Applied(7, Sum6)));
 
         Assert.Equal(UpgradeKind.Refuse, plan.Kind);
         Assert.Contains("جدیدتر", plan.Reason);
@@ -128,7 +138,7 @@ public sealed class SchemaUpgradePlannerTests
 
         Assert.Equal(UpgradeKind.Upgrade, plan.Kind);
         Assert.Equal(new[] { 1 }, plan.AdoptVersions);
-        Assert.Equal(new[] { 2, 3, 4, 5 }, plan.ApplyVersions);
+        Assert.Equal(new[] { 2, 3, 4, 5, 6 }, plan.ApplyVersions);
     }
 
     [Fact]
@@ -138,7 +148,7 @@ public sealed class SchemaUpgradePlannerTests
 
         Assert.Equal(UpgradeKind.Upgrade, plan.Kind);
         Assert.Equal(new[] { 1, 2 }, plan.AdoptVersions);
-        Assert.Equal(new[] { 3, 4, 5 }, plan.ApplyVersions);
+        Assert.Equal(new[] { 3, 4, 5, 6 }, plan.ApplyVersions);
     }
 
     [Fact]
@@ -148,7 +158,7 @@ public sealed class SchemaUpgradePlannerTests
 
         Assert.Equal(UpgradeKind.Upgrade, plan.Kind);
         Assert.Equal(new[] { 1, 2, 3 }, plan.AdoptVersions);
-        Assert.Equal(new[] { 4, 5 }, plan.ApplyVersions);
+        Assert.Equal(new[] { 4, 5, 6 }, plan.ApplyVersions);
     }
 
     [Fact]
@@ -158,7 +168,7 @@ public sealed class SchemaUpgradePlannerTests
 
         Assert.Equal(UpgradeKind.Upgrade, plan.Kind);
         Assert.Equal(new[] { 1, 2, 3, 4 }, plan.AdoptVersions);
-        Assert.Equal(new[] { 5 }, plan.ApplyVersions);
+        Assert.Equal(new[] { 5, 6 }, plan.ApplyVersions);
     }
 
     [Fact]
@@ -168,6 +178,16 @@ public sealed class SchemaUpgradePlannerTests
 
         Assert.Equal(UpgradeKind.Upgrade, plan.Kind);
         Assert.Equal(new[] { 1, 2, 3, 4, 5 }, plan.AdoptVersions);
+        Assert.Equal(new[] { 6 }, plan.ApplyVersions);
+    }
+
+    [Fact]
+    public void Current_version_6_install_script_without_a_version_table_is_adopted()
+    {
+        var plan = SchemaUpgradePlanner.Plan(Catalog, Legacy(V6Objects));
+
+        Assert.Equal(UpgradeKind.Upgrade, plan.Kind);
+        Assert.Equal(new[] { 1, 2, 3, 4, 5, 6 }, plan.AdoptVersions);
         Assert.Empty(plan.ApplyVersions);
     }
 

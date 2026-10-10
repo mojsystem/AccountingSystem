@@ -43,6 +43,23 @@ public static class LedgerPlanner
         var fee = input.FeeIrr;
         TradePlanner.ValidateFee(fee, type, irr);
         var mode = input.SettlementMode ?? TradeSettlementMode.Direct;
+        if (mode == TradeSettlementMode.CustomerAccount
+            && input.PaymentMethod != TradePaymentMethod.Cash
+            && input.PaymentMethod != TradePaymentMethod.Credit)
+        {
+            throw new BusinessRuleException("روش حساب مشتری فقط با روش نسیه سازگار است.");
+        }
+        var paymentMethod = mode == TradeSettlementMode.CustomerAccount
+            ? TradePaymentMethod.Credit
+            : input.PaymentMethod;
+        if (!Enum.IsDefined(paymentMethod))
+        {
+            throw new BusinessRuleException("روش دریافت/پرداخت معامله نامعتبر است.");
+        }
+        if (paymentMethod == TradePaymentMethod.Credit && mode != TradeSettlementMode.CustomerAccount)
+        {
+            throw new BusinessRuleException("روش نسیه باید روی حساب مشتری ثبت شود.");
+        }
         var rateMode = input.RateMode;
         var crossRate = input.CrossRate ?? (mode == TradeSettlementMode.Direct ? rate : 0m);
         if (mode == TradeSettlementMode.Direct)
@@ -75,7 +92,7 @@ public static class LedgerPlanner
         }
         if (mode == TradeSettlementMode.CustomerAccount && settlementInputs.Count != 0)
         {
-            throw new BusinessRuleException("در روش حساب مشتری، سطر دریافت یا پرداخت نقدی وارد نکنید.");
+            throw new BusinessRuleException("در روش حساب مشتری، سطر دریافت یا پرداخت وارد نکنید.");
         }
         if (mode == TradeSettlementMode.Direct && settlementInputs.Count > 1)
         {
@@ -123,21 +140,42 @@ public static class LedgerPlanner
             }
 
             var lineNumber = index + 1;
+            int? bankAccountId = paymentMethod == TradePaymentMethod.BankTransfer
+                ? line.BankAccountId ?? input.BankAccountId
+                : null;
+            if (paymentMethod == TradePaymentMethod.BankTransfer && (!bankAccountId.HasValue || bankAccountId.Value <= 0))
+            {
+                throw new BusinessRuleException("برای هر سطر حواله، حساب بانکی همان ارز را انتخاب کنید.");
+            }
+            if (paymentMethod != TradePaymentMethod.BankTransfer && (line.BankAccountId is not null || input.BankAccountId is not null))
+            {
+                throw new BusinessRuleException("انتخاب حساب بانکی فقط برای روش حواله مجاز است.");
+            }
+
             var lineDraft = new TradeSettlementDraft(lineNumber, direction, settlementCode, line.Amount, line.RateIrr, lineValueIrr,
-                DecimalPlaces: line.DecimalPlaces);
+                DecimalPlaces: line.DecimalPlaces, BankAccountId: bankAccountId);
             settlements.Add(lineDraft);
             var seq = NewEventSeq + lineNumber;
-            if (settlementCode == CurrencyCodes.Irr)
-            {
-                var irrDelta = direction == TradeSettlementDirection.Payment ? -line.Amount : line.Amount;
-                newEvents.Add(new LedgerEvent(LedgerDocKind.Trade, 0, LedgerEventKind.CashOnly, CurrencyCodes.Irr,
-                    occurredAt, seq, 0m, lineValueIrr, fee, irrDelta, 0m, 0m, lineNumber));
-            }
-            else
+            if (paymentMethod == TradePaymentMethod.BankTransfer)
             {
                 var eventKind = direction == TradeSettlementDirection.Payment ? LedgerEventKind.Dispose : LedgerEventKind.Acquire;
                 newEvents.Add(new LedgerEvent(LedgerDocKind.Trade, 0, eventKind, settlementCode, occurredAt, seq,
-                    line.Amount, lineValueIrr, 0m, 0m, 0m, 0m, lineNumber));
+                    line.Amount, lineValueIrr, 0m, 0m, 0m, 0m, lineNumber, bankAccountId));
+            }
+            else if (paymentMethod == TradePaymentMethod.Cash)
+            {
+                if (settlementCode == CurrencyCodes.Irr)
+                {
+                    var irrDelta = direction == TradeSettlementDirection.Payment ? -line.Amount : line.Amount;
+                    newEvents.Add(new LedgerEvent(LedgerDocKind.Trade, 0, LedgerEventKind.CashOnly, CurrencyCodes.Irr,
+                        occurredAt, seq, 0m, lineValueIrr, fee, irrDelta, 0m, 0m, lineNumber));
+                }
+                else
+                {
+                    var eventKind = direction == TradeSettlementDirection.Payment ? LedgerEventKind.Dispose : LedgerEventKind.Acquire;
+                    newEvents.Add(new LedgerEvent(LedgerDocKind.Trade, 0, eventKind, settlementCode, occurredAt, seq,
+                        line.Amount, lineValueIrr, 0m, 0m, 0m, 0m, lineNumber));
+                }
             }
         }
 
@@ -202,7 +240,9 @@ public static class LedgerPlanner
                 var baseProfit = type == TradeType.Sell ? mainDisposal.ProfitIrr : 0m;
                 var completedSettlements = settlements.Select(line =>
                 {
-                    if (line.Direction == TradeSettlementDirection.Payment && line.CurrencyCode != CurrencyCodes.Irr)
+                    if (line.Direction == TradeSettlementDirection.Payment
+                        && (paymentMethod == TradePaymentMethod.BankTransfer
+                            || (paymentMethod == TradePaymentMethod.Cash && line.CurrencyCode != CurrencyCodes.Irr)))
                     {
                         var disposal = state.SettlementDisposals[(tradeRef, line.LineNumber)];
                         return line with { CostIrr = disposal.CostIrr, ProfitIrr = disposal.ProfitIrr };
@@ -222,10 +262,10 @@ public static class LedgerPlanner
                 var trade = new TradeDraft(type, code, input.Amount, rate, irr, cost, profit, fee,
                     input.CustomerId, customer, nationalCode, note, occurredAt, userId, ReplacedId(replaces),
                     mode, rateMode, crossRate, input.CustomerOffsetIrr, completedSettlements,
-                    customerBalanceCurrencyCode);
+                    customerBalanceCurrencyCode, paymentMethod);
                 var lines = TradeJournalLines(code, irr, fee, cost, baseProfit, input.CustomerId,
                     input.CustomerOffsetIrr, customerOffsetCurrencyCode, customerOffsetAmount,
-                    completedSettlements, balanceComponents, type);
+                    completedSettlements, balanceComponents, type, paymentMethod);
                 var journal = new JournalDraft(description, occurredAt, lines, SourceTypes.Trade, tradeRef);
                 return new NewDocumentResult(trade, null, null, new[] { journal });
             });
@@ -243,7 +283,8 @@ public static class LedgerPlanner
         decimal customerOffsetAmount,
         IReadOnlyList<TradeSettlementDraft> settlements,
         IReadOnlyList<CustomerBalanceComponent> balanceComponents,
-        TradeType type)
+        TradeType type,
+        TradePaymentMethod paymentMethod)
     {
         var lines = new List<JournalLineDraft>();
         if (type == TradeType.Buy)
@@ -285,12 +326,10 @@ public static class LedgerPlanner
 
         foreach (var settlement in settlements)
         {
-            var cashAccount = settlement.CurrencyCode == CurrencyCodes.Irr
-                ? AccountCodes.IrrCash
-                : AccountCodes.ForeignCash(settlement.CurrencyCode);
+            var settlementAccount = SettlementAccount(paymentMethod, settlement);
             if (settlement.Direction == TradeSettlementDirection.Receipt)
             {
-                lines.Add(new JournalLineDraft(cashAccount, settlement.IrrAmount, 0m));
+                lines.Add(new JournalLineDraft(settlementAccount, settlement.IrrAmount, 0m));
                 lines.Add(new JournalLineDraft(AccountCodes.CustomerReceivable, 0m, settlement.IrrAmount, customerId,
                     settlement.CurrencyCode, -settlement.Amount));
             }
@@ -298,16 +337,42 @@ public static class LedgerPlanner
             {
                 lines.Add(new JournalLineDraft(AccountCodes.CustomerPayable, settlement.IrrAmount, 0m, customerId,
                     settlement.CurrencyCode, settlement.Amount));
-                if (settlement.CostIrr > 0m)
+                if (paymentMethod is TradePaymentMethod.Cheque or TradePaymentMethod.Pos)
                 {
-                    lines.Add(new JournalLineDraft(cashAccount, 0m, settlement.CostIrr));
+                    // چک/کارتخوانِ پرداختی بدهی واسط جدید ایجاد می‌کند؛ صندوق و سود/زیان موجودی ارز درگیر نیستند.
+                    lines.Add(new JournalLineDraft(settlementAccount, 0m, settlement.IrrAmount));
                 }
-                AddProfitLoss(lines, settlement.ProfitIrr);
+                else
+                {
+                    if (settlement.CostIrr > 0m)
+                    {
+                        lines.Add(new JournalLineDraft(settlementAccount, 0m, settlement.CostIrr));
+                    }
+                    AddProfitLoss(lines, settlement.ProfitIrr);
+                }
             }
         }
 
         return lines;
     }
+
+    private static string SettlementAccount(TradePaymentMethod method, TradeSettlementDraft settlement) => method switch
+    {
+        TradePaymentMethod.Cash => settlement.CurrencyCode == CurrencyCodes.Irr
+            ? AccountCodes.IrrCash
+            : AccountCodes.ForeignCash(settlement.CurrencyCode),
+        TradePaymentMethod.BankTransfer => settlement.CurrencyCode == CurrencyCodes.Irr
+            ? AccountCodes.BankCash
+            : AccountCodes.ForeignBank(settlement.CurrencyCode),
+        TradePaymentMethod.Cheque => settlement.Direction == TradeSettlementDirection.Receipt
+            ? AccountCodes.ChequeReceivable
+            : AccountCodes.ChequePayable,
+        TradePaymentMethod.Pos => settlement.Direction == TradeSettlementDirection.Receipt
+            ? AccountCodes.PosReceivable
+            : AccountCodes.PosPayable,
+        TradePaymentMethod.Credit => throw new BusinessRuleException("برای روش نسیه نباید سطر دریافت یا پرداخت وجود داشته باشد."),
+        _ => throw new BusinessRuleException("روش دریافت/پرداخت معامله نامعتبر است."),
+    };
 
     private static void AddCustomerBalanceComponents(
         List<JournalLineDraft> lines,
@@ -501,6 +566,12 @@ public static class LedgerPlanner
             if (line.AccountCode.StartsWith(ForeignInventoryPrefix, StringComparison.Ordinal))
             {
                 throw new BusinessRuleException("حساب‌های موجودی ارز فقط از راه معامله و موجودی افتتاحیه تغییر می‌کنند.");
+            }
+            if (line.AccountCode == AccountCodes.BankCash
+                || line.AccountCode == AccountCodes.ForeignBankRoot
+                || line.AccountCode.StartsWith(AccountCodes.ForeignBankPrefix, StringComparison.Ordinal))
+            {
+                throw new BusinessRuleException("حساب‌های بانکی فقط از راه افتتاح حساب و حواله تغییر می‌کنند.");
             }
             if (line.Debit != MoneyMath.RoundIrr(line.Debit) || line.Credit != MoneyMath.RoundIrr(line.Credit))
             {
@@ -859,6 +930,19 @@ public static class LedgerPlanner
             inventory.Add(new InventoryDraft(code, stored.CostIrr, pool.CostIrr));
         }
 
+        var storedBankPools = ledger.StoredBankPools ?? new Dictionary<int, PoolBalance>();
+        var bankUpdates = new List<BankAccountBalanceDraft>();
+        foreach (var bankAccountId in storedBankPools.Keys.Union(after.BankPools.Keys).OrderBy(id => id))
+        {
+            var stored = storedBankPools.TryGetValue(bankAccountId, out var current) ? current : default;
+            var final = after.BankPool(bankAccountId);
+            if (final.Quantity != stored.Quantity || final.CostIrr != stored.CostIrr)
+            {
+                bankUpdates.Add(new BankAccountBalanceDraft(bankAccountId, stored.Quantity, final.Quantity,
+                    stored.CostIrr, final.CostIrr));
+            }
+        }
+
         return new PostingDraft(
             Action: action,
             BranchId: ledger.BranchId,
@@ -876,7 +960,8 @@ public static class LedgerPlanner
             CostUpdates: costUpdates,
             AuditDetails: BuildDetails(action, voidDraft, costUpdates.Count + settlementCostUpdates.Count + cashTransactionCostUpdates.Count),
             SettlementCostUpdates: settlementCostUpdates,
-            CashTransactionCostUpdates: cashTransactionCostUpdates);
+            CashTransactionCostUpdates: cashTransactionCostUpdates,
+            BankAccountUpdates: bankUpdates);
     }
 
     /// <summary>
@@ -891,7 +976,10 @@ public static class LedgerPlanner
 
         // مقدار نگهداری‌شده به‌صورت «بدهکار خالص» هر حساب است.
         var net = new Dictionary<string, decimal>(StringComparer.Ordinal);
-        AddTo(net, AccountCodes.ForeignCash(sale.CurrencyCode), -(newCost - oldCost));
+        var inventoryAccount = sale.BankAccountId is not null
+            ? (sale.CurrencyCode == CurrencyCodes.Irr ? AccountCodes.BankCash : AccountCodes.ForeignBank(sale.CurrencyCode))
+            : AccountCodes.ForeignCash(sale.CurrencyCode);
+        AddTo(net, inventoryAccount, -(newCost - oldCost));
         AddTo(net, AccountCodes.FxProfit, Math.Max(oldProfit, 0m) - Math.Max(newProfit, 0m));
         AddTo(net, AccountCodes.FxLoss, Math.Max(-newProfit, 0m) - Math.Max(-oldProfit, 0m));
 
@@ -921,6 +1009,11 @@ public static class LedgerPlanner
         var refType = reverse ? SourceTypes.Void : RefTypeOf(e.DocKind);
         var at = reverse ? now : e.OccurredAt;
         var prefix = reverse ? "ابطال: " : string.Empty;
+
+        if (e.BankAccountId is not null)
+        {
+            yield break;
+        }
 
         if (e.IrrDelta != 0m)
         {
@@ -952,6 +1045,14 @@ public static class LedgerPlanner
             if (pool.Quantity != stored.Quantity || pool.CostIrr != stored.CostIrr)
             {
                 throw new InvalidOperationException($"ناسازگاری داده‌ها: موجودی یا بهای {code} با تاریخچه‌ی معاملات برابر نیست.");
+            }
+        }
+        foreach (var (bankAccountId, stored) in ledger.StoredBankPools ?? new Dictionary<int, PoolBalance>())
+        {
+            var pool = state.BankPool(bankAccountId);
+            if (pool.Quantity != stored.Quantity || pool.CostIrr != stored.CostIrr)
+            {
+                throw new InvalidOperationException($"ناسازگاری داده‌ها: موجودی یا بهای حساب بانکی {bankAccountId} با تاریخچه‌ی حواله‌ها برابر نیست.");
             }
         }
     }

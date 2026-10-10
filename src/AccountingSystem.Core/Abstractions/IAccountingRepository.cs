@@ -42,6 +42,10 @@ public interface IAccountingRepository
 
     Task<IReadOnlyList<CashBoxInfo>> GetCashBoxesAsync(int? branchId, CancellationToken ct = default);
 
+    Task<IReadOnlyList<BankAccountInfo>> GetBankAccountsAsync(int? branchId, CancellationToken ct = default);
+
+    Task<int> AddBankAccountAsync(BankAccountRecord account, int actorId, DateTime now, CancellationToken ct = default);
+
     Task<IReadOnlyList<InventoryInfo>> GetInventoryAsync(int? branchId, CancellationToken ct = default);
 
     /// <summary>

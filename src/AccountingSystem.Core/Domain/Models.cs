@@ -15,6 +15,16 @@ public enum TradeSettlementMode
     CustomerAccount,
 }
 
+/// <summary>روش پرداخت/دریافت پول برای کل معامله؛ مستقل از ساختار تسویه و روش نرخ.</summary>
+public enum TradePaymentMethod
+{
+    Cash,
+    Credit,
+    Cheque,
+    Pos,
+    BankTransfer,
+}
+
 /// <summary>روش تعیین نرخ جفت‌ارز.</summary>
 public enum TradeRateMode
 {
@@ -57,8 +67,16 @@ public static class AccountCodes
     public const string FeeIncome = "4101";
     public const string CustomerReceivable = "1201";
     public const string CustomerPayable = "2101";
+    public const string BankCash = "1002";
+    public const string ChequeReceivable = "1202";
+    public const string PosReceivable = "1203";
+    public const string ChequePayable = "2102";
+    public const string PosPayable = "2103";
+    public const string ForeignBankRoot = "1102";
+    public const string ForeignBankPrefix = ForeignBankRoot + "-";
 
     public static string ForeignCash(string currencyCode) => "1101-" + currencyCode;
+    public static string ForeignBank(string currencyCode) => ForeignBankPrefix + currencyCode;
 }
 
 public static class SourceTypes
@@ -75,6 +93,7 @@ public static class SourceTypes
     /// <summary>تعدیل بهای تمام‌شده‌ی پرداخت ارزی در اثر تغییر تاریخچه‌ی صندوق ارز.</summary>
     public const string CashAdjustment = "CASH_ADJUST";
     public const string CashTransaction = "CASH_TRANSACTION";
+    public const string BankOpening = "BANK_OPENING";
 }
 
 /// <summary>کاربر جاری. BranchId برای کاربر صندوق الزامی است؛ مدیر BranchId ندارد و به همه‌ی شعبه‌ها دسترسی دارد.</summary>
@@ -111,6 +130,30 @@ public sealed record CashBoxInfo(
 /// <summary>بهای تمام‌شده‌ی موجودی یک ارز در یک شعبه.</summary>
 public sealed record InventoryInfo(int BranchId, string CurrencyCode, decimal TotalCostIrr);
 
+/// <summary>حساب بانکی نام‌دار یک شعبه و ارز؛ مانده و بهای افتتاحیه و جاری به تفکیک حساب.</summary>
+public sealed record BankAccountInfo(
+    int Id,
+    int BranchId,
+    string BranchName,
+    string Name,
+    string CurrencyCode,
+    string CurrencyName,
+    int DecimalPlaces,
+    decimal OpeningBalance,
+    decimal OpeningCostIrr,
+    decimal Balance,
+    decimal CostIrr,
+    DateTime CreatedAt,
+    string CreatedBy);
+
+/// <summary>داده‌ی اولیه‌ی ایجاد حساب بانکی؛ موجودی و بهای افتتاحیه پس از اعتبارسنجی سرویس ذخیره می‌شوند.</summary>
+public sealed record BankAccountRecord(
+    int BranchId,
+    string Name,
+    string CurrencyCode,
+    decimal OpeningBalance,
+    decimal OpeningCostIrr);
+
 public sealed record TradeInfo(
     long Id,
     int BranchId,
@@ -139,7 +182,8 @@ public sealed record TradeInfo(
     decimal CrossRate = 0m,
     decimal CustomerOffsetIrr = 0m,
     IReadOnlyList<TradeSettlementInfo>? Settlements = null,
-    string? SettlementCurrencyCode = null);
+    string? SettlementCurrencyCode = null,
+    TradePaymentMethod PaymentMethod = TradePaymentMethod.Cash);
 
 /// <summary>دریافت یا پرداخت ثبت‌شده برای معامله، به‌همراه ارزش ریالی و بهای خروجی صندوق.</summary>
 public sealed record TradeSettlementInfo(
@@ -150,7 +194,9 @@ public sealed record TradeSettlementInfo(
     decimal RateIrr,
     decimal IrrAmount,
     decimal CostIrr,
-    decimal ProfitIrr);
+    decimal ProfitIrr,
+    int? BankAccountId = null,
+    string? BankAccountName = null);
 
 /// <summary>مانده‌ی خالص مشتری در یک شعبه، به ریال (مثبت: مشتری بدهکار؛ منفی: بستانکار).</summary>
 public sealed record CustomerAccountBalance(int BranchId, int CustomerId, decimal ReceivableIrr, decimal PayableIrr);

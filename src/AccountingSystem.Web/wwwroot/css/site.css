@@ -436,6 +436,10 @@ a:hover {
 
 /* ---------- Forms ---------- */
 
+[hidden] {
+    display: none !important;
+}
+
 label {
     display: grid;
     gap: 0.3rem;

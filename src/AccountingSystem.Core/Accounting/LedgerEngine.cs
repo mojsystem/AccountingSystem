@@ -53,7 +53,8 @@ public sealed record LedgerEvent(
     decimal IrrDelta,
     decimal StoredCostIrr,
     decimal StoredProfitIrr,
-    int? SettlementLineNumber = null)
+    int? SettlementLineNumber = null,
+    int? BankAccountId = null)
 {
     public DocRef Doc => new(DocKind, DocId);
 }
@@ -68,7 +69,8 @@ public sealed record BranchLedger(
     IReadOnlyList<LedgerEvent> Events,
     IReadOnlySet<DocRef> ActiveDocs,
     decimal StoredIrrBalance,
-    IReadOnlyDictionary<string, PoolBalance> StoredPools)
+    IReadOnlyDictionary<string, PoolBalance> StoredPools,
+    IReadOnlyDictionary<int, PoolBalance>? StoredBankPools = null)
 {
     /// <summary>
     /// دفتر ساختگی از روی یک عکس‌فوری صندوق. این وضعیت به‌عنوان یک «موجودی ابتدایی» بدون سند در نظر گرفته می‌شود
@@ -106,11 +108,13 @@ public sealed class LedgerState
     internal LedgerState(
         decimal irrBalance,
         IReadOnlyDictionary<string, PoolBalance> pools,
+        IReadOnlyDictionary<int, PoolBalance> bankPools,
         IReadOnlyDictionary<DocRef, DisposalResult> disposals,
         IReadOnlyDictionary<(DocRef Doc, int LineNumber), DisposalResult> settlementDisposals)
     {
         IrrBalance = irrBalance;
         Pools = pools;
+        BankPools = bankPools;
         Disposals = disposals;
         SettlementDisposals = settlementDisposals;
     }
@@ -118,6 +122,9 @@ public sealed class LedgerState
     public decimal IrrBalance { get; }
 
     public IReadOnlyDictionary<string, PoolBalance> Pools { get; }
+
+    /// <summary>موجودی و بهای تمام‌شده‌ی هر حساب بانکی.</summary>
+    public IReadOnlyDictionary<int, PoolBalance> BankPools { get; }
 
     /// <summary>بهای تمام‌شده و سود هر فروش، با کلید سند فروش.</summary>
     public IReadOnlyDictionary<DocRef, DisposalResult> Disposals { get; }
@@ -127,6 +134,9 @@ public sealed class LedgerState
 
     public PoolBalance Pool(string currencyCode) =>
         Pools.TryGetValue(currencyCode, out var pool) ? pool : default;
+
+    public PoolBalance BankPool(int bankAccountId) =>
+        BankPools.TryGetValue(bankAccountId, out var pool) ? pool : default;
 }
 
 /// <summary>
@@ -141,43 +151,78 @@ public static class LedgerEngine
         var ordered = events.OrderBy(e => e.OccurredAt).ThenBy(e => e.Seq).ToList();
         var irr = 0m;
         var pools = new Dictionary<string, PoolBalance>(StringComparer.Ordinal);
+        var bankPools = new Dictionary<int, PoolBalance>();
         var disposals = new Dictionary<DocRef, DisposalResult>();
         var settlementDisposals = new Dictionary<(DocRef Doc, int LineNumber), DisposalResult>();
 
         foreach (var e in ordered)
         {
-            switch (e.Kind)
+            if (e.BankAccountId is { } bankAccountId)
             {
-                case LedgerEventKind.Acquire:
+                var pool = GetBankPool(bankPools, bankAccountId);
+                switch (e.Kind)
                 {
-                    var pool = GetPool(pools, e.CurrencyCode);
-                    pools[e.CurrencyCode] = new PoolBalance(pool.Quantity + e.Quantity, pool.CostIrr + e.ValueIrr);
-                    break;
+                    case LedgerEventKind.Acquire:
+                        bankPools[bankAccountId] = new PoolBalance(pool.Quantity + e.Quantity, pool.CostIrr + e.ValueIrr);
+                        break;
+                    case LedgerEventKind.Dispose:
+                    {
+                        if (pool.Quantity < e.Quantity)
+                        {
+                            throw Infeasible(e, $"موجودی حساب بانکی شماره {bankAccountId} برای این حواله کافی نیست");
+                        }
+                        var cost = pool.Quantity == e.Quantity
+                            ? pool.CostIrr
+                            : MoneyMath.RoundIrr(pool.CostIrr * e.Quantity / pool.Quantity);
+                        bankPools[bankAccountId] = new PoolBalance(pool.Quantity - e.Quantity, pool.CostIrr - cost);
+                        var disposal = new DisposalResult(cost, e.ValueIrr - cost);
+                        if (e.SettlementLineNumber is { } bankLineNumber)
+                        {
+                            settlementDisposals[(e.Doc, bankLineNumber)] = disposal;
+                        }
+                        else
+                        {
+                            disposals[e.Doc] = disposal;
+                        }
+                        break;
+                    }
                 }
-
-                case LedgerEventKind.Dispose:
+            }
+            else
+            {
+                switch (e.Kind)
                 {
-                    var pool = GetPool(pools, e.CurrencyCode);
-                    if (pool.Quantity < e.Quantity)
+                    case LedgerEventKind.Acquire:
                     {
-                        throw Infeasible(e, $"موجودی {e.CurrencyCode} برای این فروش کافی نیست");
+                        var pool = GetPool(pools, e.CurrencyCode);
+                        pools[e.CurrencyCode] = new PoolBalance(pool.Quantity + e.Quantity, pool.CostIrr + e.ValueIrr);
+                        break;
                     }
 
-                    // فروش کل موجودی، دقیقاً کل بهای ثبت‌شده را خارج می‌کند تا باقی‌مانده‌ی بهای صفر شود.
-                    var cost = pool.Quantity == e.Quantity
-                        ? pool.CostIrr
-                        : MoneyMath.RoundIrr(pool.CostIrr * e.Quantity / pool.Quantity);
-                    pools[e.CurrencyCode] = new PoolBalance(pool.Quantity - e.Quantity, pool.CostIrr - cost);
-                    var disposal = new DisposalResult(cost, e.ValueIrr - cost);
-                    if (e.SettlementLineNumber is { } lineNumber)
+                    case LedgerEventKind.Dispose:
                     {
-                        settlementDisposals[(e.Doc, lineNumber)] = disposal;
+                        var pool = GetPool(pools, e.CurrencyCode);
+                        if (pool.Quantity < e.Quantity)
+                        {
+                            throw Infeasible(e, $"موجودی {e.CurrencyCode} برای این فروش کافی نیست");
+                        }
+
+                        // فروش کل موجودی، دقیقاً کل بهای ثبت‌شده را خارج می‌کند تا باقی‌مانده‌ی بهای صفر شود.
+                        var cost = pool.Quantity == e.Quantity
+                            ? pool.CostIrr
+                            : MoneyMath.RoundIrr(pool.CostIrr * e.Quantity / pool.Quantity);
+                        pools[e.CurrencyCode] = new PoolBalance(pool.Quantity - e.Quantity, pool.CostIrr - cost);
+                        var disposal = new DisposalResult(cost, e.ValueIrr - cost);
+                        if (e.SettlementLineNumber is { } lineNumber)
+                        {
+                            settlementDisposals[(e.Doc, lineNumber)] = disposal;
+                        }
+                        else
+                        {
+                            disposals[e.Doc] = disposal;
+                        }
+                        break;
                     }
-                    else
-                    {
-                        disposals[e.Doc] = disposal;
-                    }
-                    break;
                 }
             }
 
@@ -188,11 +233,14 @@ public static class LedgerEngine
             }
         }
 
-        return new LedgerState(irr, pools, disposals, settlementDisposals);
+        return new LedgerState(irr, pools, bankPools, disposals, settlementDisposals);
     }
 
     private static PoolBalance GetPool(Dictionary<string, PoolBalance> pools, string code) =>
         pools.TryGetValue(code, out var pool) ? pool : default;
+
+    private static PoolBalance GetBankPool(Dictionary<int, PoolBalance> pools, int bankAccountId) =>
+        pools.TryGetValue(bankAccountId, out var pool) ? pool : default;
 
     private static BusinessRuleException Infeasible(LedgerEvent e, string detail) =>
         new(

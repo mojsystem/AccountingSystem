@@ -46,6 +46,8 @@ public class IndexModel : PageModel
 
     public IReadOnlyList<CurrencyInfo> SettlementCurrencies { get; private set; } = Array.Empty<CurrencyInfo>();
 
+    public IReadOnlyList<BankAccountInfo> BankAccounts { get; private set; } = Array.Empty<BankAccountInfo>();
+
     public IReadOnlyList<BranchInfo> Branches { get; private set; } = Array.Empty<BranchInfo>();
 
     /// <summary>مشتریان مشترک برای انتخاب در فرم معامله (هر معامله باید مشتری داشته باشد).</summary>
@@ -144,6 +146,12 @@ public class IndexModel : PageModel
         Currencies = activeCurrencies.Where(c => c.Code != CurrencyCodes.Irr).ToList();
         SettlementCurrencies = activeCurrencies;
         Branches = await _permissions.GetBranchesAsync(user, Permission.TradeRecord, ct);
+        var bankAccounts = new List<BankAccountInfo>();
+        foreach (var branch in Branches)
+        {
+            bankAccounts.AddRange(await _trades.GetBankAccountsAsync(user, branch.Id, ct));
+        }
+        BankAccounts = bankAccounts;
         Customers = await LoadCustomersAsync(user, ct);
         ReadableBranches = await _permissions.GetBranchesAsync(user, null, ct);
 
@@ -192,6 +200,16 @@ public class IndexModel : PageModel
         return (fromInclusive, toExclusive);
     }
 
+    public static string PaymentMethodText(TradePaymentMethod method) => method switch
+    {
+        TradePaymentMethod.Cash => "نقد",
+        TradePaymentMethod.Credit => "نسیه",
+        TradePaymentMethod.Cheque => "چک",
+        TradePaymentMethod.Pos => "کارتخوان",
+        TradePaymentMethod.BankTransfer => "حواله",
+        _ => "نامشخص",
+    };
+
     public static string SettlementModeText(TradeSettlementMode mode) => mode switch
     {
         TradeSettlementMode.Direct => "مستقیم",
@@ -210,7 +228,8 @@ public class IndexModel : PageModel
         }
 
         var parts = lines.Select(line =>
-            $"{(line.Direction == TradeSettlementDirection.Payment ? "پرداخت" : "دریافت")} {MoneyMath.FormatAmount(line.Amount, 4)} {line.CurrencyCode}");
+            $"{(line.Direction == TradeSettlementDirection.Payment ? "پرداخت" : "دریافت")} {MoneyMath.FormatAmount(line.Amount, 4)} {line.CurrencyCode}" +
+            (line.BankAccountName is { Length: > 0 } bankName ? $" · {bankName}" : string.Empty));
         var summary = string.Join("؛ ", parts);
         if (trade.CustomerOffsetIrr > 0m)
         {
@@ -252,6 +271,10 @@ public sealed class TradeForm
 
     public string? Note { get; set; }
 
+    public string PaymentMethod { get; set; } = "CASH";
+
+    public int? BankAccountId { get; set; }
+
     public string SettlementMode { get; set; } = "DIRECT";
 
     public string RateMode { get; set; } = "DERIVED";
@@ -286,6 +309,24 @@ public sealed class TradeForm
             "ACCOUNT" => TradeSettlementMode.CustomerAccount,
             _ => throw new BusinessRuleException("روش تسویه‌ی معامله معتبر نیست."),
         };
+        var paymentMethod = (PaymentMethod ?? "CASH").Trim().ToUpperInvariant() switch
+        {
+            "CASH" => TradePaymentMethod.Cash,
+            "CREDIT" => TradePaymentMethod.Credit,
+            "CHEQUE" => TradePaymentMethod.Cheque,
+            "POS" => TradePaymentMethod.Pos,
+            "TRANSFER" => TradePaymentMethod.BankTransfer,
+            _ => throw new BusinessRuleException("روش دریافت/پرداخت معامله را انتخاب کنید."),
+        };
+        if (paymentMethod == TradePaymentMethod.Credit)
+        {
+            mode = TradeSettlementMode.CustomerAccount;
+        }
+        else if (mode == TradeSettlementMode.CustomerAccount)
+        {
+            paymentMethod = TradePaymentMethod.Credit;
+        }
+
         var rateMode = mode == TradeSettlementMode.Direct
             ? (RateMode ?? "DERIVED").Trim().ToUpperInvariant() switch
             {
@@ -333,7 +374,8 @@ public sealed class TradeForm
                 {
                     throw new BusinessRuleException($"مقدار سطر تسویه‌ی {code} را وارد کنید.");
                 }
-                lines.Add(new TradeSettlementInput(code, lineAmount));
+                lines.Add(new TradeSettlementInput(code, lineAmount,
+                    BankAccountId: paymentMethod == TradePaymentMethod.BankTransfer ? line.BankAccountId : null));
             }
         }
 
@@ -352,7 +394,9 @@ public sealed class TradeForm
             SettlementCurrencyCode,
             crossRate,
             lines,
-            ApplyCustomerOffset);
+            ApplyCustomerOffset,
+            PaymentMethod: paymentMethod,
+            BankAccountId: paymentMethod == TradePaymentMethod.BankTransfer && mode == TradeSettlementMode.Direct ? BankAccountId : null);
     }
 }
 
@@ -361,4 +405,6 @@ public sealed class TradeSettlementForm
     public string? CurrencyCode { get; set; }
 
     public string? Amount { get; set; }
+
+    public int? BankAccountId { get; set; }
 }

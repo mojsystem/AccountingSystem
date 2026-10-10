@@ -10,7 +10,7 @@ internal sealed class TradeTab : UserControl, IRefreshable
 {
     private static readonly string[] GridHeaders =
     {
-        "شماره", "شعبه", "زمان (شمسی)", "نوع", "ارز", "مقدار", "نرخ", "مبلغ ریالی", "روش تسویه", "دریافت/پرداخت", "کارمزد", "سود (ریال)", "مشتری", "ثبت‌کننده", "وضعیت",
+        "شماره", "شعبه", "زمان (شمسی)", "نوع", "ارز", "مقدار", "نرخ", "مبلغ ریالی", "روش دریافت/پرداخت", "دریافت/پرداخت", "کارمزد", "سود (ریال)", "مشتری", "ثبت‌کننده", "وضعیت",
     };
 
     private readonly AppServices _services;
@@ -21,12 +21,15 @@ internal sealed class TradeTab : UserControl, IRefreshable
     private readonly ComboBox _currency = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 170 };
     private readonly TextBox _amount = new() { Width = 110 };
     private readonly TextBox _rate = new() { Width = 110 };
+    private readonly ComboBox _paymentMethod = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 160 };
     private readonly ComboBox _settlementMode = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 190 };
+    private readonly ComboBox _bankAccount = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 240 };
     private readonly ComboBox _settlementCurrency = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 150 };
     private readonly ComboBox _rateMode = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 190 };
     private readonly TextBox _crossRate = new() { Width = 120 };
     private readonly CheckBox _applyOffset = new() { Text = "تهاتر مانده‌ی مشتری", AutoSize = true };
     private readonly Label _settlementCurrencyLabel = UiHelpers.MakeLabel("ارز مقابل:");
+    private readonly Label _bankAccountLabel = UiHelpers.MakeLabel("حساب بانکی حواله:");
     private readonly Label _rateModeLabel = UiHelpers.MakeLabel("روش نرخ:");
     private readonly Label _crossRateLabel = UiHelpers.MakeLabel("نرخ جفت‌ارز:");
     private readonly Label _settlementsLabel = UiHelpers.MakeLabel("ریز دریافت/پرداخت:");
@@ -71,6 +74,7 @@ internal sealed class TradeTab : UserControl, IRefreshable
     private readonly DataGridView _grid = UiHelpers.CreateGrid();
     private IReadOnlyList<RateInfo> _rates = Array.Empty<RateInfo>();
     private IReadOnlyList<CurrencyInfo> _currencies = Array.Empty<CurrencyInfo>();
+    private IReadOnlyList<BankAccountInfo> _bankAccounts = Array.Empty<BankAccountInfo>();
     private IReadOnlyList<BranchInfo> _branches = Array.Empty<BranchInfo>();
     private IReadOnlyList<BranchInfo> _readableBranches = Array.Empty<BranchInfo>();
     private IReadOnlyList<TradeInfo> _trades = Array.Empty<TradeInfo>();
@@ -80,6 +84,14 @@ internal sealed class TradeTab : UserControl, IRefreshable
     {
         _services = services;
         _user = user;
+        _paymentMethod.Items.AddRange(new object[]
+        {
+            new ComboItem("CASH", "نقد"),
+            new ComboItem("CREDIT", "نسیه"),
+            new ComboItem("CHEQUE", "چک"),
+            new ComboItem("POS", "کارتخوان"),
+            new ComboItem("TRANSFER", "حواله"),
+        });
         _settlementMode.Items.AddRange(new object[]
         {
             new ComboItem("DIRECT", "تبادل مستقیم دو ارز"),
@@ -91,6 +103,7 @@ internal sealed class TradeTab : UserControl, IRefreshable
             new ComboItem("DERIVED", "مشتق از نرخ‌های روز"),
             new ComboItem("DIRECT", "نرخ مستقیم جفت‌ارز"),
         });
+        _paymentMethod.SelectedIndex = 0;
         _settlementMode.SelectedIndex = 0;
         _rateMode.SelectedIndex = 0;
 
@@ -103,8 +116,10 @@ internal sealed class TradeTab : UserControl, IRefreshable
             UiHelpers.MakeLabel("ارز:"), _currency,
             UiHelpers.MakeLabel("مقدار:"), _amount,
             UiHelpers.MakeLabel("نرخ پایه (ریال):"), _rate,
-            UiHelpers.MakeLabel("روش تسویه:"), _settlementMode,
+            UiHelpers.MakeLabel("روش دریافت/پرداخت کل معامله:"), _paymentMethod,
+            UiHelpers.MakeLabel("ساختار تسویه:"), _settlementMode,
             _settlementCurrencyLabel, _settlementCurrency,
+            _bankAccountLabel, _bankAccount,
             _rateModeLabel, _rateMode,
             _crossRateLabel, _crossRate,
             _applyOffset,
@@ -137,10 +152,26 @@ internal sealed class TradeTab : UserControl, IRefreshable
         _buy.CheckedChanged += (_, _) => FillRateFromSelection();
         _sell.CheckedChanged += (_, _) => FillRateFromSelection();
         _currency.SelectedIndexChanged += (_, _) => FillRateFromSelection();
-        _branch.SelectedIndexChanged += (_, _) => FillRateFromSelection();
-        _settlementCurrency.SelectedIndexChanged += (_, _) => FillRateFromSelection();
+        _settlementCurrency.SelectedIndexChanged += (_, _) => { FillRateFromSelection(); UpdateBankAccountControls(); };
+        _branch.SelectedIndexChanged += (_, _) => { FillRateFromSelection(); UpdateBankAccountControls(); };
+        _paymentMethod.SelectedIndexChanged += (_, _) => UpdateSettlementControls(updateRate: true);
         _settlementMode.SelectedIndexChanged += (_, _) => UpdateSettlementControls(updateRate: true);
         _rateMode.SelectedIndexChanged += (_, _) => UpdateSettlementControls(updateRate: true);
+        _settlementsGrid.CurrentCellDirtyStateChanged += (_, _) =>
+        {
+            if (_settlementsGrid.IsCurrentCellDirty)
+            {
+                _settlementsGrid.CommitEdit(DataGridViewDataErrorContexts.Commit);
+            }
+        };
+        _settlementsGrid.CellValueChanged += (_, e) =>
+        {
+            if (e.RowIndex >= 0 && e.ColumnIndex >= 0
+                && _settlementsGrid.Columns[e.ColumnIndex].Name == "CurrencyCode")
+            {
+                ConfigureSplitBankAccountCell(_settlementsGrid.Rows[e.RowIndex]);
+            }
+        };
         _amount.TextChanged += (_, _) => UpdatePreview();
         _rate.TextChanged += (_, _) => UpdatePreview();
         _crossRate.TextChanged += (_, _) => UpdatePreview();
@@ -168,11 +199,14 @@ internal sealed class TradeTab : UserControl, IRefreshable
         _branches = await _services.Permissions.GetBranchesAsync(_user, Permission.TradeRecord);
         _readableBranches = await _services.Permissions.GetBranchesAsync(_user);
         var rateList = new List<RateInfo>();
+        var bankAccountList = new List<BankAccountInfo>();
         foreach (var branch in _branches)
         {
             rateList.AddRange(await _services.Admin.GetLatestRatesAsync(_user, branch.Id));
+            bankAccountList.AddRange(await _services.Trades.GetBankAccountsAsync(_user, branch.Id));
         }
         _rates = rateList;
+        _bankAccounts = bankAccountList;
 
         _filling = true;
         try
@@ -226,7 +260,7 @@ internal sealed class TradeTab : UserControl, IRefreshable
             MoneyMath.FormatRate(t.Amount),
             MoneyMath.FormatRate(t.Rate),
             MoneyMath.FormatAmount(t.IrrAmount, 0),
-            SettlementModeText(t.SettlementMode),
+            PaymentMethodText(t.PaymentMethod) + " / " + SettlementModeText(t.SettlementMode),
             SettlementSummary(t),
             MoneyMath.FormatAmount(t.FeeIrr, 0),
             MoneyMath.FormatAmount(t.ProfitIrr, 0),
@@ -265,6 +299,7 @@ internal sealed class TradeTab : UserControl, IRefreshable
             _amount.Text = trade.Amount.ToString("0.####", CultureInfo.InvariantCulture);
             _rate.Text = trade.Rate.ToString("0.####", CultureInfo.InvariantCulture);
             _fee.Text = trade.FeeIrr.ToString("0", CultureInfo.InvariantCulture);
+            UiHelpers.SelectByValue(_paymentMethod, PaymentMethodCode(trade.PaymentMethod));
             UiHelpers.SelectByValue(_settlementMode, trade.SettlementMode switch
             {
                 TradeSettlementMode.Direct => "DIRECT",
@@ -274,6 +309,7 @@ internal sealed class TradeTab : UserControl, IRefreshable
             });
             UiHelpers.SelectByValue(_rateMode, trade.RateMode == TradeRateMode.Direct ? "DIRECT" : "DERIVED");
             UiHelpers.SelectByValue(_settlementCurrency, trade.SettlementCurrencyCode ?? CurrencyCodes.Irr);
+            UiHelpers.SelectByValue(_bankAccount, trade.Settlements?.FirstOrDefault()?.BankAccountId?.ToString(CultureInfo.InvariantCulture));
             _crossRate.Text = trade.CrossRate > 0m ? trade.CrossRate.ToString("0.########", CultureInfo.InvariantCulture) : string.Empty;
             _applyOffset.Checked = trade.CustomerOffsetIrr > 0m;
             FillSettlementGrid(trade.Settlements ?? Array.Empty<TradeSettlementInfo>());
@@ -289,6 +325,11 @@ internal sealed class TradeTab : UserControl, IRefreshable
         _submit.Text = "ذخیره‌ی ویرایش";
         _cancelEdit.Visible = true;
         UpdateSettlementControls();
+        if (trade.PaymentMethod == TradePaymentMethod.BankTransfer && trade.SettlementMode == TradeSettlementMode.Direct)
+        {
+            UiHelpers.SelectByValue(_bankAccount,
+                trade.Settlements?.FirstOrDefault()?.BankAccountId?.ToString(CultureInfo.InvariantCulture));
+        }
         UpdatePreview();
     }
 
@@ -299,6 +340,7 @@ internal sealed class TradeTab : UserControl, IRefreshable
         _cancelEdit.Visible = false;
         _amount.Clear();
         _fee.Text = "0";
+        UiHelpers.SelectByValue(_paymentMethod, "CASH");
         UiHelpers.SelectByValue(_settlementMode, "DIRECT");
         UiHelpers.SelectByValue(_rateMode, "DERIVED");
         UiHelpers.SelectByValue(_settlementCurrency, CurrencyCodes.Irr);
@@ -337,7 +379,24 @@ internal sealed class TradeTab : UserControl, IRefreshable
             ValueType = typeof(string),
             SortMode = DataGridViewColumnSortMode.NotSortable,
         };
-        _settlementsGrid.Columns.AddRange(currencyColumn, amountColumn);
+        var bankAccountItems = new List<ComboItem> { new(string.Empty, "— انتخاب حساب حواله —") };
+        bankAccountItems.AddRange(_bankAccounts.Select(account => new ComboItem(
+            account.Id.ToString(CultureInfo.InvariantCulture),
+            $"{account.BranchName} · {account.Name} · {account.CurrencyCode}")));
+        var bankAccountColumn = new DataGridViewComboBoxColumn
+        {
+            Name = "BankAccountId",
+            HeaderText = "حساب بانکی حواله",
+            DataSource = bankAccountItems,
+            DisplayMember = nameof(ComboItem.Text),
+            ValueMember = nameof(ComboItem.Value),
+            ValueType = typeof(string),
+            FlatStyle = FlatStyle.Flat,
+            DisplayStyle = DataGridViewComboBoxDisplayStyle.ComboBox,
+            SortMode = DataGridViewColumnSortMode.NotSortable,
+            Visible = false,
+        };
+        _settlementsGrid.Columns.AddRange(currencyColumn, amountColumn, bankAccountColumn);
     }
 
     private void FillSettlementGrid(IReadOnlyList<TradeSettlementInfo> lines)
@@ -349,6 +408,7 @@ internal sealed class TradeTab : UserControl, IRefreshable
             var row = _settlementsGrid.Rows[index];
             row.Cells["CurrencyCode"].Value = line.CurrencyCode;
             row.Cells["Amount"].Value = line.Amount.ToString("0.####", CultureInfo.InvariantCulture);
+            ConfigureSplitBankAccountCell(row, line.BankAccountId?.ToString(CultureInfo.InvariantCulture));
         }
     }
 
@@ -383,8 +443,21 @@ internal sealed class TradeTab : UserControl, IRefreshable
 
     private void UpdateSettlementControls(bool updateRate = false)
     {
+        var paymentMethod = SelectedValue(_paymentMethod) ?? "CASH";
+        var credit = paymentMethod == "CREDIT";
+        if (credit && SelectedValue(_settlementMode) != "ACCOUNT")
+        {
+            UiHelpers.SelectByValue(_settlementMode, "ACCOUNT");
+        }
+        else if (!credit && SelectedValue(_settlementMode) == "ACCOUNT")
+        {
+            UiHelpers.SelectByValue(_settlementMode, "DIRECT");
+        }
+        _settlementMode.Enabled = !credit;
+
         var direct = SelectedValue(_settlementMode) == "DIRECT";
         var split = SelectedValue(_settlementMode) == "SPLIT";
+        var transfer = paymentMethod == "TRANSFER";
         _settlementCurrency.Visible = true;
         _settlementCurrencyLabel.Visible = true;
         _settlementCurrencyLabel.Text = direct ? "ارز مقابل واقعی:" : "ارز مانده‌ی حساب مشتری:";
@@ -394,12 +467,98 @@ internal sealed class TradeTab : UserControl, IRefreshable
         _crossRateLabel.Visible = direct;
         _settlementsGrid.Visible = split;
         _settlementsLabel.Visible = split;
+        _bankAccount.Visible = transfer && direct;
+        _bankAccountLabel.Visible = transfer && direct;
+        if (_settlementsGrid.Columns.Contains("BankAccountId"))
+        {
+            _settlementsGrid.Columns["BankAccountId"].Visible = transfer && split;
+        }
         _crossRate.ReadOnly = direct && SelectedValue(_rateMode) == "DERIVED";
+        UpdateBankAccountControls();
         if (updateRate && direct && SelectedValue(_rateMode) == "DERIVED")
         {
             FillRateFromSelection();
         }
         UpdatePreview();
+    }
+
+    private void UpdateBankAccountControls()
+    {
+        if (_filling || _bankAccount is null)
+        {
+            return;
+        }
+        var method = SelectedValue(_paymentMethod);
+        var transfer = method == "TRANSFER";
+        var branchId = UiHelpers.SelectedBranchId(_branch);
+        var currencyCode = SelectedValue(_settlementCurrency);
+        var previous = SelectedValue(_bankAccount);
+        _bankAccount.Items.Clear();
+        _bankAccount.Items.Add(new ComboItem(string.Empty, "— انتخاب حساب بانکی —"));
+        foreach (var account in _bankAccounts.Where(account => account.BranchId == branchId
+            && string.Equals(account.CurrencyCode, currencyCode, StringComparison.OrdinalIgnoreCase)))
+        {
+            _bankAccount.Items.Add(new ComboItem(account.Id.ToString(CultureInfo.InvariantCulture),
+                $"{account.Name} · {account.CurrencyCode} · موجودی {MoneyMath.FormatAmount(account.Balance, account.DecimalPlaces)}"));
+        }
+        UiHelpers.SelectByValue(_bankAccount, previous);
+        if (_bankAccount.SelectedIndex < 0)
+        {
+            _bankAccount.SelectedIndex = 0;
+        }
+        if (_bankAccountLabel.Visible != (transfer && SelectedValue(_settlementMode) == "DIRECT"))
+        {
+            _bankAccountLabel.Visible = transfer && SelectedValue(_settlementMode) == "DIRECT";
+            _bankAccount.Visible = _bankAccountLabel.Visible;
+        }
+        UpdateSplitBankAccountCells();
+    }
+
+    private void UpdateSplitBankAccountCells()
+    {
+        if (!_settlementsGrid.Columns.Contains("BankAccountId"))
+        {
+            return;
+        }
+        foreach (DataGridViewRow row in _settlementsGrid.Rows)
+        {
+            if (!row.IsNewRow)
+            {
+                ConfigureSplitBankAccountCell(row);
+            }
+        }
+    }
+
+    private void ConfigureSplitBankAccountCell(DataGridViewRow row, string? requestedBankAccountId = null)
+    {
+        if (!_settlementsGrid.Columns.Contains("BankAccountId") || row.IsNewRow)
+        {
+            return;
+        }
+
+        var code = Convert.ToString(row.Cells["CurrencyCode"].Value, CultureInfo.InvariantCulture)?.Trim().ToUpperInvariant();
+        var previous = requestedBankAccountId
+            ?? Convert.ToString(row.Cells["BankAccountId"].Value, CultureInfo.InvariantCulture)
+            ?? string.Empty;
+        var options = new List<ComboItem> { new(string.Empty, "— انتخاب حساب حواله —") };
+        var branchId = UiHelpers.SelectedBranchId(_branch);
+        if (!string.IsNullOrWhiteSpace(code) && branchId is { } selectedBranch)
+        {
+            options.AddRange(_bankAccounts
+                .Where(account => account.BranchId == selectedBranch
+                    && string.Equals(account.CurrencyCode, code, StringComparison.OrdinalIgnoreCase))
+                .Select(account => new ComboItem(account.Id.ToString(CultureInfo.InvariantCulture),
+                    $"{account.Name} · {account.CurrencyCode} · موجودی {MoneyMath.FormatAmount(account.Balance, account.DecimalPlaces)}")));
+        }
+
+        if (row.Cells["BankAccountId"] is DataGridViewComboBoxCell cell)
+        {
+            cell.DataSource = options;
+            cell.DisplayMember = nameof(ComboItem.Text);
+            cell.ValueMember = nameof(ComboItem.Value);
+            cell.ValueType = typeof(string);
+            cell.Value = options.Any(option => option.Value == previous) ? previous : string.Empty;
+        }
     }
 
     private static string? SelectedValue(ComboBox combo) => (combo.SelectedItem as ComboItem)?.Value;
@@ -467,6 +626,15 @@ internal sealed class TradeTab : UserControl, IRefreshable
 
     private TradeInput BuildTradeInput(int branchId, string currencyCode, decimal amount, decimal rate, decimal fee, int? customerId)
     {
+        var paymentMethod = SelectedValue(_paymentMethod) switch
+        {
+            "CASH" => TradePaymentMethod.Cash,
+            "CREDIT" => TradePaymentMethod.Credit,
+            "CHEQUE" => TradePaymentMethod.Cheque,
+            "POS" => TradePaymentMethod.Pos,
+            "TRANSFER" => TradePaymentMethod.BankTransfer,
+            _ => throw new BusinessRuleException("روش دریافت/پرداخت معامله را انتخاب کنید."),
+        };
         var mode = SelectedValue(_settlementMode) switch
         {
             "DIRECT" => TradeSettlementMode.Direct,
@@ -511,7 +679,13 @@ internal sealed class TradeTab : UserControl, IRefreshable
                 {
                     throw new BusinessRuleException($"مقدار سطر تسویه‌ی {code} را وارد کنید.");
                 }
-                settlementLines.Add(new TradeSettlementInput(code, lineAmount, DecimalPlaces: CurrencyDecimals(code)));
+                int? bankAccountId = null;
+                if (paymentMethod == TradePaymentMethod.BankTransfer
+                    && int.TryParse(Convert.ToString(row.Cells["BankAccountId"].Value, CultureInfo.InvariantCulture), NumberStyles.None, CultureInfo.InvariantCulture, out var selectedBank))
+                {
+                    bankAccountId = selectedBank;
+                }
+                settlementLines.Add(new TradeSettlementInput(code, lineAmount, DecimalPlaces: CurrencyDecimals(code), BankAccountId: bankAccountId));
             }
         }
 
@@ -530,7 +704,12 @@ internal sealed class TradeTab : UserControl, IRefreshable
             SelectedValue(_settlementCurrency),
             crossRate,
             settlementLines,
-            _applyOffset.Checked);
+            _applyOffset.Checked,
+            PaymentMethod: paymentMethod,
+            BankAccountId: paymentMethod == TradePaymentMethod.BankTransfer && mode == TradeSettlementMode.Direct
+                && int.TryParse(SelectedValue(_bankAccount), NumberStyles.None, CultureInfo.InvariantCulture, out var bankId)
+                ? bankId
+                : null);
     }
 
     private async Task SubmitAsync()
@@ -742,6 +921,26 @@ internal sealed class TradeTab : UserControl, IRefreshable
     private static string CustomerLabel(CustomerInfo customer) =>
         $"{customer.FullName} · {customer.CustomerCode}";
 
+    private static string PaymentMethodText(TradePaymentMethod method) => method switch
+    {
+        TradePaymentMethod.Cash => "نقد",
+        TradePaymentMethod.Credit => "نسیه",
+        TradePaymentMethod.Cheque => "چک",
+        TradePaymentMethod.Pos => "کارتخوان",
+        TradePaymentMethod.BankTransfer => "حواله",
+        _ => "نامشخص",
+    };
+
+    private static string PaymentMethodCode(TradePaymentMethod method) => method switch
+    {
+        TradePaymentMethod.Cash => "CASH",
+        TradePaymentMethod.Credit => "CREDIT",
+        TradePaymentMethod.Cheque => "CHEQUE",
+        TradePaymentMethod.Pos => "POS",
+        TradePaymentMethod.BankTransfer => "TRANSFER",
+        _ => "CASH",
+    };
+
     private static string SettlementModeText(TradeSettlementMode mode) => mode switch
     {
         TradeSettlementMode.Direct => "مستقیم",
@@ -754,7 +953,8 @@ internal sealed class TradeTab : UserControl, IRefreshable
     {
         var lines = trade.Settlements ?? Array.Empty<TradeSettlementInfo>();
         var parts = lines.Select(line =>
-            $"{(line.Direction == TradeSettlementDirection.Payment ? "پرداخت" : "دریافت")} {MoneyMath.FormatAmount(line.Amount, 4)} {line.CurrencyCode}");
+            $"{(line.Direction == TradeSettlementDirection.Payment ? "پرداخت" : "دریافت")} {MoneyMath.FormatAmount(line.Amount, 4)} {line.CurrencyCode}" +
+            (line.BankAccountName is { Length: > 0 } bankName ? $" · {bankName}" : string.Empty));
         var summary = string.Join("؛ ", parts);
         if (trade.CustomerOffsetIrr > 0m)
         {

@@ -520,6 +520,28 @@ public class TradePlannerTests
             LedgerPlanner.PlanManual(ledger, Accounts(), "تعدیل ارز", lines, 1, Day2, Today));
     }
 
+    [Theory]
+    [InlineData(AccountCodes.BankCash)]
+    [InlineData(AccountCodes.ForeignBankRoot)]
+    [InlineData("1102-USD")]
+    public void Manual_documents_cannot_bypass_the_named_bank_account_ledger(string bankAccountCode)
+    {
+        var ledger = LedgerOf(Cash(LedgerDocKind.Opening, 9, Day1, 1, 100_000_000m));
+        var accounts = Accounts().ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.Ordinal);
+        accounts[bankAccountCode] = new AccountInfo(bankAccountCode, "موجودی بانک", "Asset", 3,
+            "10", true, true, false, false);
+        var lines = new[]
+        {
+            new JournalLineDraft(bankAccountCode, 1_000_000m, 0m),
+            new JournalLineDraft(AccountCodes.OpeningCapital, 0m, 1_000_000m),
+        };
+
+        var error = Assert.Throws<BusinessRuleException>(() =>
+            LedgerPlanner.PlanManual(ledger, accounts, "تعدیل بانک", lines, 1, Day2, Today));
+
+        Assert.Contains("حساب‌های بانکی", error.Message);
+    }
+
     [Fact]
     public void Manual_document_rejects_inactive_accounts_and_unbalanced_lines()
     {

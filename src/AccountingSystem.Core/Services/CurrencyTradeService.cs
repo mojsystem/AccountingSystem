@@ -29,6 +29,13 @@ public sealed class CurrencyTradeService
     public Task<long> SellToCustomerAsync(TradeInput input, CurrentUser user, DateTime now, CancellationToken ct = default) =>
         RecordTradeAsync(input, TradeType.Sell, user, now, null, ct);
 
+    /// <summary>حساب‌های بانکی قابل مشاهده برای فرم حواله‌ی معامله.</summary>
+    public async Task<IReadOnlyList<BankAccountInfo>> GetBankAccountsAsync(CurrentUser user, int? branchId, CancellationToken ct = default)
+    {
+        var scope = await _permissions.ResolveReadBranchAsync(user, branchId, ct);
+        return await _repository.GetBankAccountsAsync(scope, ct);
+    }
+
     /// <summary>مانده‌ی دریافتنی و پرداختنی مشتری در شعبه را برای نمایش و محاسبه‌ی تهاتر می‌خواند.</summary>
     public async Task<CustomerAccountBalance> GetCustomerAccountBalanceAsync(
         CurrentUser user,
@@ -148,6 +155,7 @@ public sealed class CurrencyTradeService
             || prepared.FeeIrr != old.FeeIrr
             || customer.Id != old.CustomerId
             || effectiveSettlementMode != old.SettlementMode
+            || prepared.PaymentMethod != old.PaymentMethod
             || prepared.RateMode != old.RateMode
             || effectiveCrossRate != old.CrossRate
             || !string.Equals(prepared.SettlementCurrencyCode, old.SettlementCurrencyCode, StringComparison.OrdinalIgnoreCase)
@@ -177,6 +185,35 @@ public sealed class CurrencyTradeService
     {
         TradePlanner.ValidateQuantity(input.Amount, currency);
 
+        var mode = input.SettlementMode;
+        var paymentMethod = input.PaymentMethod;
+        if (!Enum.IsDefined(paymentMethod))
+        {
+            throw new BusinessRuleException("روش دریافت/پرداخت معامله نامعتبر است.");
+        }
+        if (paymentMethod == TradePaymentMethod.Credit)
+        {
+            if (mode is not null and not TradeSettlementMode.CustomerAccount)
+            {
+                throw new BusinessRuleException("روش نسیه باید روی حساب مشتری ثبت شود.");
+            }
+            mode = TradeSettlementMode.CustomerAccount;
+        }
+        else if (mode == TradeSettlementMode.CustomerAccount)
+        {
+            // حفظ سازگاری فراخوانی‌های قبلی که فقط ACCOUNT را می‌فرستادند.
+            if (paymentMethod != TradePaymentMethod.Cash)
+            {
+                throw new BusinessRuleException("روش حساب مشتری با روش نقدی/چک/کارتخوان/حواله همخوانی ندارد.");
+            }
+            paymentMethod = TradePaymentMethod.Credit;
+        }
+        input = input with { SettlementMode = mode, PaymentMethod = paymentMethod };
+        if (paymentMethod != TradePaymentMethod.BankTransfer && input.BankAccountId is not null)
+        {
+            throw new BusinessRuleException("انتخاب حساب بانکی فقط برای روش حواله مجاز است.");
+        }
+
         // فراخوانی‌های قدیمی همچنان همان تسویه‌ی ریالی را ایجاد می‌کنند.
         if (input.SettlementMode is null)
         {
@@ -196,9 +233,12 @@ public sealed class CurrencyTradeService
             };
         }
 
-        var mode = input.SettlementMode.Value;
+        var effectiveMode = input.SettlementMode.Value;
         var currencies = (await _repository.GetCurrenciesAsync(ct)).Where(c => c.IsActive).ToDictionary(c => c.Code, StringComparer.Ordinal);
         var rates = await _repository.GetRatesAtAsync(input.BranchId, occurredAt, ct);
+        var bankAccounts = paymentMethod == TradePaymentMethod.BankTransfer
+            ? (await _repository.GetBankAccountsAsync(input.BranchId, ct)).ToDictionary(account => account.Id)
+            : new Dictionary<int, BankAccountInfo>();
         var applyOffset = input.ApplyCustomerOffset;
         var offset = new CustomerOffsetResolution(0m, CurrencyCodes.Irr, 0m);
         var crossRate = 0m;
@@ -206,7 +246,7 @@ public sealed class CurrencyTradeService
         decimal effectiveRate;
         IReadOnlyList<TradeSettlementInput> settlements;
 
-        if (mode == TradeSettlementMode.Direct)
+        if (effectiveMode == TradeSettlementMode.Direct)
         {
             var counterCode = (input.SettlementCurrencyCode ?? string.Empty).Trim().ToUpperInvariant();
             if (!currencies.TryGetValue(counterCode, out var counterCurrency))
@@ -246,7 +286,13 @@ public sealed class CurrencyTradeService
             if (amountInCounter > 0m)
             {
                 TradePlanner.ValidateQuantity(amountInCounter, counterCurrency);
-                settlements = new[] { new TradeSettlementInput(counterCode, amountInCounter, counterRate, counterCurrency.DecimalPlaces) };
+                int? bankAccountId = null;
+                if (paymentMethod == TradePaymentMethod.BankTransfer)
+                {
+                    bankAccountId = input.BankAccountId;
+                    ValidateBankAccount(bankAccounts, bankAccountId, counterCode, occurredAt);
+                }
+                settlements = new[] { new TradeSettlementInput(counterCode, amountInCounter, counterRate, counterCurrency.DecimalPlaces, bankAccountId) };
             }
             else
             {
@@ -256,6 +302,8 @@ public sealed class CurrencyTradeService
             return input with
             {
                 Rate = effectiveRate,
+                PaymentMethod = paymentMethod,
+                SettlementMode = effectiveMode,
                 SettlementCurrencyCode = counterCode,
                 CrossRate = crossRate,
                 ValuationIrr = valuationIrr,
@@ -288,7 +336,7 @@ public sealed class CurrencyTradeService
         effectiveRate = input.Rate;
         crossRate = 0m;
 
-        if (mode == TradeSettlementMode.CustomerAccount)
+        if (effectiveMode == TradeSettlementMode.CustomerAccount)
         {
             if (input.SettlementLines is { Count: > 0 })
             {
@@ -296,7 +344,7 @@ public sealed class CurrencyTradeService
             }
             settlements = Array.Empty<TradeSettlementInput>();
         }
-        else if (mode == TradeSettlementMode.Split)
+        else if (effectiveMode == TradeSettlementMode.Split)
         {
             var requested = input.SettlementLines ?? Array.Empty<TradeSettlementInput>();
             if (requested.Count == 0)
@@ -322,7 +370,17 @@ public sealed class CurrencyTradeService
                 }
                 TradePlanner.ValidateQuantity(line.Amount, settlementCurrency);
                 var rateIrr = SettlementRate(settlementCurrency, rates, input.BranchId, type);
-                normalized.Add(new TradeSettlementInput(settlementCode, line.Amount, rateIrr, settlementCurrency.DecimalPlaces));
+                int? bankAccountId = null;
+                if (paymentMethod == TradePaymentMethod.BankTransfer)
+                {
+                    bankAccountId = line.BankAccountId;
+                    ValidateBankAccount(bankAccounts, bankAccountId, settlementCode, occurredAt);
+                }
+                else if (line.BankAccountId is not null)
+                {
+                    throw new BusinessRuleException("انتخاب حساب بانکی فقط برای روش حواله مجاز است.");
+                }
+                normalized.Add(new TradeSettlementInput(settlementCode, line.Amount, rateIrr, settlementCurrency.DecimalPlaces, bankAccountId));
             }
             settlements = normalized;
         }
@@ -334,6 +392,8 @@ public sealed class CurrencyTradeService
         return input with
         {
             Rate = effectiveRate,
+            PaymentMethod = paymentMethod,
+            SettlementMode = effectiveMode,
             SettlementCurrencyCode = accountCurrencyCode,
             CrossRate = crossRate,
             ValuationIrr = valuationIrr,
@@ -345,6 +405,26 @@ public sealed class CurrencyTradeService
             CustomerBalanceRateIrr = accountBalanceRate,
             CustomerBalanceDecimalPlaces = accountCurrency.DecimalPlaces,
         };
+    }
+
+    private static void ValidateBankAccount(
+        IReadOnlyDictionary<int, BankAccountInfo> accounts,
+        int? bankAccountId,
+        string currencyCode,
+        DateTime occurredAt)
+    {
+        if (bankAccountId is not { } id || !accounts.TryGetValue(id, out var account))
+        {
+            throw new BusinessRuleException("حساب بانکی حواله را انتخاب کنید.");
+        }
+        if (!string.Equals(account.CurrencyCode, currencyCode, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new BusinessRuleException($"حساب بانکی «{account.Name}» برای ارز {account.CurrencyCode} است، نه {currencyCode}.");
+        }
+        if (OccurrenceRules.Truncate(occurredAt) < account.CreatedAt)
+        {
+            throw new BusinessRuleException($"حساب بانکی «{account.Name}» در تاریخ معامله هنوز افتتاح نشده بود.");
+        }
     }
 
     private async Task<CustomerOffsetResolution> ResolveOffsetAsync(
@@ -432,7 +512,10 @@ public sealed class CurrencyTradeService
         }
 
         var mode = input.SettlementMode ?? TradeSettlementMode.Direct;
-        if (mode != old.SettlementMode || input.RateMode != old.RateMode)
+        var paymentMethod = mode == TradeSettlementMode.CustomerAccount
+            ? TradePaymentMethod.Credit
+            : input.PaymentMethod;
+        if (mode != old.SettlementMode || paymentMethod != old.PaymentMethod || input.RateMode != old.RateMode)
         {
             return false;
         }
@@ -445,6 +528,11 @@ public sealed class CurrencyTradeService
                 return false;
             }
             if (input.RateMode == TradeRateMode.Direct && input.CrossRate != old.CrossRate)
+            {
+                return false;
+            }
+            if (paymentMethod == TradePaymentMethod.BankTransfer
+                && input.BankAccountId != (old.Settlements?.FirstOrDefault()?.BankAccountId))
             {
                 return false;
             }
@@ -488,6 +576,7 @@ public sealed class CurrencyTradeService
             var stored = saved[i];
             if (!string.Equals(line.CurrencyCode, stored.CurrencyCode, StringComparison.OrdinalIgnoreCase)
                 || line.Amount != stored.Amount
+                || line.BankAccountId != stored.BankAccountId
                 || (type == TradeType.Buy ? TradeSettlementDirection.Payment : TradeSettlementDirection.Receipt) != stored.Direction)
             {
                 return false;
@@ -514,6 +603,7 @@ public sealed class CurrencyTradeService
             if (!string.Equals(line.CurrencyCode, stored.CurrencyCode, StringComparison.OrdinalIgnoreCase)
                 || line.Amount != stored.Amount
                 || line.RateIrr != stored.RateIrr
+                || line.BankAccountId != stored.BankAccountId
                 || (type == TradeType.Buy ? TradeSettlementDirection.Payment : TradeSettlementDirection.Receipt) != stored.Direction)
             {
                 return false;

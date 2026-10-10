@@ -103,6 +103,7 @@ builder.Services.AddRazorPages(options =>
     options.Conventions.AuthorizeFolder("/Branches", "AdminOnly");
     options.Conventions.AuthorizeFolder("/Roles", "AdminOnly");
     options.Conventions.AuthorizeFolder("/Accounts", "AdminOnly");
+    options.Conventions.AuthorizeFolder("/BankAccounts", "AdminOnly");
     options.Conventions.AuthorizeFolder("/Backup", "AdminOnly");
 });
 
@@ -131,6 +132,7 @@ builder.Services.AddScoped<BranchService>();
 builder.Services.AddScoped<CurrencyTradeService>();
 builder.Services.AddScoped<CashTransactionService>();
 builder.Services.AddScoped<CurrencyAdminService>();
+builder.Services.AddScoped<BankAccountService>();
 builder.Services.AddScoped<ManualJournalService>();
 builder.Services.AddScoped<ReportService>();
 builder.Services.AddScoped<ReceiptService>();

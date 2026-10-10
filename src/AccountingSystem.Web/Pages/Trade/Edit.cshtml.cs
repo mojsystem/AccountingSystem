@@ -42,6 +42,8 @@ public class EditModel : PageModel
 
     public IReadOnlyList<CurrencyInfo> SettlementCurrencies { get; private set; } = Array.Empty<CurrencyInfo>();
 
+    public IReadOnlyList<BankAccountInfo> BankAccounts { get; private set; } = Array.Empty<BankAccountInfo>();
+
     public string RatesJson { get; private set; } = "{}";
 
     /// <summary>مشتریان مشترک برای انتخاب مشتری معامله.</summary>
@@ -69,6 +71,16 @@ public class EditModel : PageModel
             Fee = trade.FeeIrr.ToString("0", CultureInfo.InvariantCulture),
             CustomerId = trade.CustomerId,
             Note = trade.Note,
+            PaymentMethod = trade.PaymentMethod switch
+            {
+                TradePaymentMethod.Cash => "CASH",
+                TradePaymentMethod.Credit => "CREDIT",
+                TradePaymentMethod.Cheque => "CHEQUE",
+                TradePaymentMethod.Pos => "POS",
+                TradePaymentMethod.BankTransfer => "TRANSFER",
+                _ => "CASH",
+            },
+            BankAccountId = trade.Settlements?.FirstOrDefault()?.BankAccountId,
             SettlementMode = trade.SettlementMode switch
             {
                 TradeSettlementMode.Direct => "DIRECT",
@@ -85,12 +97,14 @@ public class EditModel : PageModel
                 {
                     CurrencyCode = line.CurrencyCode,
                     Amount = line.Amount.ToString("0.####", CultureInfo.InvariantCulture),
+                    BankAccountId = line.BankAccountId,
                 }).ToList(),
             OccurredOn = PersianDate.FormatDate(trade.OccurredAt),
         };
         EnsureSettlementRows();
         Currencies = await LoadCurrenciesAsync(ct);
         SettlementCurrencies = await LoadSettlementCurrenciesAsync(ct);
+        BankAccounts = await _trades.GetBankAccountsAsync(user, trade.BranchId, ct);
         RatesJson = await LoadRatesJsonAsync(user, trade.BranchId, ct);
         Customers = await LoadCustomersAsync(user, ct);
         return Page();
@@ -137,6 +151,7 @@ public class EditModel : PageModel
         EnsureSettlementRows();
         Currencies = await LoadCurrenciesAsync(ct);
         SettlementCurrencies = await LoadSettlementCurrenciesAsync(ct);
+        BankAccounts = trade is null ? Array.Empty<BankAccountInfo>() : await _trades.GetBankAccountsAsync(user, trade.BranchId, ct);
         RatesJson = trade is null ? "{}" : await LoadRatesJsonAsync(user, trade.BranchId, ct);
         Customers = await LoadCustomersAsync(user, ct);
         return Page();

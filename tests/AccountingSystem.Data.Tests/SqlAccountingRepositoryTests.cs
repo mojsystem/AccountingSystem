@@ -251,6 +251,89 @@ WHERE e.SourceType = N'TRADE' AND e.SourceId = @tradeId AND l.CustomerId = @cust
     }
 
     [Fact]
+    public async Task Named_bank_account_opening_and_trade_transfer_are_persisted_in_the_bank_ledger()
+    {
+        if (!_fixture.IsEnabled)
+        {
+            return;
+        }
+
+        var repo = new SqlAccountingRepository(_fixture.ConnectionString!);
+        var admin = new CurrencyAdminService(repo);
+        var trades = new CurrencyTradeService(repo);
+        var bankAccounts = new BankAccountService(repo);
+        var reports = new ReportService(repo);
+        var now = DateTime.Now;
+        var user = await EnsureAdminAsync(repo, now);
+        var branchId = await MainBranchIdAsync(repo);
+        var tradedCode = await NewCurrencyCodeAsync(repo);
+        var bankCode = await NewCurrencyCodeAsync(repo);
+
+        await admin.AddCurrencyAsync(user, tradedCode, "ارز معامله‌ی حواله", 2, now);
+        await admin.AddCurrencyAsync(user, bankCode, "ارز حساب بانکی حواله", 2, now);
+        await admin.SetRateAsync(user, branchId, tradedCode, 1_000_000m, 1_100_000m, now);
+        await admin.SetRateAsync(user, branchId, bankCode, 500_000m, 550_000m, now);
+
+        var bankName = "حساب حواله " + Guid.NewGuid().ToString("N")[..8];
+        var bankId = await bankAccounts.CreateAsync(user, branchId, bankName, bankCode,
+            openingBalance: 50m, openingRateIrr: 500_000m, now: now);
+        var openingAccount = Assert.Single(await bankAccounts.GetBankAccountsAsync(user, branchId), account => account.Id == bankId);
+        Assert.Equal(50m, openingAccount.OpeningBalance);
+        Assert.Equal(25_000_000m, openingAccount.OpeningCostIrr);
+        Assert.Equal(50m, openingAccount.Balance);
+
+        var cashBefore = (await repo.GetCashBoxesAsync(branchId))
+            .ToDictionary(box => box.CurrencyCode, box => box.Balance, StringComparer.OrdinalIgnoreCase);
+        var tradeId = await trades.BuyFromCustomerAsync(new TradeInput(
+            branchId, tradedCode, 10m, 0m, null, null, null,
+            CustomerId: _customerId,
+            SettlementMode: TradeSettlementMode.Direct,
+            RateMode: TradeRateMode.Direct,
+            SettlementCurrencyCode: bankCode,
+            CrossRate: 2m,
+            PaymentMethod: TradePaymentMethod.BankTransfer,
+            BankAccountId: bankId), user, now);
+
+        var trade = await repo.GetTradeAsync(tradeId);
+        Assert.NotNull(trade);
+        Assert.Equal(TradePaymentMethod.BankTransfer, trade!.PaymentMethod);
+        var settlement = Assert.Single(trade.Settlements!);
+        Assert.Equal(bankId, settlement.BankAccountId);
+        Assert.Equal(bankName, settlement.BankAccountName);
+        Assert.Equal(20m, settlement.Amount);
+        Assert.Equal(11_000_000m, settlement.IrrAmount);
+        Assert.Equal(10_000_000m, settlement.CostIrr);
+        Assert.Equal(1_000_000m, settlement.ProfitIrr);
+
+        var accountAfter = Assert.Single(await bankAccounts.GetBankAccountsAsync(user, branchId), account => account.Id == bankId);
+        Assert.Equal(30m, accountAfter.Balance);
+        Assert.Equal(15_000_000m, accountAfter.CostIrr);
+        var cashAfter = (await repo.GetCashBoxesAsync(branchId))
+            .ToDictionary(box => box.CurrencyCode, box => box.Balance, StringComparer.OrdinalIgnoreCase);
+        Assert.Equal(cashBefore[CurrencyCodes.Irr], cashAfter[CurrencyCodes.Irr]);
+        Assert.Equal(cashBefore[bankCode], cashAfter[bankCode]);
+
+        var entries = await reports.GetJournalAsync(user, branchId, now.Date, now.Date.AddDays(1));
+        var openingJournal = Assert.Single(entries, entry => entry.SourceType == SourceTypes.BankOpening && entry.SourceId == bankId);
+        Assert.Contains(openingJournal.Lines, line => line.AccountCode == AccountCodes.ForeignBank(bankCode) && line.Debit == 25_000_000m);
+        var tradeJournal = Assert.Single(entries, entry => entry.SourceType == SourceTypes.Trade && entry.SourceId == tradeId);
+        Assert.Contains(tradeJournal.Lines, line => line.AccountCode == AccountCodes.ForeignBank(bankCode) && line.Credit == 10_000_000m);
+        Assert.DoesNotContain(tradeJournal.Lines, line => line.AccountCode == AccountCodes.ForeignCash(bankCode));
+
+        await using var connection = new SqlConnection(_fixture.ConnectionString!);
+        await connection.OpenAsync();
+        var balanceInJournal = Convert.ToDecimal(await ScalarAsync(connection, @"
+SELECT COALESCE(SUM(l.Debit - l.Credit), 0)
+FROM dbo.JournalLines l
+INNER JOIN dbo.JournalEntries e ON e.Id = l.JournalEntryId
+WHERE e.BranchId = @branchId AND l.AccountCode = @accountCode;",
+            new SqlParameter("@branchId", branchId),
+            new SqlParameter("@accountCode", AccountCodes.ForeignBank(bankCode))), CultureInfo.InvariantCulture);
+        Assert.Equal(accountAfter.CostIrr, balanceInJournal);
+        await AssertLedgerConsistentAsync(_fixture.ConnectionString!, branchId, tradedCode);
+    }
+
+    [Fact]
     public async Task Independent_cash_receipts_and_payments_post_edit_void_and_update_customer_balances()
     {
         if (!_fixture.IsEnabled)

@@ -11,7 +11,7 @@ public static class WorkbookBuilder
         var headers = new[]
         {
             "شماره معامله", "کد شعبه", "شعبه", "زمان (شمسی)", "نوع معامله", "ارز", "مقدار ارز", "نرخ (ریال)",
-            "مبلغ ریالی", "روش تسویه", "روش نرخ", "ارز مقابل", "نرخ جفت‌ارز", "تهاتر مانده (ریال)", "ریز دریافت/پرداخت",
+            "مبلغ ریالی", "روش دریافت/پرداخت", "ساختار تسویه", "روش نرخ", "ارز مقابل", "نرخ جفت‌ارز", "تهاتر مانده (ریال)", "ریز دریافت/پرداخت",
             "کارمزد (ریال)", "بهای تمام‌شده (ریال)", "سود معامله (ریال)", "نام مشتری", "کد ملی / شناسه",
             "توضیحات", "ثبت‌کننده", "وضعیت", "زمان ابطال (شمسی)", "دلیل ابطال",
         };
@@ -26,6 +26,7 @@ public static class WorkbookBuilder
             t.Amount,
             t.Rate,
             t.IrrAmount,
+            PaymentMethodText(t.PaymentMethod),
             SettlementModeText(t.SettlementMode),
             t.RateMode == TradeRateMode.Direct ? "نرخ مستقیم جفت‌ارز" : "مشتق از نرخ ریالی روز",
             t.SettlementCurrencyCode,
@@ -46,6 +47,16 @@ public static class WorkbookBuilder
         return XlsxWriter.Build(new[] { new WorkbookSheet("معاملات", headers, rows) });
     }
 
+    private static string PaymentMethodText(TradePaymentMethod method) => method switch
+    {
+        TradePaymentMethod.Cash => "نقد",
+        TradePaymentMethod.Credit => "نسیه",
+        TradePaymentMethod.Cheque => "چک",
+        TradePaymentMethod.Pos => "کارتخوان",
+        TradePaymentMethod.BankTransfer => "حواله",
+        _ => "نامشخص",
+    };
+
     private static string SettlementModeText(TradeSettlementMode mode) => mode switch
     {
         TradeSettlementMode.Direct => "مستقیم",
@@ -58,7 +69,9 @@ public static class WorkbookBuilder
     {
         var lines = trade.Settlements ?? Array.Empty<TradeSettlementInfo>();
         var parts = lines.Select(line =>
-            $"{(line.Direction == TradeSettlementDirection.Payment ? "پرداخت" : "دریافت")} {MoneyMath.FormatAmount(line.Amount, 4)} {line.CurrencyCode} ({MoneyMath.FormatAmount(line.IrrAmount, 0)} IRR)");
+            $"{(line.Direction == TradeSettlementDirection.Payment ? "پرداخت" : "دریافت")} {MoneyMath.FormatAmount(line.Amount, 4)} {line.CurrencyCode}" +
+            (line.BankAccountName is { Length: > 0 } bankName ? $" · {bankName}" : string.Empty) +
+            $" ({MoneyMath.FormatAmount(line.IrrAmount, 0)} IRR)");
         var result = string.Join("; ", parts);
         if (trade.CustomerOffsetIrr > 0m)
         {
